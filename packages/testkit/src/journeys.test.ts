@@ -316,7 +316,7 @@ describeJourneys("required product journeys", () => {
       sectionId: section.id,
       name: "Archive",
     });
-    expect(renameClash.status).toBeGreaterThanOrEqual(400);
+    expect(renameClash.status).toBe(409);
     const foreignRename = await raw(app, bob, "botSections/update", {
       sectionId: section.id,
       name: "Stolen",

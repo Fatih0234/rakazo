@@ -505,9 +505,13 @@ export function ShellPage() {
   const [newSectionTarget, setNewSectionTarget] = useState<
     { kind: "bot"; chat: Bot } | { kind: "group"; chat: Group } | null
   >(null);
-  const [renameSectionTarget, setRenameSectionTarget] = useState<BotSection | null>(null);
+  const [renameSectionTarget, setRenameSectionTarget] = useState<{
+    section: BotSection;
+    spaceId: string;
+  } | null>(null);
   const [sectionMenu, setSectionMenu] = useState<{
     section: BotSection;
+    spaceId: string;
     position: ContextMenuPosition;
   } | null>(null);
   const sectionMenuAnchor = useRef<HTMLElement | null>(null);
@@ -2676,25 +2680,33 @@ export function ShellPage() {
                             toggleSidebarSection(group.key);
                           }}
                           onContextMenu={
-                            group.canDeleteSpace
+                            group.sectionId
                               ? (event) => {
                                   event.preventDefault();
-                                  spaceMenuAnchor.current = event.currentTarget;
-                                  setSpaceMenu({
-                                    id: group.spaceId,
+                                  // Prefer section rename over delete-space when both apply;
+                                  // the dedicated space-actions button still opens the space menu.
+                                  const sections =
+                                    group.spaceId === bootstrapMe?.spaceId
+                                      ? botSections
+                                      : (spaces.find((space) => space.id === group.spaceId)
+                                          ?.botSections ?? []);
+                                  const section = sections.find(
+                                    (item) => item.id === group.sectionId,
+                                  );
+                                  if (!section) return;
+                                  sectionMenuAnchor.current = event.currentTarget;
+                                  setSectionMenu({
+                                    section,
+                                    spaceId: group.spaceId,
                                     position: { x: event.clientX, y: event.clientY },
                                   });
                                 }
-                              : group.sectionId
+                              : group.canDeleteSpace
                                 ? (event) => {
                                     event.preventDefault();
-                                    const section = botSections.find(
-                                      (item) => item.id === group.sectionId,
-                                    );
-                                    if (!section) return;
-                                    sectionMenuAnchor.current = event.currentTarget;
-                                    setSectionMenu({
-                                      section,
+                                    spaceMenuAnchor.current = event.currentTarget;
+                                    setSpaceMenu({
+                                      id: group.spaceId,
                                       position: { x: event.clientX, y: event.clientY },
                                     });
                                   }
@@ -3721,7 +3733,8 @@ export function ShellPage() {
             }}
             onRenameSection={(sectionId) => {
               const section = botSections.find((item) => item.id === sectionId);
-              if (section) setRenameSectionTarget(section);
+              const spaceId = selectedSpaceId() ?? bootstrapMe?.spaceId;
+              if (section && spaceId) setRenameSectionTarget({ section, spaceId });
               setBotMenu(null);
             }}
             onEdit={() => {
@@ -3873,13 +3886,16 @@ export function ShellPage() {
 
         {renameSectionTarget ? (
           <RenameBotSectionDialog
-            section={renameSectionTarget}
+            section={renameSectionTarget.section}
             onCancel={() => setRenameSectionTarget(null)}
             onConfirm={async (name) => {
-              await rpc.botSections.update({
-                sectionId: renameSectionTarget.id,
-                name,
-              });
+              await rpc.botSections.update(
+                {
+                  sectionId: renameSectionTarget.section.id,
+                  name,
+                },
+                { context: { spaceId: renameSectionTarget.spaceId } },
+              );
               setRenameSectionTarget(null);
               await refreshBots();
             }}
@@ -3912,7 +3928,10 @@ export function ShellPage() {
             >
               <DropdownMenuItem
                 onClick={() => {
-                  setRenameSectionTarget(sectionMenu.section);
+                  setRenameSectionTarget({
+                    section: sectionMenu.section,
+                    spaceId: sectionMenu.spaceId,
+                  });
                   setSectionMenu(null);
                 }}
               >
