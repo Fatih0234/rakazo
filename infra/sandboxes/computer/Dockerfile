@@ -13,6 +13,20 @@ COPY xcapture.c .
 RUN cc -O3 -fPIC -shared -Wall -Wextra -Werror -o librakazo-xcapture.so xcapture.c \
     -lX11 -lXext -lXdamage -lXfixes -lXtst -lpng
 
+# DuckDB CLI for dataset work (analytics over CSV/Parquet/JSON). Kept out of the
+# runtime stage: only the static binary is copied across.
+FROM debian:bookworm-slim AS duckdb-builder
+ARG TARGETARCH
+ARG DUCKDB_VERSION=1.5.5
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    unzip \
+  && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-${TARGETARCH}.zip" -o /tmp/duckdb.zip \
+  && unzip -q /tmp/duckdb.zip -d /tmp/duckdb \
+  && /tmp/duckdb/duckdb --version
+
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
@@ -49,6 +63,7 @@ WORKDIR /home/rakazo
 COPY --chmod=755 start.sh /usr/local/bin/rakazo-computer
 COPY --chmod=755 control.py /usr/local/bin/rakazo-computer-control
 COPY --from=capture-builder /build/librakazo-xcapture.so /usr/local/lib/librakazo-xcapture.so
+COPY --from=duckdb-builder --chmod=755 /tmp/duckdb/duckdb /usr/local/bin/duckdb
 COPY --chmod=755 rakazo-browser /usr/local/bin/rakazo-browser
 COPY --chmod=755 rakazo-page-browser /usr/local/bin/rakazo-page-browser
 COPY --chmod=644 rakazo-browser.desktop /usr/share/applications/rakazo-browser.desktop
