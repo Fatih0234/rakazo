@@ -337,6 +337,8 @@ export const RU_MESSAGES: Record<string, string> = {
   "New bot": "Новый бот",
   "New group": "Новая группа",
   "New section": "Новый раздел",
+  "Rename section": "Переименовать раздел",
+  "Save section name": "Сохранить название раздела",
   "New space": "Новое пространство",
   "No apps match your search.": "Нет приложений, соответствующих вашему запросу.",
   "No tools available.": "Нет доступных инструментов.",

@@ -321,6 +321,8 @@ export const ZH_MESSAGES: Record<string, string> = {
   "New bot": "新建 Bot",
   "New group": "新建群组",
   "New section": "新建分组",
+  "Rename section": "重命名分组",
+  "Save section name": "保存分组名称",
   "New space": "新建空间",
   "No apps match your search.": "没有符合搜索条件的应用。",
   "No tools available.": "暂无可用工具。",

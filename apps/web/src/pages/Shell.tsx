@@ -96,6 +96,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Paperclip,
+  Pencil,
   Plus,
   Puzzle,
   Reply,
@@ -215,6 +216,7 @@ import {
   NewBotSectionDialog,
   NewSpaceDialog,
   PickerInfoDialog,
+  RenameBotSectionDialog,
 } from "./shell/dialogs";
 import {
   AppConnectCard,
@@ -503,6 +505,18 @@ export function ShellPage() {
   const [newSectionTarget, setNewSectionTarget] = useState<
     { kind: "bot"; chat: Bot } | { kind: "group"; chat: Group } | null
   >(null);
+  const [renameSectionTarget, setRenameSectionTarget] = useState<BotSection | null>(null);
+  const [sectionMenu, setSectionMenu] = useState<{
+    section: BotSection;
+    position: ContextMenuPosition;
+  } | null>(null);
+  const sectionMenuAnchor = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (sectionMenu || !sectionMenuAnchor.current) return;
+    sectionMenuAnchor.current.focus();
+    sectionMenuAnchor.current = null;
+  }, [sectionMenu]);
+  const closeSectionMenu = useCallback(() => setSectionMenu(null), []);
   const [booting, setBooting] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [initialBotsLoaded, setInitialBotsLoaded] = useState(false);
@@ -1345,6 +1359,7 @@ export function ShellPage() {
         space.botSections,
       ).map((group, index) => ({
         ...group,
+        sectionId: group.key.startsWith("section:") ? group.key.slice("section:".length) : null,
         key: showSpaceNames ? `space:${space.id}:${group.key}` : group.key,
         title: showSpaceNames
           ? group.title
@@ -1366,6 +1381,7 @@ export function ShellPage() {
           key: `space:${space.id}:empty`,
           title: space.name,
           bots: [],
+          sectionId: null,
           showLock: true,
           emptySpaceId: space.id,
           spaceId: space.id,
@@ -2669,7 +2685,20 @@ export function ShellPage() {
                                     position: { x: event.clientX, y: event.clientY },
                                   });
                                 }
-                              : undefined
+                              : group.sectionId
+                                ? (event) => {
+                                    event.preventDefault();
+                                    const section = botSections.find(
+                                      (item) => item.id === group.sectionId,
+                                    );
+                                    if (!section) return;
+                                    sectionMenuAnchor.current = event.currentTarget;
+                                    setSectionMenu({
+                                      section,
+                                      position: { x: event.clientX, y: event.clientY },
+                                    });
+                                  }
+                                : undefined
                           }
                           aria-expanded={group.emptySpaceId ? undefined : !collapsed}
                           aria-label={
@@ -3690,6 +3719,11 @@ export function ShellPage() {
               );
               setBotMenu(null);
             }}
+            onRenameSection={(sectionId) => {
+              const section = botSections.find((item) => item.id === sectionId);
+              if (section) setRenameSectionTarget(section);
+              setBotMenu(null);
+            }}
             onEdit={() => {
               navigate(contextBot ? `/app/${contextBot.id}` : `/app/g/${contextGroup!.id}`);
               setPanel(contextBot ? "settings" : "group-settings");
@@ -3835,6 +3869,58 @@ export function ShellPage() {
               await refreshBots();
             }}
           />
+        ) : null}
+
+        {renameSectionTarget ? (
+          <RenameBotSectionDialog
+            section={renameSectionTarget}
+            onCancel={() => setRenameSectionTarget(null)}
+            onConfirm={async (name) => {
+              await rpc.botSections.update({
+                sectionId: renameSectionTarget.id,
+                name,
+              });
+              setRenameSectionTarget(null);
+              await refreshBots();
+            }}
+          />
+        ) : null}
+
+        {sectionMenu ? (
+          <DropdownMenu
+            open
+            onOpenChange={(open) => {
+              if (!open) closeSectionMenu();
+            }}
+          >
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  aria-hidden
+                  className="fixed size-0 p-0 opacity-0"
+                  style={{ left: sectionMenu.position.x, top: sectionMenu.position.y }}
+                />
+              }
+            />
+            <DropdownMenuContent
+              aria-label={t`Actions for ${sectionMenu.section.name}`}
+              align="start"
+              sideOffset={0}
+              className="w-[220px]"
+            >
+              <DropdownMenuItem
+                onClick={() => {
+                  setRenameSectionTarget(sectionMenu.section);
+                  setSectionMenu(null);
+                }}
+              >
+                <Pencil />
+                {t`Rename section`}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         ) : null}
 
         <CommandPalette
