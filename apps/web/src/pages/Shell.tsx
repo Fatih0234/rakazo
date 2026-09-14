@@ -3733,7 +3733,7 @@ export function ShellPage() {
             }}
             onRenameSection={(sectionId) => {
               const section = botSections.find((item) => item.id === sectionId);
-              const spaceId = selectedSpaceId() ?? bootstrapMe?.spaceId;
+              const spaceId = bootstrapMe?.spaceId;
               if (section && spaceId) setRenameSectionTarget({ section, spaceId });
               setBotMenu(null);
             }}
