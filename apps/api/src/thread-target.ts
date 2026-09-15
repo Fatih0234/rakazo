@@ -62,16 +62,16 @@ export type ThreadTarget =
 /**
  * Compare a selected-text excerpt against the parent's stored blocks. The
  * excerpt is rendered text while blocks hold markdown source, so both sides
- * are flattened first — markdown punctuation and whitespace collapse away,
- * which catches fabricated excerpts without rejecting real quotes of
- * formatted text.
+ * are flattened first — markdown punctuation, table delimiters, and
+ * whitespace collapse away, which catches fabricated excerpts without
+ * rejecting real quotes of formatted text or rendered tables.
  */
 function normalizeForQuoteMatch(text: string): string {
   return text
     .toLowerCase()
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
-    .replace(/[\s*_~`#>[\]()!.-]+/gu, " ")
+    .replace(/[\s*_~`#>[\]()!.:|+•-]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

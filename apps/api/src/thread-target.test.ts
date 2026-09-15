@@ -1337,6 +1337,80 @@ describe("sendThreadMessage", () => {
     });
   });
 
+  it("accepts a quote excerpt spanning rendered table cells", async () => {
+    let messageSeq = 0;
+    let eventSeq = 0;
+    const tx = {
+      thread: {
+        update: vi.fn(async ({ data }: { data: { nextMessageSeq?: unknown } }) =>
+          data.nextMessageSeq ? { nextMessageSeq: ++messageSeq } : { nextEventSeq: ++eventSeq },
+        ),
+      },
+      message: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "parent",
+          // Rendered table shows "Name Value Alice 5"; source keeps | and :.
+          blocks: [
+            {
+              kind: "text",
+              text: "| Name | Value |\n|:-----|------:|\n| Alice | 5 |",
+            },
+          ],
+        }),
+        update: vi.fn(),
+        create: vi.fn().mockResolvedValue({
+          id: "msg-1",
+          threadId: "thread-1",
+          seq: 1,
+          role: "user",
+          blocks: [{ kind: "text", text: "why this?" }],
+          botId: null,
+          replyToMessageId: "parent",
+          replyQuote: "Alice 5",
+          runId: null,
+          createdAt: new Date(),
+        }),
+      },
+      run: {
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi.fn().mockResolvedValue({ status: "queued", startedAt: null }),
+        create: vi.fn().mockResolvedValue({ id: "run-1", taskId: "task-1", status: "queued" }),
+      },
+      task: { create: vi.fn().mockResolvedValue({ id: "task-1" }) },
+      event: {
+        create: vi.fn().mockResolvedValue({ id: "event-1", seq: 1, createdAt: new Date() }),
+      },
+      steeringMessage: { create: vi.fn() },
+    };
+    const prisma = {
+      message: { findUnique: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const actor = { spaceId: "workspace-1", userId: "user-1" } as Actor;
+    const target = { kind: "bot", botId: "bot-1", threadId: "thread-1" } as ThreadTarget;
+
+    const result = await sendThreadMessage(
+      {
+        prisma,
+        events: { notify: vi.fn().mockResolvedValue(undefined) } as never,
+        jobs: { enqueue: vi.fn().mockResolvedValue(undefined) } as never,
+      },
+      actor,
+      target,
+      {
+        text: "why this?",
+        replyToMessageId: "parent",
+        replyQuote: "Alice 5",
+        clientNonce: "nonce-1",
+      },
+    );
+
+    expect(result).toMatchObject({ runId: "run-1", taskId: "task-1" });
+    expect(tx.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ replyQuote: "Alice 5" }),
+    });
+  });
+
   it("persists the quote excerpt on a group send", async () => {
     let messageSeq = 0;
     let eventSeq = 0;
