@@ -60,26 +60,44 @@ export type ThreadTarget =
     };
 
 /**
- * Compare a selected-text excerpt against the parent's stored blocks. The
- * excerpt is rendered text while blocks hold markdown source, so both sides
- * are flattened first — markdown punctuation, table delimiters, and
- * whitespace collapse away, which catches fabricated excerpts without
- * rejecting real quotes of formatted text or rendered tables.
+ * Flatten text for excerpt comparison. The parent blocks hold markdown
+ * source while the selection captures rendered text, so structural syntax
+ * is normalized away: table delimiters and alignment rows, list markers,
+ * heading and blockquote markers, link targets, emphasis characters.
+ * Semantic punctuation (: + - . ! #) stays on both sides — otherwise
+ * "C++ is fast" would accept a fabricated "C is fast".
  */
-function normalizeForQuoteMatch(text: string): string {
+function flattenForQuoteMatch(text: string): string {
   return text
+    .split("\n")
+    .filter((line) => !/^\s*\|?[\s:|-]+\|?\s*$/.test(line))
+    .map((line) =>
+      line
+        .replace(/^\s*(?:>\s*)+/, "")
+        .replace(/^\s*#{1,6}\s+/, "")
+        .replace(/^\s*[-*+•]\s+/, ""),
+    )
+    .join(" ")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .toLowerCase()
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;|&apos;/g, "'")
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
-    .replace(/[\s*_~`#>[\]()!.:|+•-]+/gu, " ")
+    .replace(/[\\`*_~|[\]()•]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function quoteAppearsInBlocks(quote: string, blocks: MessageBlock[]): boolean {
-  const excerpt = normalizeForQuoteMatch(quote);
+  const excerpt = flattenForQuoteMatch(quote);
   if (!excerpt) return false;
-  return normalizeForQuoteMatch(blocksToAgentHistoryText(blocks)).includes(excerpt);
+  return flattenForQuoteMatch(blocksToAgentHistoryText(blocks)).includes(excerpt);
 }
 
 const THREAD_MESSAGE_PAGE_SIZE = 100;

@@ -1411,6 +1411,70 @@ describe("sendThreadMessage", () => {
     });
   });
 
+  it("drops a quote excerpt that only matches after stripping punctuation", async () => {
+    let messageSeq = 0;
+    let eventSeq = 0;
+    const tx = {
+      thread: {
+        update: vi.fn(async ({ data }: { data: { nextMessageSeq?: unknown } }) =>
+          data.nextMessageSeq ? { nextMessageSeq: ++messageSeq } : { nextEventSeq: ++eventSeq },
+        ),
+      },
+      message: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "parent",
+          blocks: [{ kind: "text", text: "C++ is fast and key:value pairs" }],
+        }),
+        update: vi.fn(),
+        create: vi.fn().mockResolvedValue({
+          id: "msg-1",
+          threadId: "thread-1",
+          seq: 1,
+          role: "user",
+          blocks: [{ kind: "text", text: "why this?" }],
+          botId: null,
+          replyToMessageId: "parent",
+          replyQuote: null,
+          runId: null,
+          createdAt: new Date(),
+        }),
+      },
+      run: {
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi.fn().mockResolvedValue({ status: "queued", startedAt: null }),
+        create: vi.fn().mockResolvedValue({ id: "run-1", taskId: "task-1", status: "queued" }),
+      },
+      task: { create: vi.fn().mockResolvedValue({ id: "task-1" }) },
+      event: {
+        create: vi.fn().mockResolvedValue({ id: "event-1", seq: 1, createdAt: new Date() }),
+      },
+      steeringMessage: { create: vi.fn() },
+    };
+    const prisma = {
+      message: { findUnique: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const actor = { spaceId: "workspace-1", userId: "user-1" } as Actor;
+    const target = { kind: "bot", botId: "bot-1", threadId: "thread-1" } as ThreadTarget;
+
+    for (const replyQuote of ["C is fast", "key value pairs"]) {
+      await sendThreadMessage(
+        {
+          prisma,
+          events: { notify: vi.fn().mockResolvedValue(undefined) } as never,
+          jobs: { enqueue: vi.fn().mockResolvedValue(undefined) } as never,
+        },
+        actor,
+        target,
+        { text: "why this?", replyToMessageId: "parent", replyQuote },
+      );
+    }
+
+    for (const call of tx.message.create.mock.calls) {
+      expect(call[0].data.replyQuote).toBeUndefined();
+    }
+  });
+
   it("persists the quote excerpt on a group send", async () => {
     let messageSeq = 0;
     let eventSeq = 0;
