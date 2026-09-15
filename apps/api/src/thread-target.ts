@@ -13,6 +13,7 @@ import {
 } from "@rakazo/contracts";
 import {
   ACTIVE_RUN_STATUSES,
+  blocksToAgentHistoryText,
   isActive,
   projectMessages,
   resolveGroupTargetBotIds,
@@ -57,6 +58,29 @@ export type ThreadTarget =
       members: GroupMember[];
       memberBotIds: string[];
     };
+
+/**
+ * Compare a selected-text excerpt against the parent's stored blocks. The
+ * excerpt is rendered text while blocks hold markdown source, so both sides
+ * are flattened first — markdown punctuation and whitespace collapse away,
+ * which catches fabricated excerpts without rejecting real quotes of
+ * formatted text.
+ */
+function normalizeForQuoteMatch(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[\s*_~`#>[\]()!.-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function quoteAppearsInBlocks(quote: string, blocks: MessageBlock[]): boolean {
+  const excerpt = normalizeForQuoteMatch(quote);
+  if (!excerpt) return false;
+  return normalizeForQuoteMatch(blocksToAgentHistoryText(blocks)).includes(excerpt);
+}
 
 const THREAD_MESSAGE_PAGE_SIZE = 100;
 const RUNS_NEEDING_CONTINUE = new Set(["queued", "waiting_takeover"]);
@@ -595,8 +619,9 @@ export async function sendThreadMessage(
   const existing = await replayExistingSend(deps, target.threadId, input.clientNonce);
   if (existing) return existing;
   // The excerpt is rendered text while blocks hold markdown source, so it
-  // can't be substring-verified against the parent — enforce the cap instead.
-  const replyQuote = input.replyQuote?.trim().slice(0, REPLY_QUOTE_MAX_LENGTH) || undefined;
+  // can't be substring-verified verbatim — enforce the cap here, then check
+  // the flattened form against the parent inside the transaction.
+  let replyQuote = input.replyQuote?.trim().slice(0, REPLY_QUOTE_MAX_LENGTH) || undefined;
   if (replyQuote && !input.replyToMessageId) {
     throw new ORPCError("BAD_REQUEST", { message: "replyQuote requires replyToMessageId." });
   }
@@ -606,9 +631,20 @@ export async function sendThreadMessage(
       if (input.replyToMessageId) {
         const reply = await tx.message.findFirst({
           where: { id: input.replyToMessageId, threadId: target.threadId },
-          select: { id: true },
+          select: { id: true, blocks: true },
         });
         if (!reply) throw new IsolationError();
+        // Client-supplied excerpts are untrusted: drop a mismatch instead of
+        // failing the send — the reply still lands, just without the quote.
+        if (
+          replyQuote &&
+          !quoteAppearsInBlocks(
+            replyQuote,
+            Array.isArray(reply.blocks) ? (reply.blocks as MessageBlock[]) : [],
+          )
+        ) {
+          replyQuote = undefined;
+        }
       }
 
       if (target.kind === "bot") {
