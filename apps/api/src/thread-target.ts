@@ -7,6 +7,7 @@ import {
   type GroupMember,
   type MessageBlock,
   type MessageReaction,
+  REPLY_QUOTE_MAX_LENGTH,
   type RunStatus,
   type ThreadSnapshot,
 } from "@rakazo/contracts";
@@ -587,11 +588,18 @@ export async function sendThreadMessage(
     artifactIds?: string[];
     mentions?: MentionTargetInput[];
     replyToMessageId?: string;
+    replyQuote?: string;
     clientNonce?: string;
   },
 ) {
   const existing = await replayExistingSend(deps, target.threadId, input.clientNonce);
   if (existing) return existing;
+  // The excerpt is rendered text while blocks hold markdown source, so it
+  // can't be substring-verified against the parent — enforce the cap instead.
+  const replyQuote = input.replyQuote?.trim().slice(0, REPLY_QUOTE_MAX_LENGTH) || undefined;
+  if (replyQuote && !input.replyToMessageId) {
+    throw new ORPCError("BAD_REQUEST", { message: "replyQuote requires replyToMessageId." });
+  }
 
   const commit = () =>
     deps.prisma.$transaction(async (tx) => {
@@ -622,6 +630,7 @@ export async function sendThreadMessage(
           role: "user",
           blocks,
           replyToMessageId: input.replyToMessageId,
+          replyQuote,
           clientNonce: input.clientNonce,
         });
         const activeRuns = await tx.run.findMany({
@@ -659,6 +668,7 @@ export async function sendThreadMessage(
               role: "user",
               blocks,
               replyToMessageId: input.replyToMessageId,
+              replyQuote,
             },
           });
           return { message, runs: [active], eventSeq: event.seq };
@@ -704,6 +714,7 @@ export async function sendThreadMessage(
             blocks,
             runIds: [run.id],
             replyToMessageId: input.replyToMessageId,
+            replyQuote,
           },
         });
         return { message, runs: [run], eventSeq: event.seq };
@@ -735,6 +746,7 @@ export async function sendThreadMessage(
         role: "user",
         blocks,
         replyToMessageId: input.replyToMessageId,
+        replyQuote,
         clientNonce: input.clientNonce,
       });
       const activeRuns = await tx.run.findMany({
@@ -816,6 +828,7 @@ export async function sendThreadMessage(
           blocks,
           runIds: runs.map((run) => run.id),
           replyToMessageId: input.replyToMessageId,
+          replyQuote,
         },
       });
       return { message, runs, eventSeq: event.seq };
