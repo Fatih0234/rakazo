@@ -42,4 +42,38 @@ describe("ChatMarkdown", () => {
     expect(html).toContain('aria-label="Copy code"');
     expect(html).toContain("rk-chat-markdown-copy");
   });
+
+  it("renders GFM tables as an interactive table card", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown>
+        {"| Product | Price |\n| --- | ---: |\n| Alpha | 3 |\n| Beta | 10 |"}
+      </ChatMarkdown>,
+    );
+
+    expect(html).toContain('data-testid="table-card"');
+    expect(html).toContain('aria-label="Sort by Product"');
+    expect(html).toContain('aria-sort="none"');
+    expect(html).toContain('aria-label="Copy rows"');
+    expect(html).toContain('aria-label="Download CSV"');
+    expect(html).toContain('aria-label="Expand table"');
+    expect(html).toContain("Alpha");
+    expect(html).toContain("2 rows");
+  });
+
+  it("right-aligns numeric table columns", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown>{"| Item | Qty |\n| --- | --- |\n| widget | 12 |"}</ChatMarkdown>,
+    );
+
+    expect(html).toContain("rk-align-right");
+  });
+
+  it("keeps table cell content sanitized", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown>{"| A |\n| --- |\n| <script>alert(1)</script> |"}</ChatMarkdown>,
+    );
+
+    expect(html).not.toContain("<script");
+    expect(html).toContain('data-testid="table-card"');
+  });
 });

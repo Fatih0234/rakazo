@@ -1,0 +1,208 @@
+/* Interactive card for GFM markdown tables (rk-table-*) */
+
+.rk-chat-markdown .rk-table-card {
+  margin: 0.65em 0;
+  border: 1px solid var(--border);
+  border-radius: 0.75em;
+  background: var(--card);
+  overflow: hidden;
+}
+
+.rk-table-head {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.15em;
+  padding: 0.3em 0.45em;
+}
+
+.rk-table-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7em;
+  height: 1.7em;
+  border: 0;
+  border-radius: 0.45em;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 0;
+}
+
+.rk-table-tool:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.rk-table-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rk-table-scroll {
+  overflow: auto;
+  max-height: 20em;
+  border-top: 1px solid var(--border);
+}
+
+.rk-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--muted);
+  font-weight: 600;
+  text-align: left;
+}
+
+.rk-table td {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.92em;
+  color: var(--foreground);
+}
+
+.rk-table .rk-align-right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.rk-table .rk-align-center {
+  text-align: center;
+}
+
+.rk-table .rk-table-gutter {
+  width: 2.2em;
+  min-width: 2.2em;
+  text-align: center;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-right: 1px solid var(--border);
+  font-size: 0.85em;
+  padding-left: 0.3em;
+  padding-right: 0.3em;
+}
+
+/* The generic markdown table rule (display:block) must not fight the card's
+   own scroll container. */
+.rk-chat-markdown .rk-table-card .rk-table {
+  display: table;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+
+.rk-chat-markdown .rk-table-card .rk-table th,
+.rk-chat-markdown .rk-table-card .rk-table td {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0.35em 0.75em;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.rk-chat-markdown .rk-table-card .rk-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.rk-table-sort {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6em;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-align: inherit;
+}
+
+.rk-table-sort-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rk-align-right .rk-table-sort {
+  flex-direction: row-reverse;
+}
+
+.rk-table-sort-icon {
+  display: inline-flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+.rk-table-sort-icon .rk-sort-off {
+  color: var(--muted-foreground);
+  opacity: 0.45;
+}
+
+.rk-table-sort-icon .rk-sort-on {
+  color: var(--foreground);
+}
+
+.rk-table-empty {
+  text-align: center;
+  color: var(--muted-foreground);
+  padding: 1em;
+}
+
+.rk-table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4em;
+  border-top: 1px solid var(--border);
+  padding: 0.2em 0.5em;
+  font-size: 0.8em;
+  color: var(--muted-foreground);
+}
+
+.rk-table-footer .rk-table-range {
+  margin-right: auto;
+}
+
+.rk-table-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vmin;
+  background: rgb(0 0 0 / 0.1);
+}
+
+@supports (backdrop-filter: blur(1px)) {
+  .rk-table-overlay {
+    backdrop-filter: blur(2px);
+  }
+}
+
+.rk-table-dialog {
+  display: flex;
+  flex-direction: column;
+  min-width: min(32rem, 94vw);
+  max-width: 94vw;
+  max-height: 90vh;
+  border: 1px solid var(--border);
+  border-radius: 0.9em;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 0.2);
+  overflow: hidden;
+}
+
+.rk-table-dialog .rk-table-head {
+  padding: 0.45em 0.7em;
+}
+
+.rk-table-dialog-scroll {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+}

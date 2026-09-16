@@ -2,7 +2,9 @@ import { memo, useCallback, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./markdown.web.css";
+import "./markdown-table.css";
 import { type ChatMarkdownProps, closeUnterminatedFence, sanitizeMarkdownUrl } from "./markdown";
+import { MarkdownTable } from "./markdown-table";
 
 function CopyIcon() {
   return (
@@ -84,6 +86,9 @@ const components: Components = {
   },
   pre({ node: _node, ...props }) {
     return <CodeBlock {...props} />;
+  },
+  table({ node, children }) {
+    return <MarkdownTable node={node}>{children}</MarkdownTable>;
   },
 };
 
