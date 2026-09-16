@@ -13,7 +13,7 @@ const markdown = ["| Item | Qty |", "| --- | --- |", ...rows].join("\n");
 
 createRoot(document.getElementById("root")!).render(
   <main className="min-h-screen bg-background p-8 text-foreground">
-    <div className="rk-chat-markdown-host" style={{ maxWidth: "40rem" }}>
+    <div style={{ maxWidth: "40rem" }}>
       <ChatMarkdown>{markdown}</ChatMarkdown>
     </div>
   </main>,

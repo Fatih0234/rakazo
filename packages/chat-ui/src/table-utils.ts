@@ -22,9 +22,7 @@ export type ExtractedTable = {
 
 export type TableSortDirection = "asc" | "desc";
 
-const TABLE_PAGE_SIZE = 10;
-
-export { TABLE_PAGE_SIZE };
+export const TABLE_PAGE_SIZE = 10;
 
 /** First tr's header cells become columns; later trs become rows. */
 export function extractTable(node: HastNode | undefined): ExtractedTable | null {
@@ -48,7 +46,7 @@ export function extractTable(node: HastNode | undefined): ExtractedTable | null 
 function collectRows(node: HastNode): HastNode[] {
   const rows: HastNode[] = [];
   const walk = (current: HastNode) => {
-    for (const child of current.children ?? []) {
+    for (const child of childrenOf(current)) {
       if (child.tagName === "tr") rows.push(child);
       else walk(child);
     }
@@ -57,14 +55,32 @@ function collectRows(node: HastNode): HastNode[] {
   return rows;
 }
 
+function childrenOf(node: HastNode): HastNode[] {
+  return Array.isArray(node.children) ? node.children : [];
+}
+
 function cellsOf(row: HastNode, tag: "th" | "td"): HastNode[] {
-  return (row.children ?? []).filter((child) => child.tagName === tag);
+  return childrenOf(row).filter((child) => child.tagName === tag);
 }
 
 function textOf(node: HastNode | undefined): string {
   if (!node) return "";
   if (node.type === "text") return node.value ?? "";
-  return (node.children ?? []).map(textOf).join("");
+  // skipHtml drops raw HTML before render, but the nodes are still in the
+  // hast tree — a dropped <br> would fuse adjacent words ("one<br>two" →
+  // "onetwo") and a dropped <img> would lose even its alt text.
+  if (node.type === "raw") {
+    const html = node.value ?? "";
+    if (/^<br[\s/>]/i.test(html)) return " ";
+    const alt = html.match(/<img[^>]*\balt\s*=\s*("([^"]*)"|'([^']*)')/i);
+    return alt?.[2] ?? alt?.[3] ?? "";
+  }
+  if (node.tagName === "br") return " ";
+  if (node.tagName === "img") {
+    const alt = node.properties?.alt;
+    return typeof alt === "string" ? alt : "";
+  }
+  return childrenOf(node).map(textOf).join("");
 }
 
 function alignOf(cell: HastNode): TableAlign {
@@ -133,7 +149,10 @@ export function nextSort(
   return null;
 }
 
-/** ch-based min-width per column from the longest cell, like nao's sizing. */
+// Matches the .rk-table-cell-text max-width so min-width never outgrows it.
+const MAX_WIDTH_CHARS = 60;
+
+/** ch-based min-width per column from the longest cell, capped. */
 export function columnMinWidths(columns: string[], rows: string[][]): Record<number, string> {
   const widths: Record<number, string> = {};
   columns.forEach((column, i) => {
@@ -142,20 +161,20 @@ export function columnMinWidths(columns: string[], rows: string[][]): Record<num
       const chars = (row[i] ?? "").length;
       if (chars > maxChars) maxChars = chars;
     }
-    widths[i] = `calc(${maxChars}ch + 1.5rem)`;
+    widths[i] = `calc(${Math.min(maxChars, MAX_WIDTH_CHARS)}ch + 1.5rem)`;
   });
   return widths;
 }
 
-// Leading = + - @ or a control char would be evaluated as a formula by
+// Leading = + - @ after any whitespace would be evaluated as a formula by
 // spreadsheet apps; prefix a quote so exports stay inert.
-const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const FORMULA_PREFIX = /^\s*[=+\-@]/;
 const neutralizeFormula = (value: string) => (FORMULA_PREFIX.test(value) ? `'${value}` : value);
 
 export function tableToCsv(columns: string[], rows: string[][]): string {
   const cell = (value: string) => {
     const safe = neutralizeFormula(value);
-    return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+    return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
   };
   const line = (cells: string[]) => cells.map(cell).join(",");
   return [line(columns), ...rows.map((row) => line(columns.map((_, i) => row[i] ?? "")))].join(
@@ -164,7 +183,7 @@ export function tableToCsv(columns: string[], rows: string[][]): string {
 }
 
 export function tableToTsv(columns: string[], rows: string[][]): string {
-  const clean = (value: string) => neutralizeFormula(value).replace(/[\t\n]/g, " ");
+  const clean = (value: string) => neutralizeFormula(value).replace(/[\t\r\n]/g, " ");
   const line = (cells: string[]) => cells.map(clean).join("\t");
   return [line(columns), ...rows.map((row) => line(columns.map((_, i) => row[i] ?? "")))].join(
     "\n",

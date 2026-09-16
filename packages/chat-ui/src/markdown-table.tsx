@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ExtractedTable, HastNode, TableAlign, TableSortDirection } from "./table-utils.js";
+import { CheckIcon, CopyIcon } from "./icons";
+import type { ExtractedTable, HastNode, TableAlign, TableSortDirection } from "./table-utils";
 import {
   columnMinWidths,
   extractTable,
@@ -11,28 +12,38 @@ import {
   TABLE_PAGE_SIZE,
   tableToCsv,
   tableToTsv,
-} from "./table-utils.js";
+} from "./table-utils";
 
 /**
  * Renders a GFM markdown table as an interactive data card. Extraction is
  * lossy on purpose — inline markup inside cells flattens to text — and a
  * table that yields no columns falls back to the default <table>.
  */
-export function MarkdownTable({ node, children }: { node?: HastNode; children?: ReactNode }) {
+export const MarkdownTable = memo(function MarkdownTable({
+  node,
+  tableProps,
+  children,
+}: {
+  node?: HastNode;
+  tableProps?: ComponentPropsWithoutRef<"table">;
+  children?: ReactNode;
+}) {
   const extracted = useMemo(() => extractTable(node), [node]);
-  if (!extracted) return <table>{children}</table>;
+  if (!extracted) return <table {...tableProps}>{children}</table>;
   return <TableCard table={extracted} />;
-}
+});
 
 type SortState = { column: number; direction: TableSortDirection } | null;
 
-export function TableCard({ table }: { table: ExtractedTable }) {
+export const TableCard = memo(function TableCard({ table }: { table: ExtractedTable }) {
   const { columns, aligns, rows } = table;
   const [sort, setSort] = useState<SortState>(null);
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<number | undefined>(undefined);
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const numericColumns = useMemo(() => {
     const numeric = new Set<number>();
@@ -55,22 +66,64 @@ export function TableCard({ table }: { table: ExtractedTable }) {
     ? sortedRows.slice(safePage * TABLE_PAGE_SIZE, (safePage + 1) * TABLE_PAGE_SIZE)
     : sortedRows;
 
-  useEffect(() => setPage(0), [rows, sort]);
+  // Data and sort changes only clamp the page; an explicit sort click resets
+  // to page 0 in the handler so the two coalesce into one commit.
+  useEffect(() => setPage((p) => Math.min(p, pageCount - 1)), [pageCount]);
   useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
   useEffect(() => {
     if (!expanded) return;
+    dialogRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setExpanded(false);
+      if (event.key === "Escape") {
+        setExpanded(false);
+        // This overlay can render inside a Base UI dialog (artifact preview,
+        // peer messages); stop propagation so one Escape doesn't close both.
+        event.stopPropagation();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusables = dialog.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      );
+      const first = focusables.item(0);
+      const last = focusables.item(focusables.length - 1);
+      if (!first) {
+        event.preventDefault();
+        return;
+      }
+      const active = document.activeElement;
+      if (!dialog.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      document.body.style.overflow = previousOverflow;
+      expandButtonRef.current?.focus();
+    };
   }, [expanded]);
 
-  const toggleSort = (column: number) => setSort((current) => nextSort(current, column));
+  const toggleSort = (column: number) => {
+    setSort((current) => nextSort(current, column));
+    setPage(0);
+  };
 
   const copyRows = () => {
+    if (!navigator.clipboard) return;
     navigator.clipboard
-      .writeText(tableToTsv(columns, rows))
+      .writeText(tableToTsv(columns, sortedRows))
       .then(() => {
         setCopied(true);
         window.clearTimeout(copiedTimer.current);
@@ -80,7 +133,10 @@ export function TableCard({ table }: { table: ExtractedTable }) {
   };
 
   const downloadCsv = () => {
-    const blob = new Blob([tableToCsv(columns, rows)], { type: "text/csv;charset=utf-8" });
+    // BOM so spreadsheet apps decode UTF-8 correctly.
+    const blob = new Blob([`\uFEFF${tableToCsv(columns, sortedRows)}`], {
+      type: "text/csv;charset=utf-8",
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -112,7 +168,6 @@ export function TableCard({ table }: { table: ExtractedTable }) {
         type="button"
         className="rk-table-tool"
         aria-label="Previous page"
-        title="Previous page"
         disabled={safePage === 0}
         onClick={() => setPage(safePage - 1)}
       >
@@ -122,7 +177,6 @@ export function TableCard({ table }: { table: ExtractedTable }) {
         type="button"
         className="rk-table-tool"
         aria-label="Next page"
-        title="Next page"
         disabled={safePage >= pageCount - 1}
         onClick={() => setPage(safePage + 1)}
       >
@@ -144,7 +198,6 @@ export function TableCard({ table }: { table: ExtractedTable }) {
         className="rk-table-tool"
         onClick={copyRows}
         aria-label={copied ? "Copied" : "Copy rows"}
-        title="Copy rows"
       >
         {copied ? <CheckIcon /> : <CopyIcon />}
       </button>
@@ -153,7 +206,6 @@ export function TableCard({ table }: { table: ExtractedTable }) {
         className="rk-table-tool"
         onClick={downloadCsv}
         aria-label="Download CSV"
-        title="Download CSV"
       >
         <DownloadIcon />
       </button>
@@ -161,9 +213,9 @@ export function TableCard({ table }: { table: ExtractedTable }) {
         <button
           type="button"
           className="rk-table-tool"
+          ref={expandButtonRef}
           onClick={() => setExpanded(true)}
           aria-label="Expand table"
-          title="Expand table"
         >
           <ExpandIcon />
         </button>
@@ -173,7 +225,6 @@ export function TableCard({ table }: { table: ExtractedTable }) {
           className="rk-table-tool"
           onClick={() => setExpanded(false)}
           aria-label="Close table"
-          title="Close table"
         >
           <CloseIcon />
         </button>
@@ -182,14 +233,27 @@ export function TableCard({ table }: { table: ExtractedTable }) {
   );
 
   return (
-    <div className="rk-table-card" data-testid="table-card">
+    <div className="rk-table-card rk-table-box" data-testid="table-card" inert={expanded}>
       {tools("card")}
       <div className="rk-table-scroll">{tableView}</div>
       {pager}
       {expanded
         ? createPortal(
-            <div className="rk-table-overlay">
-              <div className="rk-table-dialog" role="dialog" aria-modal="true" aria-label="Table">
+            // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: Escape and the Close button cover keyboard dismissal; the backdrop click is a pointer convenience.
+            <div
+              className="rk-table-overlay"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) setExpanded(false);
+              }}
+            >
+              <div
+                className="rk-table-dialog rk-table-box"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Table"
+                ref={dialogRef}
+                tabIndex={-1}
+              >
                 {tools("dialog")}
                 <div className="rk-table-scroll rk-table-dialog-scroll">{tableView}</div>
                 {pager}
@@ -200,7 +264,7 @@ export function TableCard({ table }: { table: ExtractedTable }) {
         : null}
     </div>
   );
-}
+});
 
 function TableView({
   columns,
@@ -221,8 +285,9 @@ function TableView({
   sort: SortState;
   onToggleSort: (column: number) => void;
 }) {
+  // Numeric columns right-align unless the author declared an alignment.
   const alignClass = (index: number) => {
-    const align = numericColumns.has(index) ? "right" : aligns[index];
+    const align = numericColumns.has(index) && aligns[index] === "left" ? "right" : aligns[index];
     return align && align !== "left" ? `rk-align-${align}` : undefined;
   };
   return (
@@ -235,7 +300,9 @@ function TableView({
             return (
               <th
                 key={i}
-                aria-sort={direction ? (direction === "asc" ? "ascending" : "descending") : "none"}
+                aria-sort={
+                  direction ? (direction === "asc" ? "ascending" : "descending") : undefined
+                }
                 className={alignClass(i)}
               >
                 <button
@@ -263,15 +330,20 @@ function TableView({
           rows.map((row, rowIndex) => (
             <tr key={rowIndex}>
               <td className="rk-table-gutter">{rowOffset + rowIndex + 1}</td>
-              {columns.map((_, columnIndex) => (
-                <td
-                  key={columnIndex}
-                  style={{ minWidth: minWidths[columnIndex] }}
-                  className={alignClass(columnIndex)}
-                >
-                  {row[columnIndex] ?? ""}
-                </td>
-              ))}
+              {columns.map((_, columnIndex) => {
+                const value = row[columnIndex] ?? "";
+                return (
+                  <td
+                    key={columnIndex}
+                    style={{ minWidth: minWidths[columnIndex] }}
+                    className={alignClass(columnIndex)}
+                  >
+                    <span className="rk-table-cell-text" title={value || undefined}>
+                      {value}
+                    </span>
+                  </td>
+                );
+              })}
             </tr>
           ))
         )}
@@ -286,44 +358,6 @@ function SortIndicator({ direction }: { direction: TableSortDirection | null }) 
       <ChevronUpIcon active={direction === "asc"} />
       <ChevronDownIcon active={direction === "desc"} />
     </span>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect
-        x="9"
-        y="9"
-        width="12"
-        height="12"
-        rx="2"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M4 12.5 9.5 18 20 6"
-        stroke="currentColor"
-        strokeWidth="2.25"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }
 
@@ -351,7 +385,7 @@ function ExpandIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
-        d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3m0 8v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"
+        d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3m0 8v3a2 2 0 0 0 2 2h-3M3 16v3a2 2 0 0 0 2 2h3"
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"

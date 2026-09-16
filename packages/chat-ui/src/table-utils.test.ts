@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { HastNode } from "./table-utils";
 import {
   compareCellText,
   extractTable,
-  type HastNode,
   isNumericColumn,
   nextSort,
   parseNumericText,
@@ -84,6 +84,27 @@ describe("extractTable", () => {
       row(cell("td", "1"), cell("td", "2"), cell("td", "3")),
     ]);
     expect(extractTable(node)?.aligns).toEqual(["left", "right", "center"]);
+  });
+
+  it("keeps a space where a <br> was dropped and preserves image alt text", () => {
+    const node = table([
+      row(cell("th", "A"), cell("th", "B")),
+      row(
+        { tagName: "td", children: [text("one"), { tagName: "br" }, text("two")] },
+        {
+          tagName: "td",
+          children: [{ tagName: "img", properties: { alt: "chart alt" } }],
+        },
+      ),
+      row(
+        { tagName: "td", children: [text("x"), { type: "raw", value: "<br>" }, text("y")] },
+        { tagName: "td", children: [{ type: "raw", value: '<img src="u" alt="logo">' }] },
+      ),
+    ]);
+    expect(extractTable(node)?.rows).toEqual([
+      ["one two", "chart alt"],
+      ["x y", "logo"],
+    ]);
   });
 
   it("returns null for malformed nodes", () => {
@@ -181,6 +202,17 @@ describe("serialization", () => {
     ]);
     const lines = csv.split("\n").slice(1);
     for (const line of lines) expect(line.startsWith("'")).toBe(true);
+  });
+
+  it("quotes CSV cells containing carriage returns", () => {
+    expect(tableToCsv(["A"], [["x\ry"]])).toBe('A\n"x\ry"');
+    // A CR must not smuggle a formula past the neutralizer into a new row.
+    expect(tableToCsv(["A"], [["a\r=cmd"]])).toBe('A\n"a\r=cmd"');
+  });
+
+  it("neutralizes formulas hidden behind leading whitespace", () => {
+    expect(tableToCsv(["A"], [["  =cmd"]])).toBe("A\n'  =cmd");
+    expect(tableToTsv(["A"], [["\t=cmd"]])).toBe("A\n' =cmd");
   });
 
   it("strips tabs/newlines in TSV and neutralizes formulas", () => {

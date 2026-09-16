@@ -3,46 +3,9 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./markdown.web.css";
 import "./markdown-table.css";
+import { CheckIcon, CopyIcon } from "./icons";
 import { type ChatMarkdownProps, closeUnterminatedFence, sanitizeMarkdownUrl } from "./markdown";
 import { MarkdownTable } from "./markdown-table";
-
-function CopyIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect
-        x="9"
-        y="9"
-        width="12"
-        height="12"
-        rx="2"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M4 12.5 9.5 18 20 6"
-        stroke="currentColor"
-        strokeWidth="2.25"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 function CodeBlock(props: React.ComponentPropsWithoutRef<"pre">) {
   const preRef = useRef<HTMLPreElement>(null);
@@ -87,8 +50,12 @@ const components: Components = {
   pre({ node: _node, ...props }) {
     return <CodeBlock {...props} />;
   },
-  table({ node, children }) {
-    return <MarkdownTable node={node}>{children}</MarkdownTable>;
+  table({ node, children, ...props }) {
+    return (
+      <MarkdownTable node={node} tableProps={props}>
+        {children}
+      </MarkdownTable>
+    );
   },
 };
 

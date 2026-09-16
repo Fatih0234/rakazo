@@ -52,7 +52,7 @@ describe("ChatMarkdown", () => {
 
     expect(html).toContain('data-testid="table-card"');
     expect(html).toContain('aria-label="Sort by Product"');
-    expect(html).toContain('aria-sort="none"');
+    expect(html).not.toContain("aria-sort");
     expect(html).toContain('aria-label="Copy rows"');
     expect(html).toContain('aria-label="Download CSV"');
     expect(html).toContain('aria-label="Expand table"');

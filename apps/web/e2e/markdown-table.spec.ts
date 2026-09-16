@@ -15,7 +15,7 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
   await expect(card.getByRole("button", { name: "Expand table" })).toBeVisible();
 
   // Numeric sort: desc puts qty 12 first; lexicographic would put 9 first.
-  // thead th nth(0) is the row-number gutter; Qty is the second column.
+  // thead th nth(0) is the row-number gutter, so Qty sits at index 2.
   const qtyHeader = card.locator("thead th").nth(2);
   await card.getByRole("button", { name: "Sort by Qty" }).click();
   await expect(qtyHeader).toHaveAttribute("aria-sort", "ascending");
@@ -25,7 +25,7 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
   await expect(card.locator("tbody tr").first()).toContainText("item-12");
   // Third click clears the sort and restores source order.
   await card.getByRole("button", { name: "Sort by Qty" }).click();
-  await expect(qtyHeader).toHaveAttribute("aria-sort", "none");
+  await expect(qtyHeader).not.toHaveAttribute("aria-sort", /./);
   await expect(card.locator("tbody tr").first()).toContainText("item-01");
 
   // Pagination past the page size.
@@ -53,9 +53,18 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
   await card.getByRole("button", { name: "Expand table" }).click();
   const dialog = page.getByRole("dialog", { name: "Table" });
   await expect(dialog.locator("tbody tr")).toHaveCount(10);
+  // Focus moves into the portaled dialog, and cells keep their card styling
+  // (the portal sits outside .rk-chat-markdown).
+  await expect(dialog).toBeFocused();
+  const cellPadding = await dialog
+    .locator("tbody td")
+    .nth(1)
+    .evaluate((el) => getComputedStyle(el).padding);
+  expect(cellPadding).not.toBe("0px");
   await captureScreenshot(page, testInfo, "markdown-table-card");
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Expand table" })).toBeFocused();
 });
 
 test("small tables skip pagination", async ({ page }) => {
