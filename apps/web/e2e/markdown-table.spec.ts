@@ -2,6 +2,20 @@ import { expect, test } from "@playwright/test";
 import { captureScreenshot, completeOnboarding, signup } from "./helpers";
 
 const fixture = "/e2e/fixtures/markdown-table.html";
+const longValue =
+  "This deliberately long table value contains enough words to wrap completely inside the expanded dialog without clipping or ellipsis.";
+
+function tableMarkdown(rowCount: number, columns = ["Item", "Qty"]) {
+  const rows = Array.from(
+    { length: rowCount },
+    (_, i) => `| item-${String(i + 1).padStart(2, "0")} | ${(i * 7) % 13} |`,
+  );
+  return [
+    `| ${columns.join(" | ")} |`,
+    `| ${columns.map(() => "---").join(" | ")} |`,
+    ...rows,
+  ].join("\n");
+}
 
 test("markdown tables render as an interactive card", async ({ page }, testInfo) => {
   await page.goto(fixture);
@@ -53,9 +67,9 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
   await card.getByRole("button", { name: "Expand table" }).click();
   const dialog = page.getByRole("dialog", { name: "Table" });
   await expect(dialog.locator("tbody tr")).toHaveCount(10);
-  // Focus moves into the portaled dialog, and cells keep their card styling
-  // (the portal sits outside .rk-chat-markdown).
-  await expect(dialog).toBeFocused();
+  // Focus moves to the close control, and cells keep their card styling even
+  // though the Base UI dialog portal sits outside .rk-chat-markdown.
+  await expect(dialog.getByRole("button", { name: "Close table" })).toBeFocused();
   const cellPadding = await dialog
     .locator("tbody td")
     .nth(1)
@@ -67,6 +81,156 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
   await expect(card.getByRole("button", { name: "Expand table" })).toBeFocused();
 });
 
+test("rich table links participate in dialog keyboard navigation", async ({ page }) => {
+  await page.goto(`${fixture}?rich=1`);
+  const card = page.getByTestId("table-card");
+  const inlineLink = card.getByRole("link", { name: "Docs" });
+  await expect(inlineLink).toHaveAttribute("href", "https://example.test/docs");
+  await expect(inlineLink).toHaveAttribute("target", "_blank");
+  await expect(inlineLink).toHaveAttribute("rel", "noreferrer noopener");
+
+  await card.getByRole("button", { name: "Expand table" }).click();
+  const dialog = page.getByRole("dialog", { name: "Table" });
+  const dialogLink = dialog.getByRole("link", { name: "Docs" });
+  await dialogLink.focus();
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Copy rows" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialogLink).toBeFocused();
+});
+
+test("rich table cells stay associated through sorting and pagination", async ({ page }) => {
+  await page.goto(`${fixture}?rich-many=1`);
+  const card = page.getByTestId("table-card");
+  await card.getByRole("button", { name: "Sort by Qty" }).click();
+  await card.getByRole("button", { name: "Sort by Qty" }).click();
+  await expect(
+    card.locator("tbody tr").first().getByRole("link", { name: "Docs 12" }),
+  ).toHaveAttribute("href", "https://example.test/docs/12");
+
+  await card.getByRole("button", { name: "Next page" }).click();
+  await expect(card.getByRole("link", { name: "Docs 03" })).toHaveAttribute(
+    "href",
+    "https://example.test/docs/3",
+  );
+});
+
+test("expanded tables show long cell content without truncation", async ({ page }) => {
+  await page.goto(`${fixture}?long=1`);
+  const card = page.getByTestId("table-card");
+  const inlineCell = card.locator(".rk-table-cell-text").filter({ hasText: longValue });
+  const inlineMetrics = await inlineCell.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      textOverflow: style.textOverflow,
+      whiteSpace: style.whiteSpace,
+    };
+  });
+  expect(inlineMetrics.whiteSpace).toBe("nowrap");
+  expect(inlineMetrics.textOverflow).toBe("ellipsis");
+  expect(inlineMetrics.scrollWidth).toBeGreaterThan(inlineMetrics.clientWidth);
+
+  await card.getByRole("button", { name: "Expand table" }).click();
+  const dialogCell = page
+    .getByRole("dialog", { name: "Table" })
+    .locator(".rk-table-cell-text")
+    .filter({ hasText: longValue });
+  const dialogMetrics = await dialogCell.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      overflow: style.overflow,
+      textOverflow: style.textOverflow,
+      whiteSpace: style.whiteSpace,
+    };
+  });
+  expect(dialogMetrics.whiteSpace).toBe("normal");
+  expect(dialogMetrics.overflow).toBe("visible");
+  expect(dialogMetrics.textOverflow).toBe("clip");
+  expect(dialogMetrics.scrollHeight - dialogMetrics.clientHeight).toBeLessThanOrEqual(1);
+  expect(dialogMetrics.scrollWidth - dialogMetrics.clientWidth).toBeLessThanOrEqual(1);
+});
+
+test("nested table dialogs close independently", async ({ page }) => {
+  await page.goto(`${fixture}?nested=1&rich=1`);
+  const outerDialog = page.getByRole("dialog", { name: "Outer preview" });
+  await expect(outerDialog).toBeVisible();
+
+  const expand = outerDialog.getByRole("button", { name: "Expand table" });
+  await expand.click();
+  const tableDialog = page.getByRole("dialog", { name: "Table" });
+  await expect(tableDialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(tableDialog).toHaveCount(0);
+  await expect(outerDialog).toBeVisible();
+  await expect(expand).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(outerDialog).toHaveCount(0);
+});
+
+test("backdrop dismissal restores focus and page scroll", async ({ page }) => {
+  await page.goto(`${fixture}?tall=1`);
+  const card = page.getByTestId("table-card");
+  await card.scrollIntoViewIfNeeded();
+  const scrollY = await page.evaluate(() => window.scrollY);
+
+  const expand = card.getByRole("button", { name: "Expand table" });
+  await expand.click();
+  await expect(page.getByRole("dialog", { name: "Table" })).toBeVisible();
+  await page.locator('[data-slot="dialog-overlay"]').click({ position: { x: 2, y: 2 } });
+  await expect(page.getByRole("dialog", { name: "Table" })).toHaveCount(0);
+  await expect(expand).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scrollY);
+});
+
+test("streaming rows preserve state while schema changes reset it", async ({ page }) => {
+  await page.goto(`${fixture}?stream=1`);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  const card = page.getByTestId("table-card");
+  await card.getByRole("button", { name: "Sort by Qty" }).click();
+  await card.getByRole("button", { name: "Next page" }).click();
+  await card.getByRole("button", { name: "Copy rows" }).click();
+  await expect(card.getByRole("button", { name: "Copied" })).toBeVisible();
+  await card.getByRole("button", { name: "Expand table" }).click();
+
+  await page.evaluate(
+    (markdown) => {
+      window.dispatchEvent(new CustomEvent("rk-table-stream-update", { detail: { markdown } }));
+    },
+    `Results updated.\n\n${tableMarkdown(13).replace("| item-01 | 0 |", "| item-updated | 99 |")}`,
+  );
+
+  const dialog = page.getByRole("dialog", { name: "Table" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("columnheader", { name: /Qty/ })).toHaveAttribute(
+    "aria-sort",
+    "ascending",
+  );
+  await expect(dialog.getByText("11–13 of 13 rows")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Copy rows" })).toBeVisible();
+  await expect(dialog).toContainText("item-updated");
+
+  await page.evaluate(
+    (markdown) => {
+      window.dispatchEvent(new CustomEvent("rk-table-stream-update", { detail: { markdown } }));
+    },
+    tableMarkdown(13, ["Name", "Score"]),
+  );
+
+  await expect(dialog).toHaveCount(0);
+  await expect(card.getByRole("columnheader", { name: /Score/ })).not.toHaveAttribute(
+    "aria-sort",
+    /./,
+  );
+  await expect(card.getByText("1–10 of 13 rows")).toBeVisible();
+});
+
 test("small tables skip pagination", async ({ page }) => {
   await page.goto(`${fixture}?rows=3`);
   const card = page.getByTestId("table-card");
@@ -74,6 +238,50 @@ test("small tables skip pagination", async ({ page }) => {
   await expect(card.locator("tbody tr")).toHaveCount(3);
   await expect(card.getByText("3 rows")).toBeVisible();
   await expect(card.getByRole("button", { name: "Next page" })).toHaveCount(0);
+});
+
+test.describe("touch table controls", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test("toolbar controls are visible, large enough, and do not cover the table", async ({
+    page,
+  }) => {
+    await page.goto(fixture);
+    const card = page.getByTestId("table-card");
+    const toolbar = card.locator(":scope > .rk-table-head");
+    const scroll = card.locator(":scope > .rk-table-scroll");
+    await expect(toolbar).toBeVisible();
+    await expect(toolbar).toHaveCSS("position", "static");
+
+    const toolbarBox = await toolbar.boundingBox();
+    const scrollBox = await scroll.boundingBox();
+    expect(toolbarBox).not.toBeNull();
+    expect(scrollBox).not.toBeNull();
+    expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(scrollBox!.y + 1);
+
+    for (const name of ["Copy rows", "Download CSV", "Expand table"]) {
+      const box = await card.getByRole("button", { name }).boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+
+    const sortBox = await card.getByRole("button", { name: "Sort by Item" }).boundingBox();
+    expect(sortBox).not.toBeNull();
+    expect(sortBox!.height).toBeGreaterThanOrEqual(44);
+
+    await card.getByRole("button", { name: "Expand table" }).click();
+    const dialog = page.getByRole("dialog", { name: "Table" });
+    for (const name of ["Copy rows", "Download CSV", "Close table"]) {
+      const button = dialog.getByRole("button", { name });
+      await expect
+        .poll(async () => (await button.boundingBox())?.width ?? 0)
+        .toBeGreaterThanOrEqual(44);
+      await expect
+        .poll(async () => (await button.boundingBox())?.height ?? 0)
+        .toBeGreaterThanOrEqual(44);
+    }
+  });
 });
 
 test("bot replies render markdown tables as cards", async ({ page }) => {

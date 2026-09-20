@@ -12,7 +12,7 @@ export interface HastNode {
   children?: HastNode[];
 }
 
-export type TableAlign = "left" | "center" | "right";
+export type TableAlign = "left" | "center" | "right" | null;
 
 export type ExtractedTable = {
   columns: string[];
@@ -85,7 +85,7 @@ function textOf(node: HastNode | undefined): string {
 
 function alignOf(cell: HastNode): TableAlign {
   const align = cell.properties?.align;
-  return align === "center" || align === "right" ? align : "left";
+  return align === "left" || align === "center" || align === "right" ? align : null;
 }
 
 /**

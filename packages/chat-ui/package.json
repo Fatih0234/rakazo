@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@rakazo/ui-tokens": "workspace:*",
+    "@rakazo/ui-web": "workspace:*",
     "@ronradtke/react-native-markdown-display": "9.0.3",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1"

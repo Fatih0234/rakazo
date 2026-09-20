@@ -1,6 +1,6 @@
-import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "@rakazo/ui-web";
+import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from "react";
+import { Children, isValidElement, memo, useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, CopyIcon } from "./icons";
 import type { ExtractedTable, HastNode, TableAlign, TableSortDirection } from "./table-utils";
 import {
@@ -15,9 +15,9 @@ import {
 } from "./table-utils";
 
 /**
- * Renders a GFM markdown table as an interactive data card. Extraction is
- * lossy on purpose — inline markup inside cells flattens to text — and a
- * table that yields no columns falls back to the default <table>.
+ * Renders a GFM markdown table as an interactive data card. Extracted plain
+ * text drives sorting and export while sanitized React children preserve
+ * inline cell markup. Invalid tables fall back to the default <table>.
  */
 export const MarkdownTable = memo(function MarkdownTable({
   node,
@@ -29,21 +29,32 @@ export const MarkdownTable = memo(function MarkdownTable({
   children?: ReactNode;
 }) {
   const extracted = useMemo(() => extractTable(node), [node]);
+  const renderedRows = useMemo(() => extractRenderedRows(children), [children]);
   if (!extracted) return <table {...tableProps}>{children}</table>;
-  return <TableCard table={extracted} />;
+  const stateKey = JSON.stringify([extracted.columns, extracted.aligns]);
+  return <TableCard key={stateKey} table={extracted} renderedRows={renderedRows} />;
 });
 
 type SortState = { column: number; direction: TableSortDirection } | null;
 
-export const TableCard = memo(function TableCard({ table }: { table: ExtractedTable }) {
+export const TableCard = memo(function TableCard({
+  table,
+  renderedRows,
+}: {
+  table: ExtractedTable;
+  renderedRows?: ReactNode[][];
+}) {
   const { columns, aligns, rows } = table;
   const [sort, setSort] = useState<SortState>(null);
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedSignature, setCopiedSignature] = useState<string | null>(null);
   const copiedTimer = useRef<number | undefined>(undefined);
   const expandButtonRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  const dataSignature = JSON.stringify([columns, rows]);
+  const copied = copiedSignature === dataSignature;
 
   const numericColumns = useMemo(() => {
     const numeric = new Set<number>();
@@ -54,6 +65,10 @@ export const TableCard = memo(function TableCard({ table }: { table: ExtractedTa
   }, [columns, rows]);
 
   const minWidths = useMemo(() => columnMinWidths(columns, rows), [columns, rows]);
+  const renderedRowsBySource = useMemo(
+    () => new Map(rows.map((row, index) => [row, renderedRows?.[index]])),
+    [renderedRows, rows],
+  );
   const sortedRows = useMemo(
     () => (sort ? sortRows(rows, sort.column, sort.direction) : rows),
     [rows, sort],
@@ -70,50 +85,6 @@ export const TableCard = memo(function TableCard({ table }: { table: ExtractedTa
   // to page 0 in the handler so the two coalesce into one commit.
   useEffect(() => setPage((p) => Math.min(p, pageCount - 1)), [pageCount]);
   useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
-  useEffect(() => {
-    if (!expanded) return;
-    dialogRef.current?.focus();
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setExpanded(false);
-        // This overlay can render inside a Base UI dialog (artifact preview,
-        // peer messages); stop propagation so one Escape doesn't close both.
-        event.stopPropagation();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const focusables = dialog.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), [tabindex]:not([tabindex="-1"])',
-      );
-      const first = focusables.item(0);
-      const last = focusables.item(focusables.length - 1);
-      if (!first) {
-        event.preventDefault();
-        return;
-      }
-      const active = document.activeElement;
-      if (!dialog.contains(active)) {
-        event.preventDefault();
-        first.focus();
-      } else if (event.shiftKey && active === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("keydown", onKey, true);
-      document.body.style.overflow = previousOverflow;
-      expandButtonRef.current?.focus();
-    };
-  }, [expanded]);
 
   const toggleSort = (column: number) => {
     setSort((current) => nextSort(current, column));
@@ -125,9 +96,9 @@ export const TableCard = memo(function TableCard({ table }: { table: ExtractedTa
     navigator.clipboard
       .writeText(tableToTsv(columns, sortedRows))
       .then(() => {
-        setCopied(true);
+        setCopiedSignature(dataSignature);
         window.clearTimeout(copiedTimer.current);
-        copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
+        copiedTimer.current = window.setTimeout(() => setCopiedSignature(null), 1500);
       })
       .catch(() => {});
   };
@@ -145,7 +116,7 @@ export const TableCard = memo(function TableCard({ table }: { table: ExtractedTa
     window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   };
 
-  const tableView = (
+  const tableView = (mode: "card" | "dialog") => (
     <TableView
       columns={columns}
       aligns={aligns}
@@ -153,6 +124,8 @@ export const TableCard = memo(function TableCard({ table }: { table: ExtractedTa
       rowOffset={safePage * TABLE_PAGE_SIZE}
       numericColumns={numericColumns}
       minWidths={minWidths}
+      renderedRows={renderedRowsBySource}
+      expanded={mode === "dialog"}
       sort={sort}
       onToggleSort={toggleSort}
     />
@@ -220,49 +193,36 @@ export const TableCard = memo(function TableCard({ table }: { table: ExtractedTa
           <ExpandIcon />
         </button>
       ) : (
-        <button
-          type="button"
-          className="rk-table-tool"
-          onClick={() => setExpanded(false)}
+        <DialogClose
+          ref={closeButtonRef}
           aria-label="Close table"
+          render={<button type="button" className="rk-table-tool" />}
         >
           <CloseIcon />
-        </button>
+        </DialogClose>
       )}
     </div>
   );
 
   return (
-    <div className="rk-table-card rk-table-box" data-testid="table-card" inert={expanded}>
-      {tools("card")}
-      <div className="rk-table-scroll">{tableView}</div>
-      {pager}
-      {expanded
-        ? createPortal(
-            // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: Escape and the Close button cover keyboard dismissal; the backdrop click is a pointer convenience.
-            <div
-              className="rk-table-overlay"
-              onClick={(event) => {
-                if (event.target === event.currentTarget) setExpanded(false);
-              }}
-            >
-              <div
-                className="rk-table-dialog rk-table-box"
-                role="dialog"
-                aria-modal="true"
-                aria-label="Table"
-                ref={dialogRef}
-                tabIndex={-1}
-              >
-                {tools("dialog")}
-                <div className="rk-table-scroll rk-table-dialog-scroll">{tableView}</div>
-                {pager}
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
-    </div>
+    <Dialog open={expanded} onOpenChange={setExpanded}>
+      <div className="rk-table-card rk-table-box" data-testid="table-card">
+        {tools("card")}
+        <div className="rk-table-scroll">{tableView("card")}</div>
+        {pager}
+      </div>
+      <DialogContent
+        showCloseButton={false}
+        initialFocus={closeButtonRef}
+        finalFocus={expandButtonRef}
+        className="rk-table-dialog rk-table-box"
+      >
+        <DialogTitle className="rk-table-dialog-title">Table</DialogTitle>
+        {tools("dialog")}
+        <div className="rk-table-scroll rk-table-dialog-scroll">{tableView("dialog")}</div>
+        {pager}
+      </DialogContent>
+    </Dialog>
   );
 });
 
@@ -273,6 +233,8 @@ function TableView({
   rowOffset,
   numericColumns,
   minWidths,
+  renderedRows,
+  expanded,
   sort,
   onToggleSort,
 }: {
@@ -282,19 +244,21 @@ function TableView({
   rowOffset: number;
   numericColumns: Set<number>;
   minWidths: Record<number, string>;
+  renderedRows: Map<string[], ReactNode[] | undefined>;
+  expanded: boolean;
   sort: SortState;
   onToggleSort: (column: number) => void;
 }) {
   // Numeric columns right-align unless the author declared an alignment.
   const alignClass = (index: number) => {
-    const align = numericColumns.has(index) && aligns[index] === "left" ? "right" : aligns[index];
+    const align = aligns[index] ?? (numericColumns.has(index) ? "right" : "left");
     return align && align !== "left" ? `rk-align-${align}` : undefined;
   };
   return (
-    <table className="rk-table">
+    <table className="rk-table" aria-label="Markdown table">
       <thead>
         <tr>
-          <th className="rk-table-gutter" />
+          <th className="rk-table-gutter" scope="col" aria-label="Row" />
           {columns.map((column, i) => {
             const direction = sort?.column === i ? sort.direction : null;
             return (
@@ -304,6 +268,7 @@ function TableView({
                   direction ? (direction === "asc" ? "ascending" : "descending") : undefined
                 }
                 className={alignClass(i)}
+                scope="col"
               >
                 <button
                   type="button"
@@ -335,11 +300,14 @@ function TableView({
                 return (
                   <td
                     key={columnIndex}
-                    style={{ minWidth: minWidths[columnIndex] }}
+                    style={{ minWidth: expanded ? undefined : minWidths[columnIndex] }}
                     className={alignClass(columnIndex)}
                   >
-                    <span className="rk-table-cell-text" title={value || undefined}>
-                      {value}
+                    <span
+                      className="rk-table-cell-text"
+                      title={!expanded && value ? value : undefined}
+                    >
+                      {renderedRows.get(row)?.[columnIndex] ?? value}
                     </span>
                   </td>
                 );
@@ -350,6 +318,30 @@ function TableView({
       </tbody>
     </table>
   );
+}
+
+type ElementWithChildren = ReactElement<{ children?: ReactNode }>;
+
+function extractRenderedRows(children: ReactNode): ReactNode[][] | undefined {
+  const rows: ElementWithChildren[] = [];
+  const collect = (node: ReactNode) => {
+    for (const child of Children.toArray(node)) {
+      if (!isValidElement<{ children?: ReactNode }>(child)) continue;
+      if (child.type === "tr") rows.push(child);
+      else collect(child.props.children);
+    }
+  };
+  collect(children);
+
+  const bodyRows = rows.slice(1).map((row) =>
+    Children.toArray(row.props.children)
+      .filter(
+        (cell): cell is ElementWithChildren =>
+          isValidElement<{ children?: ReactNode }>(cell) && cell.type === "td",
+      )
+      .map((cell) => cell.props.children),
+  );
+  return bodyRows.length > 0 ? bodyRows : undefined;
 }
 
 function SortIndicator({ direction }: { direction: TableSortDirection | null }) {

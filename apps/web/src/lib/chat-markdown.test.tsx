@@ -68,6 +68,23 @@ describe("ChatMarkdown", () => {
     expect(html).toContain("rk-align-right");
   });
 
+  it("respects explicit left alignment for numeric columns", () => {
+    const html = renderToStaticMarkup(<ChatMarkdown>{"| Qty |\n| :--- |\n| 12 |"}</ChatMarkdown>);
+
+    expect(html).not.toContain("rk-align-right");
+  });
+
+  it("preserves sanitized inline markdown in table cells", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown>
+        {"| Reference |\n| --- |\n| [Docs](https://example.com) and **important** |"}
+      </ChatMarkdown>,
+    );
+
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain("<strong>important</strong>");
+  });
+
   it("keeps table cell content sanitized", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown>{"| A |\n| --- |\n| <script>alert(1)</script> |"}</ChatMarkdown>,

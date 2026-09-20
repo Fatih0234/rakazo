@@ -37,7 +37,7 @@ describe("extractTable", () => {
   it("reads columns and rows from a thead/tbody tree", () => {
     expect(extractTable(simpleTable())).toEqual({
       columns: ["Name", "Price"],
-      aligns: ["left", "left"],
+      aligns: [null, null],
       rows: [
         ["Alpha", "3"],
         ["Beta", "10"],
@@ -53,7 +53,7 @@ describe("extractTable", () => {
     ]);
     expect(extractTable(node)).toEqual({
       columns: ["A", "B"],
-      aligns: ["left", "left"],
+      aligns: [null, null],
       rows: [["1", "2"]],
     });
   });
@@ -80,10 +80,15 @@ describe("extractTable", () => {
 
   it("reads column alignment", () => {
     const node = table([
-      row(cell("th", "L"), cell("th", "R", "right"), cell("th", "C", "center")),
-      row(cell("td", "1"), cell("td", "2"), cell("td", "3")),
+      row(
+        cell("th", "Auto"),
+        cell("th", "L", "left"),
+        cell("th", "R", "right"),
+        cell("th", "C", "center"),
+      ),
+      row(cell("td", "0"), cell("td", "1"), cell("td", "2"), cell("td", "3")),
     ]);
-    expect(extractTable(node)?.aligns).toEqual(["left", "right", "center"]);
+    expect(extractTable(node)?.aligns).toEqual([null, "left", "right", "center"]);
   });
 
   it("keeps a space where a <br> was dropped and preserves image alt text", () => {
