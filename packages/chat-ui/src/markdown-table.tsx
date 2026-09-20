@@ -272,29 +272,16 @@ function TableView({
       <thead>
         <tr>
           <th className="rk-table-gutter" scope="col" aria-label="Row" />
-          {columns.map((column, i) => {
-            const direction = sort?.column === i ? sort.direction : null;
-            return (
-              <th
-                key={i}
-                aria-sort={
-                  direction ? (direction === "asc" ? "ascending" : "descending") : undefined
-                }
-                className={alignClass(i)}
-                scope="col"
-              >
-                <button
-                  type="button"
-                  className="rk-table-sort"
-                  onClick={() => onToggleSort(i)}
-                  aria-label={`Sort by ${column}`}
-                >
-                  <span className="rk-table-sort-label">{renderedHeaders?.[i] ?? column}</span>
-                  <SortIndicator direction={direction} />
-                </button>
-              </th>
-            );
-          })}
+          {columns.map((column, i) => (
+            <SortableColumnHeader
+              key={i}
+              column={column}
+              content={renderedHeaders?.[i] ?? column}
+              direction={sort?.column === i ? sort.direction : null}
+              className={alignClass(i)}
+              onToggleSort={() => onToggleSort(i)}
+            />
+          ))}
         </tr>
       </thead>
       <tbody>
@@ -330,6 +317,55 @@ function TableView({
         )}
       </tbody>
     </table>
+  );
+}
+
+function SortableColumnHeader({
+  column,
+  content,
+  direction,
+  className,
+  onToggleSort,
+}: {
+  column: string;
+  content: ReactNode;
+  direction: TableSortDirection | null;
+  className?: string;
+  onToggleSort: () => void;
+}) {
+  const rich = !isPlainText(content);
+  const sortButton = (
+    <button
+      type="button"
+      className={rich ? "rk-table-sort-trigger" : "rk-table-sort"}
+      onClick={onToggleSort}
+      aria-label={`Sort by ${column}`}
+    >
+      {rich ? null : <span className="rk-table-sort-label">{content}</span>}
+      <SortIndicator direction={direction} />
+    </button>
+  );
+  return (
+    <th
+      aria-sort={direction ? (direction === "asc" ? "ascending" : "descending") : undefined}
+      className={className}
+      scope="col"
+    >
+      {rich ? (
+        <div className="rk-table-sort">
+          <span className="rk-table-sort-label">{content}</span>
+          {sortButton}
+        </div>
+      ) : (
+        sortButton
+      )}
+    </th>
+  );
+}
+
+function isPlainText(node: ReactNode): boolean {
+  return Children.toArray(node).every(
+    (child) => typeof child === "string" || typeof child === "number",
   );
 }
 

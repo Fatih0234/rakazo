@@ -89,6 +89,10 @@ describe("ChatMarkdown", () => {
     expect(head).toContain('class="rk-table-sort-label"');
     expect(head).toContain('href="https://example.com/name"');
     expect(head).toContain("<strong>Qty</strong>");
+    const nameSort = head.slice(head.indexOf('aria-label="Sort by Name"'));
+    const nameSortButton = nameSort.slice(0, nameSort.indexOf("</button>"));
+    expect(nameSortButton).not.toContain("<a");
+    expect(nameSortButton).not.toContain("href=");
     expect(html).toContain('href="https://example.com"');
     expect(html).toContain("<strong>important</strong>");
   });

@@ -60,6 +60,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.6em;
+}
+
+button.rk-table-sort {
   border: 0;
   background: transparent;
   color: inherit;
@@ -67,6 +70,18 @@
   padding: 0;
   cursor: pointer;
   text-align: inherit;
+}
+
+.rk-table-sort-trigger {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
 }
 
 .rk-table-sort-label {
@@ -201,7 +216,9 @@
     height: 44px;
   }
 
-  .rk-table-sort {
+  button.rk-table-sort,
+  .rk-table-sort-trigger {
+    min-width: 44px;
     min-height: 44px;
   }
 

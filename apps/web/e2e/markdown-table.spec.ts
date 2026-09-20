@@ -98,6 +98,14 @@ test("rich table links participate in dialog keyboard navigation", async ({ page
     "https://example.test/ref",
   );
   await expect(card.locator("thead .rk-table-sort-label strong")).toHaveText("Note");
+  const referenceHeader = card.locator("thead th").nth(1);
+  await expect(referenceHeader).not.toHaveAttribute("aria-sort", /./);
+  const headerLink = card.locator("thead .rk-table-sort-label a");
+  await headerLink.evaluate((element) => {
+    element.addEventListener("click", (event) => event.preventDefault(), { capture: true });
+  });
+  await headerLink.click();
+  await expect(referenceHeader).not.toHaveAttribute("aria-sort", /./);
   const inlineLink = card.getByRole("link", { name: "Docs" });
   await expect(inlineLink).toHaveAttribute("href", "https://example.test/docs");
   await expect(inlineLink).toHaveAttribute("target", "_blank");
