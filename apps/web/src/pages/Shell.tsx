@@ -4432,14 +4432,14 @@ const Transcript = memo(function Transcript({
       return;
     }
     const range = selection.getRangeAt(0);
-    const rowOf = (node: Node) =>
+    const contentOf = (node: Node) =>
       (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>(
-        "[data-message-id]",
+        "[data-quote-message-id]",
       ) ?? null;
     const draft = quoteDraftForSelection(
       {
-        startRow: rowOf(range.startContainer),
-        endRow: rowOf(range.endContainer),
+        startContent: contentOf(range.startContainer),
+        endContent: contentOf(range.endContainer),
         text: selection.toString(),
       },
       messageById,
@@ -4602,9 +4602,6 @@ const Transcript = memo(function Transcript({
             <div
               key={message.id}
               data-message-id={message.id}
-              // Only persisted messages can be reply targets; synthetic rows
-              // (progress:, subagent:) carry a `prefix:` id.
-              data-quotable={message.id.includes(":") ? undefined : ""}
               className={peerReceipt ? "relative py-0.5" : "group/message relative hover:z-20"}
             >
               {!peerReceipt && !message.id.startsWith("progress:") ? (
@@ -5780,6 +5777,7 @@ const MessageView = memo(function MessageView({
       (block) => block.kind === "text" || block.kind === "progress" || block.kind === "steps",
     );
   const isLive = message.id.startsWith("progress:");
+  const quoteMessageId = message.id.includes(":") ? undefined : message.id;
   const visibleNarrationBlocks = message.blocks.filter((block) => !isToolActivityBlock(block));
   const parentJumpId = replyPreview?.id ?? replyToMessageId;
   const speakerBot = message.botId ? peerBot?.(message.botId) : undefined;
@@ -5835,7 +5833,10 @@ const MessageView = memo(function MessageView({
             {visibleNarrationBlocks.map((block, i) => {
               if (block.kind === "text" || block.kind === "progress") {
                 return (
-                  <div key={i}>
+                  <div
+                    key={i}
+                    data-quote-message-id={block.kind === "text" ? quoteMessageId : undefined}
+                  >
                     <ChatMarkdown streaming={block.kind === "progress"}>{block.text}</ChatMarkdown>
                   </div>
                 );
@@ -6076,6 +6077,7 @@ const MessageView = memo(function MessageView({
             <div key={i} className="flex w-fit max-w-full justify-end">
               <div
                 data-testid="message-user-bubble"
+                data-quote-message-id={quoteMessageId}
                 className="max-w-full whitespace-pre-wrap wrap-anywhere rounded-[20px] bg-chat-user px-[18px] py-3 text-[15.5px] leading-[1.45] text-chat-user-foreground"
                 dir="auto"
               >
@@ -6092,7 +6094,9 @@ const MessageView = memo(function MessageView({
                 className="max-w-full rounded-[20px] bg-muted px-[18px] py-3 text-[15.5px] leading-[1.5] text-foreground/90"
                 dir="auto"
               >
-                <ChatMarkdown>{block.text}</ChatMarkdown>
+                <div data-quote-message-id={quoteMessageId}>
+                  <ChatMarkdown>{block.text}</ChatMarkdown>
+                </div>
                 {voiceReady ? (
                   <button
                     type="button"
