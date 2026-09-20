@@ -74,13 +74,21 @@ describe("ChatMarkdown", () => {
     expect(html).not.toContain("rk-align-right");
   });
 
-  it("preserves sanitized inline markdown in table cells", () => {
+  it("preserves sanitized inline markdown in table headers and cells", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown>
-        {"| Reference |\n| --- |\n| [Docs](https://example.com) and **important** |"}
+        {
+          "| [Name](https://example.com/name) | **Qty** |\n| --- | --- |\n| [Docs](https://example.com) and **important** | 1 |"
+        }
       </ChatMarkdown>,
     );
 
+    expect(html).toContain('aria-label="Sort by Name"');
+    expect(html).toContain('aria-label="Sort by Qty"');
+    const head = html.slice(0, html.indexOf("<tbody"));
+    expect(head).toContain('class="rk-table-sort-label"');
+    expect(head).toContain('href="https://example.com/name"');
+    expect(head).toContain("<strong>Qty</strong>");
     expect(html).toContain('href="https://example.com"');
     expect(html).toContain("<strong>important</strong>");
   });

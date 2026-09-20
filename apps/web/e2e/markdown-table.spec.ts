@@ -28,6 +28,15 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
   await expect(card.getByRole("button", { name: "Download CSV" })).toBeVisible();
   await expect(card.getByRole("button", { name: "Expand table" })).toBeVisible();
 
+  const toolbar = card.locator(":scope > .rk-table-head");
+  const headers = card.locator("thead");
+  await expect(toolbar).toHaveCSS("position", "static");
+  const toolbarBox = await toolbar.boundingBox();
+  const headerBox = await headers.boundingBox();
+  expect(toolbarBox).not.toBeNull();
+  expect(headerBox).not.toBeNull();
+  expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(headerBox!.y + 1);
+
   // Numeric sort: desc puts qty 12 first; lexicographic would put 9 first.
   // thead th nth(0) is the row-number gutter, so Qty sits at index 2.
   const qtyHeader = card.locator("thead th").nth(2);
@@ -84,6 +93,11 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
 test("rich table links participate in dialog keyboard navigation", async ({ page }) => {
   await page.goto(`${fixture}?rich=1`);
   const card = page.getByTestId("table-card");
+  await expect(card.locator("thead .rk-table-sort-label a")).toHaveAttribute(
+    "href",
+    "https://example.test/ref",
+  );
+  await expect(card.locator("thead .rk-table-sort-label strong")).toHaveText("Note");
   const inlineLink = card.getByRole("link", { name: "Docs" });
   await expect(inlineLink).toHaveAttribute("href", "https://example.test/docs");
   await expect(inlineLink).toHaveAttribute("target", "_blank");

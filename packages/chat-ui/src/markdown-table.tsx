@@ -17,7 +17,8 @@ import {
 /**
  * Renders a GFM markdown table as an interactive data card. Extracted plain
  * text drives sorting and export while sanitized React children preserve
- * inline cell markup. Invalid tables fall back to the default <table>.
+ * inline markup in headers and cells. Invalid tables fall back to the default
+ * <table>.
  */
 export const MarkdownTable = memo(function MarkdownTable({
   node,
@@ -29,19 +30,28 @@ export const MarkdownTable = memo(function MarkdownTable({
   children?: ReactNode;
 }) {
   const extracted = useMemo(() => extractTable(node), [node]);
-  const renderedRows = useMemo(() => extractRenderedRows(children), [children]);
+  const rendered = useMemo(() => extractRenderedCells(children), [children]);
   if (!extracted) return <table {...tableProps}>{children}</table>;
   const stateKey = JSON.stringify([extracted.columns, extracted.aligns]);
-  return <TableCard key={stateKey} table={extracted} renderedRows={renderedRows} />;
+  return (
+    <TableCard
+      key={stateKey}
+      table={extracted}
+      renderedHeaders={rendered.headers}
+      renderedRows={rendered.rows}
+    />
+  );
 });
 
 type SortState = { column: number; direction: TableSortDirection } | null;
 
 export const TableCard = memo(function TableCard({
   table,
+  renderedHeaders,
   renderedRows,
 }: {
   table: ExtractedTable;
+  renderedHeaders?: ReactNode[];
   renderedRows?: ReactNode[][];
 }) {
   const { columns, aligns, rows } = table;
@@ -124,6 +134,7 @@ export const TableCard = memo(function TableCard({
       rowOffset={safePage * TABLE_PAGE_SIZE}
       numericColumns={numericColumns}
       minWidths={minWidths}
+      renderedHeaders={renderedHeaders}
       renderedRows={renderedRowsBySource}
       expanded={mode === "dialog"}
       sort={sort}
@@ -233,6 +244,7 @@ function TableView({
   rowOffset,
   numericColumns,
   minWidths,
+  renderedHeaders,
   renderedRows,
   expanded,
   sort,
@@ -244,6 +256,7 @@ function TableView({
   rowOffset: number;
   numericColumns: Set<number>;
   minWidths: Record<number, string>;
+  renderedHeaders?: ReactNode[];
   renderedRows: Map<string[], ReactNode[] | undefined>;
   expanded: boolean;
   sort: SortState;
@@ -276,7 +289,7 @@ function TableView({
                   onClick={() => onToggleSort(i)}
                   aria-label={`Sort by ${column}`}
                 >
-                  <span className="rk-table-sort-label">{column}</span>
+                  <span className="rk-table-sort-label">{renderedHeaders?.[i] ?? column}</span>
                   <SortIndicator direction={direction} />
                 </button>
               </th>
@@ -322,7 +335,10 @@ function TableView({
 
 type ElementWithChildren = ReactElement<{ children?: ReactNode }>;
 
-function extractRenderedRows(children: ReactNode): ReactNode[][] | undefined {
+function extractRenderedCells(children: ReactNode): {
+  headers?: ReactNode[];
+  rows?: ReactNode[][];
+} {
   const rows: ElementWithChildren[] = [];
   const collect = (node: ReactNode) => {
     for (const child of Children.toArray(node)) {
@@ -333,15 +349,27 @@ function extractRenderedRows(children: ReactNode): ReactNode[][] | undefined {
   };
   collect(children);
 
-  const bodyRows = rows.slice(1).map((row) =>
-    Children.toArray(row.props.children)
-      .filter(
-        (cell): cell is ElementWithChildren =>
-          isValidElement<{ children?: ReactNode }>(cell) && cell.type === "td",
-      )
-      .map((cell) => cell.props.children),
-  );
-  return bodyRows.length > 0 ? bodyRows : undefined;
+  const [headerRow, ...bodyRows] = rows;
+  const headerTh = headerRow ? cellChildren(headerRow, "th") : [];
+  const headerCells =
+    headerTh.length > 0 ? headerTh : headerRow ? cellChildren(headerRow, "td") : [];
+  const renderedBody = bodyRows.map((row) => {
+    const cells = cellChildren(row, "td");
+    return cells.length > 0 ? cells : cellChildren(row, "th");
+  });
+  return {
+    headers: headerCells.length > 0 ? headerCells : undefined,
+    rows: renderedBody.length > 0 ? renderedBody : undefined,
+  };
+}
+
+function cellChildren(row: ElementWithChildren, type: "th" | "td"): ReactNode[] {
+  return Children.toArray(row.props.children)
+    .filter(
+      (cell): cell is ElementWithChildren =>
+        isValidElement<{ children?: ReactNode }>(cell) && cell.type === type,
+    )
+    .map((cell) => cell.props.children);
 }
 
 function SortIndicator({ direction }: { direction: TableSortDirection | null }) {

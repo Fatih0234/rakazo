@@ -152,17 +152,18 @@
   overflow: hidden;
 }
 
-/* Inline card: floating toolbar, revealed on hover/focus like the code copy
-   button. The dialog's head is a sibling scope, so it stays always-visible. */
+/* Inline card: reserved static strip so tools never overlay sortable headers.
+   Tools fade in on hover/focus; the dialog head stays always-visible. */
 .rk-table-card > .rk-table-head {
-  position: absolute;
-  top: 0.35em;
-  right: 0.35em;
-  z-index: 2;
-  padding: 0.15em;
-  border: 1px solid var(--border);
-  border-radius: 0.5em;
-  background: var(--muted);
+  position: static;
+  padding: 0.3em 0.45em;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.rk-table-card > .rk-table-head .rk-table-tool {
   opacity: 0;
 }
 
@@ -189,20 +190,12 @@
   overflow-wrap: normal;
 }
 
-.rk-table-card:hover > .rk-table-head,
-.rk-table-card:focus-within > .rk-table-head {
+.rk-table-card:hover > .rk-table-head .rk-table-tool,
+.rk-table-card:focus-within > .rk-table-head .rk-table-tool {
   opacity: 1;
 }
 
 @media (hover: none), (pointer: coarse) {
-  .rk-table-card > .rk-table-head {
-    position: static;
-    border: 0;
-    border-bottom: 1px solid var(--border);
-    border-radius: 0;
-    opacity: 1;
-  }
-
   .rk-table-tool {
     width: 44px;
     height: 44px;
@@ -210,6 +203,10 @@
 
   .rk-table-sort {
     min-height: 44px;
+  }
+
+  .rk-table-card > .rk-table-head .rk-table-tool {
+    opacity: 1;
   }
 }
 

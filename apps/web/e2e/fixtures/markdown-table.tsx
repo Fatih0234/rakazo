@@ -20,7 +20,7 @@ const rows = Array.from(
 const longValue =
   "This deliberately long table value contains enough words to wrap completely inside the expanded dialog without clipping or ellipsis.";
 const initialMarkdown = rich
-  ? "| Reference | Note |\n| --- | --- |\n| [Docs](https://example.test/docs) | **important** |"
+  ? "| [Reference](https://example.test/ref) | **Note** |\n| --- | --- |\n| [Docs](https://example.test/docs) | **important** |"
   : richMany
     ? [
         "| Reference | Qty |",
