@@ -142,22 +142,10 @@ test("rendered markdown selections survive server quote derivation", async ({ pa
   const transcript = page.getByTestId("transcript");
   const composer = page.getByRole("combobox", { name: /Message/ });
   const sourceMarker = `md-${stamp}`;
-  const markdown = `${sourceMarker}
-1. list-a
-2. list-b
-
-| k | v |
-| --- | --- |
-| cell-a | cell-b |
-
-\`\`\`
-code-a
----
-code-b
-\`\`\``;
-  await composer.fill(markdown);
+  await composer.fill(`quote markdown fixture ${sourceMarker}`);
   await composer.press("Enter");
 
+  // Bot bubble: scripted fixture → ChatMarkdown + server markdown derivation.
   const sourceRow = transcript
     .locator("[data-message-id]")
     .filter({ has: page.getByTestId("message-bot-bubble") })

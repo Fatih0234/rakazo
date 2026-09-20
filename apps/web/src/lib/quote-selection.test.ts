@@ -36,6 +36,19 @@ describe("quoteDraftForSelection", () => {
     ).toBeNull();
   });
 
+  it("rejects selections spanning two regions that share a message id", () => {
+    expect(
+      quoteDraftForSelection(
+        {
+          startContent: content("message-1"),
+          endContent: content("message-1"),
+          text: "span",
+        },
+        messageById,
+      ),
+    ).toBeNull();
+  });
+
   it("rejects selections outside any message row", () => {
     expect(
       quoteDraftForSelection({ startContent: null, endContent: null, text: "span" }, messageById),
