@@ -103,12 +103,15 @@ describe("extractTable", () => {
       ),
       row(
         { tagName: "td", children: [text("x"), { type: "raw", value: "<br>" }, text("y")] },
-        { tagName: "td", children: [{ type: "raw", value: '<img src="u" alt="logo">' }] },
+        {
+          tagName: "td",
+          children: [{ type: "raw", value: '<img src="u" alt="logo &amp; mark">' }],
+        },
       ),
     ]);
     expect(extractTable(node)?.rows).toEqual([
       ["one two", "chart alt"],
-      ["x y", "logo"],
+      ["x y", "logo & mark"],
     ]);
   });
 
@@ -128,6 +131,7 @@ describe("parseNumericText", () => {
     expect(parseNumericText("$1,200")).toBe(1200);
     expect(parseNumericText("45%")).toBe(45);
     expect(parseNumericText("(12)")).toBe(-12);
+    expect(parseNumericText("(-12)")).toBe(-12);
   });
 
   it("rejects non-numeric text", () => {
@@ -199,14 +203,14 @@ describe("serialization", () => {
   });
 
   it("neutralizes spreadsheet formulas on CSV export", () => {
-    const csv = tableToCsv(columns, [
-      ["=1+1", "ok"],
-      ["+SUM(A1)", "x"],
-      ["@lookup", "y"],
-      ["-9", "z"],
-    ]);
-    const lines = csv.split("\n").slice(1);
-    for (const line of lines) expect(line.startsWith("'")).toBe(true);
+    const csv = tableToCsv(
+      ["=Name", "+Note"],
+      [
+        ["=1+1", "+SUM(A1)"],
+        ["@lookup", "-9"],
+      ],
+    );
+    for (const cell of csv.split(/[,\n]/)) expect(cell.startsWith("'")).toBe(true);
   });
 
   it("quotes CSV cells containing carriage returns", () => {
@@ -225,6 +229,7 @@ describe("serialization", () => {
     expect(tsv.split("\n")).toHaveLength(3);
     expect(tsv).toContain('a,b\tsay "hi"');
     expect(tsv).toContain("'=cmd\tline break");
+    expect(tableToTsv(["=A", "+B"], [["@x", "-9"]])).toBe("'=A\t'+B\n'@x\t'-9");
   });
 
   it("pads short rows to the column count", () => {

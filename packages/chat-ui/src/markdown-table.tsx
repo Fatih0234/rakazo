@@ -32,14 +32,8 @@ export const MarkdownTable = memo(function MarkdownTable({
   const extracted = useMemo(() => extractTable(node), [node]);
   const rendered = useMemo(() => extractRenderedCells(children), [children]);
   if (!extracted) return <table {...tableProps}>{children}</table>;
-  const stateKey = JSON.stringify([extracted.columns, extracted.aligns]);
   return (
-    <TableCard
-      key={stateKey}
-      table={extracted}
-      renderedHeaders={rendered.headers}
-      renderedRows={rendered.rows}
-    />
+    <TableCard table={extracted} renderedHeaders={rendered.headers} renderedRows={rendered.rows} />
   );
 });
 
@@ -55,6 +49,7 @@ export const TableCard = memo(function TableCard({
   renderedRows?: ReactNode[][];
 }) {
   const { columns, aligns, rows } = table;
+  const schemaKey = JSON.stringify([columns, aligns]);
   const [sort, setSort] = useState<SortState>(null);
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState(false);
@@ -75,6 +70,17 @@ export const TableCard = memo(function TableCard({
   }, [columns, rows]);
 
   const minWidths = useMemo(() => columnMinWidths(columns, rows), [columns, rows]);
+  const rowKeys = useMemo(() => {
+    const occurrences = new Map<string, number>();
+    return new Map(
+      rows.map((row) => {
+        const signature = JSON.stringify(row);
+        const occurrence = occurrences.get(signature) ?? 0;
+        occurrences.set(signature, occurrence + 1);
+        return [row, `${signature}:${occurrence}`] as const;
+      }),
+    );
+  }, [rows]);
   const renderedRowsBySource = useMemo(
     () => new Map(rows.map((row, index) => [row, renderedRows?.[index]])),
     [renderedRows, rows],
@@ -94,6 +100,11 @@ export const TableCard = memo(function TableCard({
   // Data and sort changes only clamp the page; an explicit sort click resets
   // to page 0 in the handler so the two coalesce into one commit.
   useEffect(() => setPage((p) => Math.min(p, pageCount - 1)), [pageCount]);
+  useEffect(() => {
+    setSort(null);
+    setPage(0);
+    setExpanded(false);
+  }, [schemaKey]);
   useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
 
   const toggleSort = (column: number) => {
@@ -136,6 +147,7 @@ export const TableCard = memo(function TableCard({
       minWidths={minWidths}
       renderedHeaders={renderedHeaders}
       renderedRows={renderedRowsBySource}
+      rowKeys={rowKeys}
       expanded={mode === "dialog"}
       sort={sort}
       onToggleSort={toggleSort}
@@ -226,7 +238,7 @@ export const TableCard = memo(function TableCard({
         showCloseButton={false}
         initialFocus={closeButtonRef}
         finalFocus={expandButtonRef}
-        className="rk-table-dialog rk-table-box"
+        className="rk-table-dialog rk-table-box rk-chat-markdown"
       >
         <DialogTitle className="rk-table-dialog-title">Table</DialogTitle>
         {tools("dialog")}
@@ -246,6 +258,7 @@ function TableView({
   minWidths,
   renderedHeaders,
   renderedRows,
+  rowKeys,
   expanded,
   sort,
   onToggleSort,
@@ -258,6 +271,7 @@ function TableView({
   minWidths: Record<number, string>;
   renderedHeaders?: ReactNode[];
   renderedRows: Map<string[], ReactNode[] | undefined>;
+  rowKeys: Map<string[], string>;
   expanded: boolean;
   sort: SortState;
   onToggleSort: (column: number) => void;
@@ -293,7 +307,7 @@ function TableView({
           </tr>
         ) : (
           rows.map((row, rowIndex) => (
-            <tr key={rowIndex}>
+            <tr key={rowKeys.get(row)}>
               <td className="rk-table-gutter">{rowOffset + rowIndex + 1}</td>
               {columns.map((_, columnIndex) => {
                 const value = row[columnIndex] ?? "";

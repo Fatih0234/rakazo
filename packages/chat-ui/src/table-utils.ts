@@ -66,14 +66,9 @@ function cellsOf(row: HastNode, tag: "th" | "td"): HastNode[] {
 function textOf(node: HastNode | undefined): string {
   if (!node) return "";
   if (node.type === "text") return node.value ?? "";
-  // skipHtml drops raw HTML before render, but the nodes are still in the
-  // hast tree — a dropped <br> would fuse adjacent words ("one<br>two" →
-  // "onetwo") and a dropped <img> would lose even its alt text.
+  // Preserve text equivalents when this helper receives raw table HTML.
   if (node.type === "raw") {
-    const html = node.value ?? "";
-    if (/^<br[\s/>]/i.test(html)) return " ";
-    const alt = html.match(/<img[^>]*\balt\s*=\s*("([^"]*)"|'([^']*)')/i);
-    return alt?.[2] ?? alt?.[3] ?? "";
+    return droppedTableHtmlText(node.value ?? "") ?? "";
   }
   if (node.tagName === "br") return " ";
   if (node.tagName === "img") {
@@ -81,6 +76,36 @@ function textOf(node: HastNode | undefined): string {
     return typeof alt === "string" ? alt : "";
   }
   return childrenOf(node).map(textOf).join("");
+}
+
+export function droppedTableHtmlText(html: string): string | null {
+  if (/^<br[\s/>]/i.test(html)) return " ";
+  const alt = html.match(/<img[^>]*\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i);
+  return alt ? decodeHtmlEntities(alt[1] ?? alt[2] ?? alt[3] ?? "") : null;
+}
+
+function decodeHtmlEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: "\u00a0",
+    quot: '"',
+  };
+  return value.replace(
+    /&(#(?:x[\da-f]+|\d+)|amp|apos|gt|lt|nbsp|quot);/gi,
+    (entity, code: string) => {
+      if (!code.startsWith("#")) return named[code.toLowerCase()] ?? entity;
+      const point = Number.parseInt(
+        code.slice(code[1]?.toLowerCase() === "x" ? 2 : 1),
+        code[1]?.toLowerCase() === "x" ? 16 : 10,
+      );
+      return Number.isInteger(point) && point > 0 && point <= 0x10ffff
+        ? String.fromCodePoint(point)
+        : entity;
+    },
+  );
 }
 
 function alignOf(cell: HastNode): TableAlign {
@@ -99,7 +124,7 @@ export function parseNumericText(value: string): number | null {
   const cleaned = trimmed.replace(/^\((.*)\)$/, "$1").replace(/[$€£%\s]/g, "");
   if (!/^-?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$/.test(cleaned)) return null;
   const n = Number(cleaned.replace(/,/g, ""));
-  return Number.isFinite(n) ? (negative ? -n : n) : null;
+  return Number.isFinite(n) ? (negative ? -Math.abs(n) : n) : null;
 }
 
 /** True when every non-empty cell in the column parses as a number. */

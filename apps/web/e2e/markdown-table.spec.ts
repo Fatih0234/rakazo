@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { captureScreenshot, completeOnboarding, signup } from "./helpers";
 
@@ -59,18 +60,28 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
   await card.getByRole("button", { name: "Previous page" }).click();
   await expect(card.locator("tbody tr")).toHaveCount(10);
 
-  // Copy as TSV.
+  // Copy and download the complete sorted data, not only the visible page.
+  await card.getByRole("button", { name: "Sort by Qty" }).click();
+  await card.getByRole("button", { name: "Sort by Qty" }).click();
+  const sorted = Array.from({ length: 12 }, (_, i) => ({
+    item: `item-${String(i + 1).padStart(2, "0")}`,
+    qty: (i * 7) % 13,
+  })).sort((a, b) => b.qty - a.qty);
+  const expectedTsv = ["Item\tQty", ...sorted.map(({ item, qty }) => `${item}\t${qty}`)].join("\n");
   await card.getByRole("button", { name: "Copy rows" }).click();
   await expect
     .poll(async () => page.evaluate(() => navigator.clipboard.readText()))
-    .toContain("Item\tQty\nitem-01");
+    .toBe(expectedTsv);
 
-  // CSV download.
   const [download] = await Promise.all([
     page.waitForEvent("download"),
     card.getByRole("button", { name: "Download CSV" }).click(),
   ]);
   expect(download.suggestedFilename()).toBe("table.csv");
+  const downloadPath = await download.path();
+  expect(downloadPath).not.toBeNull();
+  const expectedCsv = ["Item,Qty", ...sorted.map(({ item, qty }) => `${item},${qty}`)].join("\n");
+  expect(await readFile(downloadPath!, "utf8")).toBe(`\uFEFF${expectedCsv}`);
 
   // Fullscreen dialog re-renders the table; Escape closes it.
   await card.getByRole("button", { name: "Expand table" }).click();
@@ -106,6 +117,8 @@ test("rich table links participate in dialog keyboard navigation", async ({ page
   });
   await headerLink.click();
   await expect(referenceHeader).not.toHaveAttribute("aria-sort", /./);
+  await card.getByRole("button", { name: "Sort by Reference" }).click();
+  await expect(referenceHeader).toHaveAttribute("aria-sort", "ascending");
   const inlineLink = card.getByRole("link", { name: "Docs" });
   await expect(inlineLink).toHaveAttribute("href", "https://example.test/docs");
   await expect(inlineLink).toHaveAttribute("target", "_blank");
@@ -114,6 +127,7 @@ test("rich table links participate in dialog keyboard navigation", async ({ page
   await card.getByRole("button", { name: "Expand table" }).click();
   const dialog = page.getByRole("dialog", { name: "Table" });
   const dialogLink = dialog.getByRole("link", { name: "Docs" });
+  await expect(dialog.locator("code")).toHaveCSS("border-top-style", "solid");
   await dialogLink.focus();
   await page.keyboard.press("Tab");
   await expect(dialog.getByRole("button", { name: "Copy rows" })).toBeFocused();
@@ -122,9 +136,26 @@ test("rich table links participate in dialog keyboard navigation", async ({ page
 });
 
 test("rich table cells stay associated through sorting and pagination", async ({ page }) => {
-  await page.goto(`${fixture}?rich-many=1`);
+  await page.goto(`${fixture}?rich-many=1&stream=1`);
   const card = page.getByTestId("table-card");
   await card.getByRole("button", { name: "Sort by Qty" }).click();
+  const focusedLink = card.getByRole("link", { name: "Docs 02" });
+  await focusedLink.focus();
+  await page.evaluate(
+    (markdown) => {
+      window.dispatchEvent(new CustomEvent("rk-table-stream-update", { detail: { markdown } }));
+    },
+    [
+      "| Reference | Qty |",
+      "| --- | --- |",
+      ...Array.from(
+        { length: 12 },
+        (_, i) =>
+          `| [Docs ${String(i + 1).padStart(2, "0")}](https://example.test/docs/${i + 1}) | ${i === 3 ? 6 : (i * 7) % 13} |`,
+      ),
+    ].join("\n"),
+  );
+  await expect(focusedLink).toBeFocused();
   await card.getByRole("button", { name: "Sort by Qty" }).click();
   await expect(
     card.locator("tbody tr").first().getByRole("link", { name: "Docs 12" }),
@@ -246,6 +277,7 @@ test("streaming rows preserve state while schema changes reset it", async ({ pag
   );
 
   await expect(dialog).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Expand table" })).toBeFocused();
   await expect(card.getByRole("columnheader", { name: /Score/ })).not.toHaveAttribute(
     "aria-sort",
     /./,
@@ -260,6 +292,22 @@ test("small tables skip pagination", async ({ page }) => {
   await expect(card.locator("tbody tr")).toHaveCount(3);
   await expect(card.getByText("3 rows")).toBeVisible();
   await expect(card.getByRole("button", { name: "Next page" })).toHaveCount(0);
+});
+
+test("table chrome follows right-to-left direction", async ({ page }) => {
+  await page.goto(fixture);
+  await page.locator("html").evaluate((element) => element.setAttribute("dir", "rtl"));
+  const card = page.getByTestId("table-card");
+  const gutter = card.locator("tbody .rk-table-gutter").first();
+  await expect(gutter).toHaveCSS("border-left-width", "1px");
+  await expect(gutter).toHaveCSS("border-right-width", "0px");
+
+  const qtyHeader = card.locator("thead th").nth(2);
+  const labelBox = await qtyHeader.locator(".rk-table-sort-label").boundingBox();
+  const iconBox = await qtyHeader.locator(".rk-table-sort-icon").boundingBox();
+  expect(labelBox).not.toBeNull();
+  expect(iconBox).not.toBeNull();
+  expect(labelBox!.x).toBeGreaterThan(iconBox!.x);
 });
 
 test.describe("touch table controls", () => {

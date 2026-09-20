@@ -129,13 +129,13 @@ button.rk-table-sort {
   text-align: center;
 }
 
-.rk-table .rk-table-gutter {
+.rk-table-box .rk-table .rk-table-gutter {
   width: 2.2em;
   min-width: 2.2em;
   text-align: center;
   color: var(--muted-foreground);
   background: var(--muted);
-  border-right: 1px solid var(--border);
+  border-inline-end: 1px solid var(--border);
   font-size: 0.85em;
   padding-left: 0.3em;
   padding-right: 0.3em;
@@ -143,6 +143,10 @@ button.rk-table-sort {
 
 .rk-align-right .rk-table-sort {
   flex-direction: row-reverse;
+}
+
+[dir="rtl"] .rk-align-right .rk-table-sort {
+  flex-direction: row;
 }
 
 .rk-table-sort-icon .rk-sort-off {
@@ -155,7 +159,7 @@ button.rk-table-sort {
 }
 
 .rk-table-footer .rk-table-range {
-  margin-right: auto;
+  margin-inline-end: auto;
 }
 
 .rk-chat-markdown .rk-table-card {

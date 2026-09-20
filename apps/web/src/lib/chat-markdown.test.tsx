@@ -99,10 +99,25 @@ describe("ChatMarkdown", () => {
 
   it("keeps table cell content sanitized", () => {
     const html = renderToStaticMarkup(
-      <ChatMarkdown>{"| A |\n| --- |\n| <script>alert(1)</script> |"}</ChatMarkdown>,
+      <ChatMarkdown>
+        {"| A | B |\n| --- | --- |\n| <script>alert(1)</script> | [bad](javascript:alert(1)) |"}
+      </ChatMarkdown>,
     );
 
     expect(html).not.toContain("<script");
+    expect(html).not.toContain("javascript:");
     expect(html).toContain('data-testid="table-card"');
+  });
+
+  it("preserves spacing and image descriptions when table HTML is skipped", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown>
+        {'| A | B |\n| --- | --- |\n| one<br>two | <img src="chart.png" alt="chart &amp; graph"> |'}
+      </ChatMarkdown>,
+    );
+
+    expect(html).toContain("one two");
+    expect(html).toContain("chart &amp; graph");
+    expect(html).not.toContain("&amp;amp;");
   });
 });
