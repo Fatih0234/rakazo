@@ -966,14 +966,23 @@ model Artifact {
   userId     String
   runId      String?
   name       String
+  description String?
   mimeType   String
   size       Int
   hash       String
   storageKey String
   createdAt  DateTime   @default(now())
 
+  // Null on the first version; that row's id is the family's stable id.
+  rootArtifactId String?
+  rootArtifact   Artifact?  @relation("ArtifactVersions", fields: [rootArtifactId], references: [id], onDelete: Cascade)
+  versions       Artifact[] @relation("ArtifactVersions")
+  version        Int        @default(1)
+
   @@index([spaceId, botId])
   @@index([groupId])
+  @@index([rootArtifactId])
+  // artifacts_family_version_key is raw SQL: Prisma cannot express COALESCE indexes.
   @@map("artifacts")
 }
 
