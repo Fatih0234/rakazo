@@ -9,6 +9,7 @@ import { combineSignals } from "./connector-safety.js";
 import {
   createAddressCheckedLookup,
   isCloudMetadataAddress,
+  isLinkLocalAddress,
   isPrivateAddress,
   isTailscaleAddress,
   type ResolvedAddress,
@@ -194,6 +195,74 @@ export function createSafeRemoteFetch(
     return response;
   };
   const result = safeFetch as SafeRemoteFetch;
+  result.close = () => dispatcher.close();
+  return result;
+}
+
+function assertPrivateAddresses(addresses: ResolvedAddress[]): void {
+  if (addresses.length === 0) {
+    throw new Error("Private fetch URL did not resolve to any address");
+  }
+  if (
+    addresses.some((entry) => {
+      // Normalise IPv4-mapped IPv6 forms (e.g. ::ffff:169.254.170.2) so the
+      // link-local and metadata checks cannot be bypassed by their mapped
+      // representation. Cloud metadata endpoints stay blocked.
+      const address = entry.address.replace(/^::ffff:/i, "");
+      if (isCloudMetadataAddress(address)) return true;
+      if (isLinkLocalAddress(address)) return true;
+      return !isPrivateAddress(address);
+    })
+  ) {
+    throw new Error("Private fetch URL resolved to a non-private address");
+  }
+}
+
+/** Same transport as `createSafeRemoteFetch`, inverted: the caller holds owner
+ * authorization to reach its own network, so every resolved address must be
+ * private (cloud metadata endpoints stay blocked) instead of public. */
+export function createPrivateNetworkFetch(
+  baseFetch?: typeof globalThis.fetch,
+  resolve: ResolveHostname = resolveHostname,
+): SafeRemoteFetch {
+  const dispatcher = new Agent({
+    connect: { lookup: createAddressCheckedLookup(resolve, assertPrivateAddresses) },
+  });
+  const usePackageFetch =
+    baseFetch == null || baseFetch === nodeFetch || baseFetch === packageFetch;
+  const privateFetch = async (input: string | URL | Request, init?: RequestInit) => {
+    if (typeof input !== "string" && !(input instanceof URL)) {
+      throw new Error("Connector fetch requires a URL, not a Request");
+    }
+    const url = new URL(String(input));
+    if (url.username || url.password || url.hash) {
+      throw new Error("Private fetch URL must not contain credentials or a fragment");
+    }
+    const addresses = await resolve(url.hostname.replace(/^\[|\]$/g, ""));
+    assertPrivateAddresses(addresses);
+    let response: Response;
+    try {
+      const requestInit = { ...init, redirect: "manual" as const };
+      response = usePackageFetch
+        ? await packageFetch(url, {
+            ...requestInit,
+            dispatcher,
+          } as RequestInit & { dispatcher: Agent })
+        : await withPinnedDnsLookup(url.hostname, addresses, () =>
+            baseFetch!(url, requestInitWithHost(url, requestInit)),
+          );
+    } catch (error) {
+      const detail = transportFailureDetail(error);
+      throw new Error(`Could not reach ${url.host}${detail ? `: ${detail}` : ""}`, {
+        cause: error,
+      });
+    }
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error("Private fetch redirects are not allowed");
+    }
+    return response;
+  };
+  const result = privateFetch as SafeRemoteFetch;
   result.close = () => dispatcher.close();
   return result;
 }

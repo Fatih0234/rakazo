@@ -34,7 +34,7 @@ import {
   BOT_NAME_MAX_LENGTH,
   BOT_TITLE_MAX_LENGTH,
   BotSecretName,
-  BotSecretSubmission,
+  botSecretSubmissionSchema,
   isAttachmentImageMimeType,
   OPENAI_COMPATIBLE_PROVIDER_ID,
 } from "@rakazo/contracts";
@@ -151,6 +151,7 @@ import { createAutoReviewProvider } from "./auto-review-factory.js";
 import { attachedImageArtifactIds, resolveUpdateBotAvatar } from "./bot-avatar.js";
 import { loadBotMessageContext, messageBot, returnBotMessageOutcome } from "./bot-messages.js";
 import {
+  allowPrivateHttpSecretOrigins,
   findBotSecret,
   forgetBotSecret,
   listBotSecrets,
@@ -3020,7 +3021,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
                   error: "Remove the existing credential before changing its destination.",
                 });
               }
-              const submitted = BotSecretSubmission.safeParse(applied?.effect.result).data;
+              const submitted = botSecretSubmissionSchema({
+                allowPrivateHttpOrigin: allowPrivateHttpSecretOrigins(),
+              }).safeParse(applied?.effect.result).data;
               if (
                 submitted &&
                 sameSecretDestination(

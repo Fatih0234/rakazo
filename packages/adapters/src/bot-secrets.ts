@@ -1,8 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { BotSecretDestination, SecretHttpRequest } from "@rakazo/contracts";
+import type { BotSecretDestination } from "@rakazo/contracts";
+import {
+  botSecretDestinationSchema,
+  isPrivateNetworkHost,
+  SecretHttpRequest,
+} from "@rakazo/contracts";
 import type { Prisma, PrismaClient } from "@rakazo/db";
 import { combineSignals, redactConnectorPayload } from "./connector-safety.js";
-import { createSafeRemoteFetch, type RemoteTransportDependencies } from "./remote-mcp.js";
+import type { RemoteTransportDependencies } from "./remote-mcp.js";
+import { createPrivateNetworkFetch, createSafeRemoteFetch } from "./remote-mcp.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 import { readBodyCapped, withAbort } from "./web-ssrf.js";
 
@@ -30,8 +36,15 @@ function credentialHeader(destination: BotSecretDestination, plaintext: string) 
   return { name, value };
 }
 
+/** Owner escape enabling plain-HTTP origins on private LAN hosts (see #907). */
+export function allowPrivateHttpSecretOrigins(): boolean {
+  return process.env.RAKAZO_SECRETS_ALLOW_PRIVATE_HTTP === "1";
+}
+
 export function normalizeSecretDestination(value: unknown): BotSecretDestination {
-  const destination = BotSecretDestination.parse(value);
+  const destination = botSecretDestinationSchema({
+    allowPrivateHttpOrigin: allowPrivateHttpSecretOrigins(),
+  }).parse(value);
   return { ...destination, origin: new URL(destination.origin).origin };
 }
 
@@ -149,11 +162,29 @@ export async function requestWithBotSecret(input: {
   input.registerRedactions?.(redactions);
   const controller = new AbortController();
   const signal = combineSignals(input.signal, controller.signal, AbortSignal.timeout(30_000));
-  const fetch = createSafeRemoteFetch(input.remote?.fetch, input.remote?.resolveHostname);
+  // The safe fetch refuses plain-HTTP and private hosts outright. A credential
+  // saved under the owner's private-HTTP opt-in was validated against exactly
+  // those rules at save time, and the request URL is pinned to its origin, so
+  // deliver it through the inverted transport instead — it re-checks that every
+  // resolved address is private (metadata endpoints stay blocked) and pins the
+  // connection to the validated answer.
+  const privateHttpDestination =
+    allowPrivateHttpSecretOrigins() &&
+    url.protocol === "http:" &&
+    isPrivateNetworkHost(url.hostname);
+  const fetch = privateHttpDestination
+    ? createPrivateNetworkFetch(input.remote?.fetch, input.remote?.resolveHostname)
+    : createSafeRemoteFetch(input.remote?.fetch, input.remote?.resolveHostname);
   try {
     headers.set(headerName, headerValue);
     const response = await withAbort(
-      fetch(url, { method: request.method, headers, body: request.body, signal }),
+      fetch(url, {
+        method: request.method,
+        headers,
+        body: request.body,
+        redirect: "manual",
+        signal,
+      }),
       signal,
     );
     const bytes = await readBodyCapped(response, 1_000_000, signal);

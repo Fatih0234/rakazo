@@ -759,7 +759,11 @@ export function prepareRequestSecretArguments(raw: Record<string, unknown>) {
   const label = raw.label == null ? "" : String(raw.label);
   const purpose = raw.purpose == null ? "" : String(raw.purpose);
   if (!label.trim() || !purpose.trim()) {
-    throw new Error("request_secret requires a non-empty label and purpose");
+    throw new Error(
+      `request_secret requires a non-empty label and purpose (received: ${
+        Object.keys(raw).sort().join(", ") || "no arguments"
+      })`,
+    );
   }
   return {
     label,

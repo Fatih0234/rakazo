@@ -1,11 +1,63 @@
 import type { ConnectorTool } from "@rakazo/adapter-kit";
 import {
-  BotSecretDestination,
   BotSecretName,
+  botSecretDestinationSchema,
   SecretAskPurpose,
   SecretHttpRequest,
 } from "@rakazo/contracts";
 import { z } from "zod";
+import { allowPrivateHttpSecretOrigins } from "./bot-secrets.js";
+
+// The owner flag can land in process.env after static imports run (loadRootEnv
+// parses .env once the entry module is already executing), so the model-facing
+// surface is built lazily on first tool access instead of at module scope.
+let secretAskSurface:
+  | {
+      description: string;
+      inputSchema: ConnectorTool["inputSchema"];
+    }
+  | undefined;
+function secretAskToolSurface() {
+  const allowPrivateHttpOrigins = allowPrivateHttpSecretOrigins();
+  secretAskSurface ??= {
+    description: `Collect a credential in a masked field. Supply credential to save a named API credential for this bot and user at one ${
+      allowPrivateHttpOrigins
+        ? "HTTPS origin, or an HTTP origin on a private LAN host"
+        : "HTTPS origin"
+    }, or connectionId for a one-use connector code. Existing named credentials are reused unless replace is true. For website logins, CAPTCHA, passkeys, or anything that needs the live desktop, call request_takeover instead.`,
+    inputSchema: {
+      oneOf: [
+        {
+          type: "object",
+          properties: {
+            label: { type: "string" },
+            purpose: { type: "string", enum: SecretAskPurpose.options },
+            credential: z.toJSONSchema(
+              botSecretDestinationSchema({ allowPrivateHttpOrigin: allowPrivateHttpOrigins }),
+            ),
+            replace: {
+              type: "boolean",
+              description: "Ask the user to replace an existing credential value.",
+            },
+          },
+          required: ["label", "purpose", "credential"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            label: { type: "string" },
+            purpose: { type: "string", enum: SecretAskPurpose.options },
+            connectionId: { type: "string" },
+          },
+          required: ["label", "purpose", "connectionId"],
+          additionalProperties: false,
+        },
+      ],
+    },
+  };
+  return secretAskSurface;
+}
 
 export const DELEGATION_TOOL_NAMES = new Set([
   "run_subagent",
@@ -232,37 +284,13 @@ export const builtinAgentTools: ConnectorTool[] = [
   },
   {
     name: "request_secret",
-    description:
-      "Collect a credential in a masked field. Supply credential to save a named API credential for this bot and user at one HTTPS origin, or connectionId for a one-use connector code. Existing named credentials are reused unless replace is true. For website logins, CAPTCHA, passkeys, or anything that needs the live desktop, call request_takeover instead.",
+    get description() {
+      return secretAskToolSurface().description;
+    },
     // Exactly one destination: credential XOR connectionId. Sibling optionals
     // looked schema-valid to models but the executor rejects both and neither.
-    inputSchema: {
-      oneOf: [
-        {
-          type: "object",
-          properties: {
-            label: { type: "string" },
-            purpose: { type: "string", enum: SecretAskPurpose.options },
-            credential: z.toJSONSchema(BotSecretDestination),
-            replace: {
-              type: "boolean",
-              description: "Ask the user to replace an existing credential value.",
-            },
-          },
-          required: ["label", "purpose", "credential"],
-          additionalProperties: false,
-        },
-        {
-          type: "object",
-          properties: {
-            label: { type: "string" },
-            purpose: { type: "string", enum: SecretAskPurpose.options },
-            connectionId: { type: "string" },
-          },
-          required: ["label", "purpose", "connectionId"],
-          additionalProperties: false,
-        },
-      ],
+    get inputSchema() {
+      return secretAskToolSurface().inputSchema;
     },
   },
   {

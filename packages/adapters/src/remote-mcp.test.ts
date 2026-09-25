@@ -1,8 +1,9 @@
 import dns from "node:dns";
 import { fetch as undiciFetch } from "undici";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertSafeRemoteUrl,
+  createPrivateNetworkFetch,
   createSafeLookup,
   createSafeRemoteFetch,
   limitRemoteMcpPayload,
@@ -367,5 +368,51 @@ describe("remote MCP result limits", () => {
     expect(limited.truncated).toBe(true);
     expect(Buffer.byteLength(limited.content, "utf8")).toBeLessThanOrEqual(1_000_000);
     expect(limited.content).not.toContain("\uFFFD");
+  });
+});
+
+describe("createPrivateNetworkFetch", () => {
+  const lanResolver = async () => [{ address: "192.168.2.10", family: 4 as const }];
+  const mockFetch = () =>
+    vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => Response.json({ ok: true }));
+
+  it("delivers to a private HTTP destination", async () => {
+    const baseFetch = mockFetch();
+    const fetch = createPrivateNetworkFetch(baseFetch, lanResolver);
+    const response = await fetch("http://192.168.2.10:8080/v1/items", { method: "GET" });
+    expect(response.status).toBe(200);
+    expect(baseFetch).toHaveBeenCalledOnce();
+    expect(String(baseFetch.mock.calls[0]?.[0])).toBe("http://192.168.2.10:8080/v1/items");
+  });
+
+  it("rejects an opted-in host that resolves to a mapped link-local address", async () => {
+    const baseFetch = mockFetch();
+    const fetch = createPrivateNetworkFetch(baseFetch, async () => [
+      { address: "::ffff:169.254.170.2", family: 6 as const },
+    ]);
+    await expect(fetch("http://nas.local:8080/v1/items", { method: "GET" })).rejects.toThrow(
+      "non-private address",
+    );
+    expect(baseFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an opted-in host that resolves to a public address", async () => {
+    const baseFetch = mockFetch();
+    const fetch = createPrivateNetworkFetch(baseFetch, publicResolver);
+    await expect(fetch("http://nas.local:8080/v1/items", { method: "GET" })).rejects.toThrow(
+      "non-private address",
+    );
+    expect(baseFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects redirect responses instead of returning them", async () => {
+    const baseFetch = vi.fn(
+      async () =>
+        new Response(null, { status: 302, headers: { location: "http://10.9.9.9/exfil" } }),
+    );
+    const fetch = createPrivateNetworkFetch(baseFetch, lanResolver);
+    await expect(fetch("http://192.168.2.10:8080/v1/items", { method: "GET" })).rejects.toThrow(
+      "redirects are not allowed",
+    );
   });
 });
