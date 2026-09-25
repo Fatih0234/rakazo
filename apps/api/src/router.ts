@@ -106,6 +106,7 @@ import {
   CannotDeleteDefaultSpaceError,
   CannotDeleteLastSpaceError,
   CannotDeleteSpaceAsNonOwnerError,
+  ComputerLimitError,
   claimEmptySpaceDeletionForMember,
   createExternalConversationRepos,
   createGroupRepos,
@@ -129,6 +130,7 @@ import {
   parseComputerMode,
   releaseSpaceDeletionClaim,
   renewSpaceDeletionClaim,
+  restoreBotUnderComputerQuota,
   SPACE_DELETION_CLAIM_TIMEOUT_MS,
   SpaceDeletionInProgressError,
   SpaceLimitError,
@@ -500,6 +502,9 @@ function spaceTeardownTimeoutMs(): number {
 function mapSpaceLifecycleError(error: unknown): unknown {
   if (error instanceof SpaceDeletionInProgressError) {
     return new ORPCError("CONFLICT", { message: error.message });
+  }
+  if (error instanceof ComputerLimitError) {
+    return new ORPCError("BAD_REQUEST", { message: error.message });
   }
   return error;
 }
@@ -1185,7 +1190,11 @@ export function createRouter(deps: RouterDeps) {
         if (!bot.computer) throw new IsolationError();
         const currentMode = bot.computer.scope === "dedicated" ? "dedicated" : "team";
         if (currentMode === input.mode) {
-          return repos.setBotComputer(context.actor, bot.id, input.mode);
+          try {
+            return await repos.setBotComputer(context.actor, bot.id, input.mode);
+          } catch (error) {
+            throw mapSpaceLifecycleError(error);
+          }
         }
         const claimed = await deps.prisma.$transaction(async (tx) => {
           await tx.$queryRaw`SELECT id FROM computers WHERE id = ${bot.computerId} FOR UPDATE`;
@@ -1232,6 +1241,8 @@ export function createRouter(deps: RouterDeps) {
             });
           }
           return await repos.setBotComputer(context.actor, bot.id, input.mode);
+        } catch (error) {
+          throw mapSpaceLifecycleError(error);
         } finally {
           await deps.prisma.bot.updateMany({
             where: { id: bot.id },
@@ -1258,7 +1269,19 @@ export function createRouter(deps: RouterDeps) {
       restore: authed.bots.restore.handler(async ({ context, input }) => {
         const bot = await repos.getBot(context.actor, input.botId, { includeArchived: true });
         if (!bot.archivedAt) return { ok: true as const };
-        await deps.prisma.bot.update({ where: { id: bot.id }, data: { archivedAt: null } });
+        try {
+          if (bot.computer) {
+            await restoreBotUnderComputerQuota(deps.prisma, {
+              userId: context.actor.userId,
+              botId: bot.id,
+              computerId: bot.computer.id,
+            });
+          } else {
+            await deps.prisma.bot.update({ where: { id: bot.id }, data: { archivedAt: null } });
+          }
+        } catch (error) {
+          throw mapSpaceLifecycleError(error);
+        }
         return { ok: true as const };
       }),
       remove: authed.bots.remove.handler(async ({ context, input }) => {
