@@ -1,12 +1,12 @@
 import { RPCHandler } from "@orpc/server/fetch";
 import { COMPUTER_SCREEN_UNAVAILABLE, ComputerScreenUnavailableError } from "@rakazo/adapters";
-import type { Actor } from "@rakazo/contracts";
+import type { Actor, Bot } from "@rakazo/contracts";
 import { REPLY_QUOTE_MAX_LENGTH } from "@rakazo/contracts";
 import { openScreenCapability } from "@rakazo/core/node/screen-capability";
 import type { PrismaClient } from "@rakazo/db";
 import { createLogger, createTestSink, installLogger } from "@rakazo/logging";
 import { describe, expect, it, vi } from "vitest";
-import { createRouter, type RouterDeps } from "./router.js";
+import { createRouter, enqueueBotIntroRun, type RouterDeps } from "./router.js";
 
 describe("account preferences", () => {
   function preferencesDeps(avatarStyle: string) {
@@ -1085,5 +1085,96 @@ describe("model credential persistence", () => {
         update: expect.objectContaining({ modelId: null }),
       }),
     );
+  });
+});
+
+describe("bot intro run", () => {
+  const actor = {
+    spaceId: "space-1",
+    userId: "user-1",
+    email: "user@rakazo.test",
+    isDeploymentOwner: true,
+  } satisfies Actor;
+  const bot = { id: "bot-1", threadId: "thread-1" } as unknown as Bot;
+
+  function introDeps(options: { agentRuntime?: string; hasCredential?: boolean } = {}) {
+    let calls = 0;
+    const create = vi.fn(({ data }: { data: object }) => {
+      calls += 1;
+      return Promise.resolve({ id: `record-${calls}`, ...data });
+    });
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+    const tx = { task: { create }, run: { create } };
+    const preference =
+      (options.hasCredential ?? true)
+        ? { isDefault: true, modelId: "model-1", credential: { id: "cred-1", provider: "test" } }
+        : null;
+    const spaceModelPreference = { findFirst: vi.fn().mockResolvedValue(preference) };
+    const deps = {
+      prisma: {
+        $transaction: vi.fn(async (fn: (client: typeof tx) => unknown) => fn(tx)),
+        spaceModelPreference,
+        deploymentSettings: { findUnique: vi.fn().mockResolvedValue(null) },
+      },
+      jobs: { enqueue },
+      env: { agentRuntime: options.agentRuntime ?? "pi" },
+    } as unknown as RouterDeps;
+    return { create, enqueue, deps };
+  }
+
+  it("queues an invisible-prompt run so the bot states how it read its role", async () => {
+    const { create, enqueue, deps } = introDeps();
+
+    await enqueueBotIntroRun(deps, actor, bot);
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          spaceId: "space-1",
+          botId: "bot-1",
+          threadId: "thread-1",
+          userId: "user-1",
+          status: "queued",
+        }),
+      }),
+    );
+    const [taskCall, runCall] = create.mock.calls as Array<
+      [{ data: { prompt?: string; trigger?: string; taskId?: string } }]
+    >;
+    expect(taskCall?.[0].data.prompt).toMatch(/understood your role/i);
+    expect(runCall?.[0].data.trigger).toBe("created");
+    // The Run must reference the Task this same call created, not a stale or
+    // mismatched id, and the enqueued job must target that Run.
+    expect(runCall?.[0].data.taskId).toBe("record-1");
+    expect(enqueue).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ payload: { runId: "record-2" } }),
+    );
+  });
+
+  it("does nothing when the bot has no thread", async () => {
+    const { create, enqueue, deps } = introDeps();
+
+    await enqueueBotIntroRun(deps, actor, { id: "bot-1", threadId: null } as unknown as Bot);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on the scripted test/eval runtime", async () => {
+    const { create, enqueue, deps } = introDeps({ agentRuntime: "scripted" });
+
+    await enqueueBotIntroRun(deps, actor, bot);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when no model is configured yet", async () => {
+    const { create, enqueue, deps } = introDeps({ hasCredential: false });
+
+    await enqueueBotIntroRun(deps, actor, bot);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
   });
 });

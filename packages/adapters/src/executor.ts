@@ -1594,7 +1594,10 @@ export function createRunExecutor(deps: ExecutorDeps) {
             .then((row) => row?.enabled ?? deploymentAutoReviewDefault());
           return autoReviewPreferencePromise;
         };
-        const tools = [...builtins, ...exposedConnectorTools];
+        // The intro turn confirms how a bot read its own role before anyone hands it
+        // real work — it must not be able to act on that reading (shell, computer,
+        // scheduling, spawning another bot, ...) before the user has assigned any task.
+        const tools = run.trigger === "created" ? [] : [...builtins, ...exposedConnectorTools];
         const approvedEffects = await deps.prisma.externalEffect.findMany({
           where: { runId, status: "approved" },
           orderBy: APPROVED_EFFECT_REPLAY_ORDER,
@@ -3634,6 +3637,24 @@ export function createRunExecutor(deps: ExecutorDeps) {
           }
         }
 
+        // Stop during setup must not still open the model. A reclaimed lease can
+        // leave status "running" under a new owner, and the stream loop only
+        // notices cancellation after the provider request has started.
+        const beforeModel = await deps.prisma.run.findUnique({
+          where: { id: runId },
+          select: { status: true, leaseOwner: true, leaseFence: true },
+        });
+        if (
+          !mayOpenModelStream(
+            beforeModel,
+            workerId,
+            fence,
+            !leaseValid || Boolean(runAbortController?.signal.aborted),
+          )
+        ) {
+          return;
+        }
+
         try {
           const runtimeEvents = deps.runtime.run(
             {
@@ -3643,7 +3664,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               sourceMessageId: run.sourceMessageId,
               prompt,
               instructions: [
-                bot.instructions || `${bot.name}: ${bot.title}\n${bot.description}`,
+                runIdentityInstruction(bot, run.trigger),
                 formatCurrentTimeInstruction(),
                 groupContext,
                 messagingContext,
@@ -4214,7 +4235,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
             ).catch((error) => getLogger().error("bot message result return", error));
           }
           const notifyBody = completionNotificationPreview(text);
-          if (notifyBody && !completed.continuationRunId) {
+          if (
+            runSendsFinishNotification(run.trigger) &&
+            notifyBody &&
+            !completed.continuationRunId
+          ) {
             await notifyRun(deps, run, {
               kind: "completion",
               title: `${bot.name} finished`,
@@ -4282,7 +4307,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               "status",
             ).catch((returnError) => getLogger().error("bot message failure return", returnError));
           }
-          if (!failed.continuationRunId) {
+          if (runSendsFinishNotification(run.trigger) && !failed.continuationRunId) {
             await notifyRun(deps, run, {
               kind: "failure",
               title: `${bot.name} failed`,
@@ -4551,16 +4576,52 @@ export function threadContextForRun<T>(
   },
   messagingChannelRun: boolean,
 ) {
-  return trigger === "routine"
-    ? {
-        messages: [] as T[],
-        summary: null,
-        historyCompactedUpToSeq: null,
-        includeSemanticRecall: false,
-      }
-    : messagingChannelRun
-      ? { ...context, summary: null, historyCompactedUpToSeq: null, includeSemanticRecall: false }
-      : { ...context, includeSemanticRecall: true };
+  // Routine runs stay isolated from thread history. The creation intro does
+  // too: a user message that arrives during it belongs to its own run.
+  if (trigger === "created" || trigger === "routine") {
+    return {
+      messages: [] as T[],
+      summary: null,
+      historyCompactedUpToSeq: null,
+      includeSemanticRecall: false,
+    };
+  }
+  return messagingChannelRun
+    ? { ...context, summary: null, historyCompactedUpToSeq: null, includeSemanticRecall: false }
+    : { ...context, includeSemanticRecall: true };
+}
+
+/** Profile fields the creation intro is asked to explain. Other runs keep the prior identity line. */
+export function runIdentityInstruction(
+  bot: { name: string; title: string; description: string; instructions: string },
+  trigger: string,
+): string {
+  if (trigger !== "created") {
+    return bot.instructions || `${bot.name}: ${bot.title}\n${bot.description}`;
+  }
+  const instructions = bot.instructions.trim();
+  return [
+    `Name: ${bot.name.trim() || "(none)"}`,
+    `Title: ${bot.title.trim() || "(none)"}`,
+    `Description: ${bot.description.trim() || "(none)"}`,
+    instructions ? `Instructions:\n${instructions}` : "Instructions: (none)",
+  ].join("\n");
+}
+
+export function runSendsFinishNotification(trigger: string): boolean {
+  return trigger !== "created";
+}
+
+/** Open the model only while this worker still owns the running lease. */
+export function mayOpenModelStream(
+  run: { status: string; leaseOwner: string | null; leaseFence: number | null } | null,
+  workerId: string,
+  fence: number,
+  aborted: boolean,
+): boolean {
+  return (
+    run?.status === "running" && run.leaseOwner === workerId && run.leaseFence === fence && !aborted
+  );
 }
 
 export { isExactNoResponse, NO_RESPONSE, stripNoResponseReply };

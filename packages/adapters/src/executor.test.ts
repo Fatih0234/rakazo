@@ -660,6 +660,25 @@ describe("createRunExecutor", () => {
     expect(tools).toContain("web_fetch");
   });
 
+  it("keeps a creation intro from answering a user message that arrived during it", () => {
+    expect(
+      threadContextForRun(
+        "created",
+        {
+          messages: [{ role: "user", content: "Check the inbox" }],
+          summary: "Earlier note",
+          historyCompactedUpToSeq: 4,
+        },
+        false,
+      ),
+    ).toEqual({
+      messages: [],
+      summary: null,
+      historyCompactedUpToSeq: null,
+      includeSemanticRecall: false,
+    });
+  });
+
   it("isolates routine runs from every thread-history source", () => {
     const threadContext = {
       messages: [{ role: "user", content: "Create this routine" }],

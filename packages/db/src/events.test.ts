@@ -1814,6 +1814,59 @@ describe("sendUserMessage", () => {
       data: { messageId: "message-1", botId: "bot-1", userId: "user-1", runId: "run-0" },
     });
   });
+
+  it("starts a tool-enabled run when the only active run is the creation intro", async () => {
+    const tx = {
+      thread: {
+        update: vi
+          .fn()
+          .mockResolvedValueOnce({ nextMessageSeq: 5 })
+          .mockResolvedValueOnce({ nextEventSeq: 9 }),
+      },
+      message: {
+        create: vi.fn().mockResolvedValue({ id: "message-1", seq: 4 }),
+        update: vi.fn(),
+      },
+      steeringMessage: { create: vi.fn() },
+      task: { create: vi.fn().mockResolvedValue({ id: "task-user" }) },
+      run: {
+        findFirst: vi.fn(async (args: { where?: { trigger?: { not?: string } } }) =>
+          args.where?.trigger?.not === "created" ? null : { id: "intro-run", taskId: "intro-task" },
+        ),
+        findUnique: vi.fn().mockResolvedValue({ status: "queued", startedAt: null }),
+        create: vi.fn().mockResolvedValue({ id: "run-user" }),
+      },
+      event: {
+        create: vi.fn(async ({ data }: { data: { seq: number; type: string } }) => ({
+          ...event(data.seq),
+          type: data.type,
+        })),
+      },
+    };
+    const prisma = {
+      message: { findUnique: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await expect(
+      sendUserMessage(prisma, {
+        spaceId: "workspace-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        userId: "user-1",
+        blocks: [{ kind: "text", text: "Check the inbox" }],
+        prompt: "Check the inbox",
+        trigger: "user",
+      }),
+    ).resolves.toEqual({ messageId: "message-1", seq: 4, taskId: "task-user", runId: "run-user" });
+
+    expect(tx.steeringMessage.create).not.toHaveBeenCalled();
+    expect(tx.run.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ trigger: "user", sourceMessageId: "message-1" }),
+      }),
+    );
+  });
 });
 
 describe("claimSteering", () => {
@@ -1892,6 +1945,33 @@ describe("claimSteering", () => {
       where: { id: { in: ["steer-1", "steer-2"] }, claimedAt: null },
       data: { runId: "run-1", claimedAt: expect.any(Date) },
     });
+  });
+
+  it("does not claim steering into a tool-free creation intro", async () => {
+    const tx = {
+      $queryRaw: vi.fn(),
+      run: { findFirst: vi.fn().mockResolvedValue({ id: "intro-run", trigger: "created" }) },
+      steeringMessage: {
+        findMany: vi.fn(),
+        updateMany: vi.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await expect(
+      claimSteering(prisma, {
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "intro-run",
+        leaseOwner: "worker-1",
+        leaseFence: 2,
+        seenIds: [],
+      }),
+    ).resolves.toEqual([]);
+    expect(tx.steeringMessage.findMany).not.toHaveBeenCalled();
+    expect(tx.steeringMessage.updateMany).not.toHaveBeenCalled();
   });
 });
 

@@ -377,6 +377,7 @@ export async function sendUserMessage(
         clientNonce: input.clientNonce,
       });
       const createRun = input.createRun !== false;
+      // A creation intro must not absorb the message: that run has no tools.
       const busy =
         createRun && !input.allowParallelRun
           ? await tx.run.findFirst({
@@ -386,6 +387,7 @@ export async function sendUserMessage(
                 status: {
                   in: ["running", "queued", "leased", "waiting_input", "waiting_takeover"],
                 },
+                trigger: { not: "created" },
               },
               select: { id: true, taskId: true },
             })
@@ -475,7 +477,7 @@ export async function claimSteering(
       },
       select: { id: true, trigger: true, sourceMessage: { select: { blocks: true } } },
     });
-    if (!run) return [];
+    if (!run || run.trigger === "created") return [];
     const channelId =
       run.trigger === "messaging"
         ? messagingChannelId(run.sourceMessage?.blocks as MessageBlock[] | undefined)

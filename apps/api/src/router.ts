@@ -82,7 +82,7 @@ import {
   verifyMcpInstall,
 } from "@rakazo/adapters";
 import type { Auth } from "@rakazo/auth";
-import type { Actor, ComputerStatus, McpServer, Me, SpaceNavigation } from "@rakazo/contracts";
+import type { Actor, Bot, ComputerStatus, McpServer, Me, SpaceNavigation } from "@rakazo/contracts";
 import {
   appContract,
   IntegrationProviderIdSchema,
@@ -483,6 +483,51 @@ function mapSpaceLifecycleError(error: unknown): unknown {
     return new ORPCError("CONFLICT", { message: error.message });
   }
   return error;
+}
+
+const BOT_INTRO_PROMPT =
+  "You were just created. In one reply, say what you understood your role to be from your title, description and instructions, and ask for anything you need to get started.";
+
+/**
+ * A freshly created bot otherwise sits silent until someone hands it real work,
+ * so a misunderstood role goes unnoticed until it costs a run. Queue one
+ * invisible-prompt turn (like a routine or skill test run) so its first
+ * message states how it read its own instructions. The executor gives the
+ * "created" trigger no tools (see executor.ts), so this turn can only speak.
+ */
+export async function enqueueBotIntroRun(deps: RouterDeps, actor: Actor, bot: Bot): Promise<void> {
+  const threadId = bot.threadId;
+  if (!threadId) return;
+  // Scripted is the deterministic test/eval runtime, not a real deployment: an
+  // extra automatic run there competes with whatever response a test or eval
+  // harness queued next, for a bot it doesn't otherwise get to opt out of.
+  if (deps.env.agentRuntime === "scripted") return;
+  if ((await modelSetup(deps, actor)).needsModel) return;
+  const run = await deps.prisma.$transaction(async (tx) => {
+    const task = await tx.task.create({
+      data: {
+        spaceId: actor.spaceId,
+        botId: bot.id,
+        threadId,
+        userId: actor.userId,
+        prompt: BOT_INTRO_PROMPT,
+        status: "queued",
+      },
+    });
+    return tx.run.create({
+      data: {
+        spaceId: actor.spaceId,
+        botId: bot.id,
+        threadId,
+        taskId: task.id,
+        userId: actor.userId,
+        status: "queued",
+        trigger: "created",
+      },
+      select: { id: true },
+    });
+  });
+  await deps.jobs.enqueue(runContinueJob(run.id));
 }
 
 export function createRouter(deps: RouterDeps) {
@@ -952,11 +997,16 @@ export function createRouter(deps: RouterDeps) {
         return found;
       }),
       create: authed.bots.create.handler(async ({ context, input }) => {
+        let bot: Bot;
         try {
-          return await repos.createBot(context.actor, input);
+          bot = await repos.createBot(context.actor, input);
         } catch (error) {
           throw mapSpaceLifecycleError(error);
         }
+        await enqueueBotIntroRun(deps, context.actor, bot).catch((error) => {
+          getLogger().error("bot intro run enqueue", error);
+        });
+        return bot;
       }),
       duplicate: authed.bots.duplicate.handler(async ({ context, input }) => {
         const source = await repos.getBot(context.actor, input.botId);
