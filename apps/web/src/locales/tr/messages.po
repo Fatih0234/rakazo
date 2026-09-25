@@ -374,7 +374,7 @@ msgstr "Bir kez izin ver"
 msgid "Allow purchase actions without asking"
 msgstr "Satın alma işlemlerine sormadan izin ver"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:76
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:92
 msgid "Allow writing"
 msgstr ""
 
@@ -587,7 +587,7 @@ msgstr "Oturum açmaya geri dön"
 msgid "Base URL"
 msgstr "Temel URL"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:48
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:64
 #: src/pages/PluginsOverlay.tsx:1041
 msgid "Bearer token"
 msgstr "Bearer token"
@@ -642,7 +642,7 @@ msgstr "Botlar varsayılan olarak sormadan hareket eder. Yalnızca belirli bir i
 msgid "Bots are working"
 msgstr "Botlar çalışıyor"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:63
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:79
 msgid "Brain label"
 msgstr ""
 
@@ -953,7 +953,7 @@ msgstr "Parolayı doğrulayın"
 #: src/components/integrations/IntegrationSetup.tsx:267
 #: src/components/integrations/IntegrationSetup.tsx:291
 #: src/components/integrations/IntegrationSetup.tsx:324
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:107
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:123
 #: src/pages/memory-providers/SupermemorySettingsForm.tsx:82
 #: src/pages/VoiceSettingsOverlay.tsx:269
 msgid "Connect"
@@ -1021,7 +1021,7 @@ msgstr "Bağlandı. Araçları bir sonraki mesajından itibaren kullanılabilir.
 #: src/components/integrations/IntegrationSetup.tsx:222
 #: src/components/integrations/IntegrationSetup.tsx:361
 #: src/pages/McpServersOverlay.tsx:38
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:107
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:123
 #: src/pages/memory-providers/SupermemorySettingsForm.tsx:82
 #: src/pages/shell/message-cards.tsx:398
 #: src/pages/VoiceSettingsOverlay.tsx:265
@@ -2923,11 +2923,11 @@ msgstr "salt okunur"
 msgid "Reasoning effort"
 msgstr "Akıl yürütme düzeyi"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:94
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:110
 msgid "Recall and write"
 msgstr ""
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:85
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:101
 msgid "Recall only"
 msgstr ""
 
@@ -3365,6 +3365,10 @@ msgstr "Gönderiliyor…"
 
 #: src/pages/RoutineEditor.tsx:58
 msgid "Sentry alert"
+msgstr ""
+
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:52
+msgid "Serenity endpoint is required."
 msgstr ""
 
 #: src/components/integrations/IntegrationSetup.tsx:132

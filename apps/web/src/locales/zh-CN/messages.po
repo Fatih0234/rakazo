@@ -374,7 +374,7 @@ msgstr "允许一次"
 msgid "Allow purchase actions without asking"
 msgstr "允许购买操作，无需询问"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:76
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:92
 msgid "Allow writing"
 msgstr ""
 
@@ -587,7 +587,7 @@ msgstr "返回登录"
 msgid "Base URL"
 msgstr "Base URL"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:48
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:64
 #: src/pages/PluginsOverlay.tsx:1041
 msgid "Bearer token"
 msgstr "Bearer token"
@@ -642,7 +642,7 @@ msgstr "默认情况下 Bot 会直接执行。只有当你想先审核某类操�
 msgid "Bots are working"
 msgstr "Bot 正在工作"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:63
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:79
 msgid "Brain label"
 msgstr ""
 
@@ -953,7 +953,7 @@ msgstr "确认密码"
 #: src/components/integrations/IntegrationSetup.tsx:267
 #: src/components/integrations/IntegrationSetup.tsx:291
 #: src/components/integrations/IntegrationSetup.tsx:324
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:107
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:123
 #: src/pages/memory-providers/SupermemorySettingsForm.tsx:82
 #: src/pages/VoiceSettingsOverlay.tsx:269
 msgid "Connect"
@@ -1021,7 +1021,7 @@ msgstr "已连接，下一条消息起即可使用其工具。"
 #: src/components/integrations/IntegrationSetup.tsx:222
 #: src/components/integrations/IntegrationSetup.tsx:361
 #: src/pages/McpServersOverlay.tsx:38
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:107
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:123
 #: src/pages/memory-providers/SupermemorySettingsForm.tsx:82
 #: src/pages/shell/message-cards.tsx:398
 #: src/pages/VoiceSettingsOverlay.tsx:265
@@ -2923,11 +2923,11 @@ msgstr "只读"
 msgid "Reasoning effort"
 msgstr "推理强度"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:94
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:110
 msgid "Recall and write"
 msgstr ""
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:85
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:101
 msgid "Recall only"
 msgstr ""
 
@@ -3366,6 +3366,10 @@ msgstr "正在发送…"
 #: src/pages/RoutineEditor.tsx:58
 msgid "Sentry alert"
 msgstr "Sentry 告警"
+
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:52
+msgid "Serenity endpoint is required."
+msgstr ""
 
 #: src/components/integrations/IntegrationSetup.tsx:132
 #: src/pages/AccountSettingsOverlay.tsx:170

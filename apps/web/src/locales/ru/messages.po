@@ -374,7 +374,7 @@ msgstr "Разрешить один раз"
 msgid "Allow purchase actions without asking"
 msgstr "Разрешить действия по покупке без запроса"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:76
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:92
 msgid "Allow writing"
 msgstr ""
 
@@ -587,7 +587,7 @@ msgstr "Вернуться ко входу"
 msgid "Base URL"
 msgstr "Базовый URL"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:48
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:64
 #: src/pages/PluginsOverlay.tsx:1041
 msgid "Bearer token"
 msgstr "Bearer-токен"
@@ -642,7 +642,7 @@ msgstr "По умолчанию боты действуют, не спрашив
 msgid "Bots are working"
 msgstr "Боты работают"
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:63
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:79
 msgid "Brain label"
 msgstr ""
 
@@ -953,7 +953,7 @@ msgstr "Подтвердите пароль"
 #: src/components/integrations/IntegrationSetup.tsx:267
 #: src/components/integrations/IntegrationSetup.tsx:291
 #: src/components/integrations/IntegrationSetup.tsx:324
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:107
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:123
 #: src/pages/memory-providers/SupermemorySettingsForm.tsx:82
 #: src/pages/VoiceSettingsOverlay.tsx:269
 msgid "Connect"
@@ -1021,7 +1021,7 @@ msgstr "Подключено. Его инструменты доступны и�
 #: src/components/integrations/IntegrationSetup.tsx:222
 #: src/components/integrations/IntegrationSetup.tsx:361
 #: src/pages/McpServersOverlay.tsx:38
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:107
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:123
 #: src/pages/memory-providers/SupermemorySettingsForm.tsx:82
 #: src/pages/shell/message-cards.tsx:398
 #: src/pages/VoiceSettingsOverlay.tsx:265
@@ -2923,11 +2923,11 @@ msgstr "только для чтения"
 msgid "Reasoning effort"
 msgstr ""
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:94
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:110
 msgid "Recall and write"
 msgstr ""
 
-#: src/pages/memory-providers/SerenitySettingsForm.tsx:85
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:101
 msgid "Recall only"
 msgstr ""
 
@@ -3366,6 +3366,10 @@ msgstr "Отправка…"
 #: src/pages/RoutineEditor.tsx:58
 msgid "Sentry alert"
 msgstr "Оповещение Sentry"
+
+#: src/pages/memory-providers/SerenitySettingsForm.tsx:52
+msgid "Serenity endpoint is required."
+msgstr ""
 
 #: src/components/integrations/IntegrationSetup.tsx:132
 #: src/pages/AccountSettingsOverlay.tsx:170
