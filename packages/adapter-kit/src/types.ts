@@ -741,7 +741,13 @@ export type BrowserActKind = "click" | "fill" | "type";
 
 export type BrowserActStep =
   | { kind: "click"; ref: string }
-  | { kind: "fill" | "type"; ref: string; text: string };
+  | {
+      kind: "fill" | "type";
+      ref: string;
+      text: string;
+      /** Refuse the step unless the page is on this origin when it is applied. */
+      origin?: string;
+    };
 
 export interface BrowserActRequest {
   actions: BrowserActStep[];

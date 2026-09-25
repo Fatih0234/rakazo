@@ -1707,6 +1707,7 @@ export function createRouter(deps: RouterDeps) {
           messageId: input.messageId,
           answeredByUserId: context.actor.userId,
           answer: input.answer,
+          username: input.username,
         });
         if (!answered) {
           throw new ORPCError("CONFLICT", {

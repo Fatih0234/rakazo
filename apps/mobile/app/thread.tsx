@@ -59,6 +59,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   type TextProps,
@@ -1266,7 +1267,7 @@ function Thread() {
   }
 
   const answerMessage = useCallback(
-    async (message: MobileMessage, answer: string) => {
+    async (message: MobileMessage, answer: string, username?: string) => {
       const targetBotId = botId;
       const targetGroupId = groupId;
       if ((!targetBotId && !targetGroupId) || !message.runId) return;
@@ -1275,6 +1276,7 @@ function Thread() {
         runId: message.runId,
         messageId: message.id,
         answer,
+        ...(username ? { username } : {}),
       });
       if (isCurrentTarget(targetBotId, targetGroupId)) await refresh();
     },
@@ -2358,7 +2360,7 @@ const MessageBubble = memo(function MessageBubble({
   members?: MobileSnapshot["members"];
   replyPreview?: MobileMessage;
   canAnswer: boolean;
-  onAnswer: (message: MobileMessage, answer: string) => Promise<void>;
+  onAnswer: (message: MobileMessage, answer: string, username?: string) => Promise<void>;
   onOpenBot: (botId: string, name: string) => void;
   onPreviewMarkdown: (target: MarkdownArtifactPreviewTarget) => void;
   actionProps: MessageActionProps;
@@ -2384,7 +2386,7 @@ const MessageBubble = memo(function MessageBubble({
           ask={ask}
           actionProps={actionProps}
           canAnswer={canAnswer}
-          onAnswer={(answer) => onAnswer(message, answer)}
+          onAnswer={(answer, username) => onAnswer(message, answer, username)}
         />
         {appConnectBlocks.map((block, index) => (
           <AppConnectCard
@@ -3049,18 +3051,22 @@ function AskBlock({
 }: {
   ask: Extract<MobileMessage["blocks"][number], { kind: "ask" }>;
   canAnswer: boolean;
-  onAnswer: (answer: string) => Promise<void>;
+  onAnswer: (answer: string, username?: string) => Promise<void>;
   actionProps: MessageActionProps;
 }) {
   const tokens = useMobileTokens();
   const { t } = useI18n();
   const [answer, setAnswer] = useState("");
+  const [username, setUsername] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const answered = ask.status === "answered";
   const secretInput = isSecretAskBlock(ask);
+  const loginInput = secretInput && ask.credential?.auth.type === "login";
+  const incomplete =
+    (secretInput ? answer.length === 0 : !answer.trim()) || (loginInput && !username.trim());
   const secretLabel =
-    ask.purpose === "password"
+    loginInput || ask.purpose === "password"
       ? t("Password")
       : ask.purpose === "api_key"
         ? t("API key")
@@ -3070,13 +3076,14 @@ function AskBlock({
 
   async function submit() {
     if (submitting) return;
-    if (secretInput ? answer.length === 0 : !answer.trim()) return;
+    if (incomplete) return;
     const submitValue = secretInput ? answer : answer.trim();
+    const submitUsername = loginInput ? username.trim() : undefined;
     setSubmitting(true);
     setError(null);
     if (secretInput) setAnswer("");
     try {
-      await onAnswer(submitValue);
+      await onAnswer(submitValue, submitUsername);
     } catch (cause) {
       setError(!secretInput && cause instanceof Error ? cause.message : t("Could not send answer"));
     } finally {
@@ -3117,6 +3124,23 @@ function AskBlock({
         </Text>
       ) : canAnswer ? (
         <>
+          {loginInput ? (
+            <TextInput
+              accessibilityLabel={t("Username")}
+              value={username}
+              onChangeText={setUsername}
+              placeholder={t("Username")}
+              placeholderTextColor={tokens.mutedForeground}
+              autoComplete="off"
+              autoCorrect={false}
+              autoCapitalize="none"
+              editable={!submitting}
+              style={[
+                askInputStyles.field,
+                { borderColor: tokens.border, color: tokens.foreground },
+              ]}
+            />
+          ) : null}
           <TextInput
             accessibilityLabel={secretInput ? secretLabel : t("Answer")}
             value={answer}
@@ -3129,26 +3153,18 @@ function AskBlock({
             autoCapitalize={secretInput ? "none" : "sentences"}
             editable={!submitting}
             onSubmitEditing={() => void submit()}
-            style={{
-              minHeight: 42,
-              borderRadius: 12,
-              borderWidth: 1,
-              borderColor: tokens.border,
-              color: tokens.foreground,
-              paddingHorizontal: 12,
-              paddingVertical: 9,
-            }}
+            style={[askInputStyles.field, { borderColor: tokens.border, color: tokens.foreground }]}
           />
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={submitLabel}
-            disabled={(secretInput ? answer.length === 0 : !answer.trim()) || submitting}
+            disabled={incomplete || submitting}
             onPress={() => void submit()}
             style={{
               alignSelf: "flex-end",
               borderRadius: 999,
               backgroundColor: tokens.foreground,
-              opacity: (secretInput ? answer.length === 0 : !answer.trim()) || submitting ? 0.5 : 1,
+              opacity: incomplete || submitting ? 0.5 : 1,
               paddingHorizontal: 16,
               paddingVertical: 9,
             }}
@@ -3167,3 +3183,13 @@ function AskBlock({
     </View>
   );
 }
+
+const askInputStyles = StyleSheet.create({
+  field: {
+    minHeight: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+});

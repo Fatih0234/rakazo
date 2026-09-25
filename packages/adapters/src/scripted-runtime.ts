@@ -197,6 +197,27 @@ export function inferScript(
       },
     ];
   }
+  if (lower.includes("show a login card")) {
+    return [
+      {
+        assistant: "i need that sign-in in a protected card.",
+        toolCalls: [
+          {
+            name: "request_secret",
+            args: {
+              label: "Example sign-in",
+              purpose: "password",
+              credential: {
+                name: "example_login",
+                origin: "https://login.example.test",
+                auth: { type: "login" },
+              },
+            },
+          },
+        ],
+      },
+    ];
+  }
   if (
     lower.includes("masked secret card") ||
     lower.includes("show a secret card") ||

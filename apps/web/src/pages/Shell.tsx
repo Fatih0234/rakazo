@@ -1890,22 +1890,26 @@ export function ShellPage() {
     const botId = activeBotId.current;
     if (botId) void jumpToMessageRef.current({ botId, messageId });
   }, []);
-  const answerMessage = useCallback(async (message: ThreadMessage, text: string) => {
-    const botId = activeBotId.current;
-    const groupId = activeGroupId.current;
-    if (!botId && !groupId) return;
-    await rpc.threads.answer({
-      ...(groupId ? { groupId } : { botId: botId! }),
-      runId: message.runId ?? "",
-      messageId: message.id,
-      answer: text,
-    });
-    if (groupId && activeGroupId.current === groupId) {
-      await refreshGroupThreadRef.current(groupId);
-    } else if (botId && activeBotId.current === botId) {
-      await refreshThreadRef.current(botId);
-    }
-  }, []);
+  const answerMessage = useCallback(
+    async (message: ThreadMessage, text: string, username?: string) => {
+      const botId = activeBotId.current;
+      const groupId = activeGroupId.current;
+      if (!botId && !groupId) return;
+      await rpc.threads.answer({
+        ...(groupId ? { groupId } : { botId: botId! }),
+        runId: message.runId ?? "",
+        messageId: message.id,
+        answer: text,
+        ...(username ? { username } : {}),
+      });
+      if (groupId && activeGroupId.current === groupId) {
+        await refreshGroupThreadRef.current(groupId);
+      } else if (botId && activeBotId.current === botId) {
+        await refreshThreadRef.current(botId);
+      }
+    },
+    [],
+  );
   const reactToMessage = useCallback(
     async (message: ThreadMessage, reaction: MessageReaction) => {
       const botId = activeBotId.current;
@@ -4408,7 +4412,7 @@ const Transcript = memo(function Transcript({
   workingBots: GroupAvatarMember[];
   onLoadOlder: () => void | Promise<void>;
   onOpenBot: (botId: string) => void;
-  onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
+  onAnswer: (message: ThreadMessage, text: string, username?: string) => Promise<void>;
   onReply: (message: ThreadMessage) => void;
   onQuote: (message: ThreadMessage, quote: string) => void;
   onReact: (message: ThreadMessage, reaction: MessageReaction) => Promise<void>;
@@ -5775,7 +5779,7 @@ const MessageView = memo(function MessageView({
   artifactTarget: ArtifactTarget;
   canAnswer: boolean;
   message: ThreadMessage;
-  onAnswer: (message: ThreadMessage, text: string) => Promise<void>;
+  onAnswer: (message: ThreadMessage, text: string, username?: string) => Promise<void>;
   onOpenBot: (botId: string) => void;
   onOpenPeerMessages: (peer: { peerBotId: string; peerBotName: string }) => void;
   speakerName?: string;
@@ -6156,7 +6160,7 @@ const MessageView = memo(function MessageView({
               key={i}
               block={block}
               canAnswer={canAnswer}
-              onAnswer={(text) => onAnswer(message, text)}
+              onAnswer={(text, username) => onAnswer(message, text, username)}
             />
           );
         }
