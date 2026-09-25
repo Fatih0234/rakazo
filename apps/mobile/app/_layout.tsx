@@ -15,6 +15,7 @@ import {
   resumeLiveNotifications,
 } from "../lib/live-notifications";
 import { native, useResolvedAppearance } from "../lib/native";
+import { loadResponseStreamingPreference } from "../lib/response-streaming";
 
 configureForegroundNotifications();
 
@@ -47,7 +48,7 @@ export default function Layout() {
 
   useEffect(() => {
     void Promise.all([
-      Promise.all([loadApiBase(), loadAppearancePreference()])
+      Promise.all([loadApiBase(), loadAppearancePreference(), loadResponseStreamingPreference()])
         .then(async () =>
           resumeLiveNotifications(
             currentApiBase(),
