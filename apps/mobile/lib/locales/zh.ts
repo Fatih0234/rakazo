@@ -434,6 +434,7 @@ export const ZH_MESSAGES: Record<string, string> = {
   "This removes the empty space for everyone.": "这将为所有人删除此空空间。",
   "Space created": "空间已创建",
   "Space default": "空间默认",
+  "Read replies aloud": "朗读回复",
   "Speak + transcribe": "朗读并转写",
   "Speak message": "朗读消息",
   Speak: "朗读",

@@ -87,6 +87,7 @@ import {
 } from "../lib/api";
 import { mobileTokens } from "../lib/appearance";
 import { type MobileArtifactTarget, openMobileArtifact } from "../lib/artifact-open";
+import { nextAutoSpeakAction } from "../lib/auto-speak";
 import { confirmDeleteBot } from "../lib/bot-lifecycle";
 import { cancelFocusPrompt, focusPromptThreadActive } from "../lib/focus-prompt";
 import { dateLocaleForUi, t, useI18n } from "../lib/i18n";
@@ -269,6 +270,8 @@ function Thread() {
   const mentionBotsRefreshGeneration = useRef(0);
   const mentionBotsAppliedGeneration = useRef(0);
   const readVisibleTarget = useRef<string | null>(null);
+  const autoSpoken = useRef<string | null>(null);
+  const autoSpokenBotId = useRef<string | null>(null);
   const threadKey = groupId ?? botId;
   const [threadScrollState, setThreadScrollState] = useState<ThreadScrollState>(() =>
     scrollBehavior.current.state(),
@@ -403,6 +406,35 @@ function Thread() {
     });
   }, [inGroup, snap?.activeRuns, snap?.members, snap?.run]);
   const working = inGroup ? workingGroupBots.length > 0 : isWorkingStatus(currentBotStatus);
+
+  const speakFinishedReply = useCallback(() => {
+    if (!botId || inGroup || !currentBot) return;
+    const decision = nextAutoSpeakAction({
+      botId: currentBot.id,
+      autoSpeak: currentBot.autoSpeak,
+      focused: AppState.currentState === "active" && navigation.isFocused(),
+      snapshotReady: snap?.botId === currentBot.id,
+      lastSpokenBotId: autoSpokenBotId.current,
+      lastSpokenMessageId: autoSpoken.current,
+      runStatus: snap?.run?.status,
+      messages: snap?.messages ?? [],
+    });
+    if (decision.action === "seed") {
+      autoSpokenBotId.current = currentBot.id;
+      autoSpoken.current = decision.messageId;
+      return;
+    }
+    if (decision.action !== "speak") return;
+    autoSpokenBotId.current = currentBot.id;
+    autoSpoken.current = decision.messageId;
+    void speakText(decision.text, { botId: currentBot.id }).catch(() => undefined);
+  }, [botId, inGroup, currentBot, navigation, snap?.botId, snap?.messages, snap?.run?.status]);
+
+  useEffect(() => {
+    speakFinishedReply();
+    const appState = AppState.addEventListener("change", speakFinishedReply);
+    return () => appState.remove();
+  }, [speakFinishedReply]);
 
   useEffect(() => {
     void rpc<AgentSkillCatalogEntry[]>("agentSkills/list")
@@ -830,10 +862,11 @@ function Thread() {
       }
       void refreshMentionBots();
       markReadIfVisible();
+      speakFinishedReply();
       return () => {
         void setOpenNotificationThread(null).catch(() => undefined);
       };
-    }, [botId, markReadIfVisible, notificationThreadId, refreshMentionBots]),
+    }, [botId, markReadIfVisible, notificationThreadId, refreshMentionBots, speakFinishedReply]),
   );
 
   useEffect(() => {
