@@ -617,28 +617,33 @@ export async function sendThreadMessage(
 
   const commit = () =>
     deps.prisma.$transaction(async (tx) => {
+      let replyToMessageId: string | undefined;
       let replyQuote: string | undefined;
       if (input.replyToMessageId) {
         const reply = await tx.message.findFirst({
           where: { id: input.replyToMessageId, threadId: target.threadId },
           select: { id: true, blocks: true, role: true },
         });
-        if (!reply) throw new IsolationError();
-        // Persist only text derived from the authoritative parent. A mismatch
-        // or a derivation failure still sends a plain reply so quote
-        // verification cannot lose a message.
-        if (requestedReplyQuote) {
-          const parsedBlocks = MessageBlockSchema.array().safeParse(reply.blocks);
-          if (parsedBlocks.success) {
-            try {
-              replyQuote = deriveMessageQuote(
-                parsedBlocks.data,
-                requestedReplyQuote,
-                reply.role === "user" ? "plain-text" : "markdown",
-              );
-            } catch (error) {
-              getLogger().error("thread send quote derivation", error);
-              replyQuote = undefined;
+        // A deleted or paged-out parent must not lose the send: drop to a
+        // plain reply, same as quote verification failing below.
+        if (reply) {
+          replyToMessageId = input.replyToMessageId;
+          // Persist only text derived from the authoritative parent. A
+          // mismatch or a derivation failure still sends a plain reply so
+          // quote verification cannot lose a message.
+          if (requestedReplyQuote) {
+            const parsedBlocks = MessageBlockSchema.array().safeParse(reply.blocks);
+            if (parsedBlocks.success) {
+              try {
+                replyQuote = deriveMessageQuote(
+                  parsedBlocks.data,
+                  requestedReplyQuote,
+                  reply.role === "user" ? "plain-text" : "markdown",
+                );
+              } catch (error) {
+                getLogger().error("thread send quote derivation", error);
+                replyQuote = undefined;
+              }
             }
           }
         }
@@ -662,7 +667,7 @@ export async function sendThreadMessage(
           threadId: target.threadId,
           role: "user",
           blocks,
-          replyToMessageId: input.replyToMessageId,
+          replyToMessageId,
           replyQuote,
           clientNonce: input.clientNonce,
         });
@@ -711,7 +716,7 @@ export async function sendThreadMessage(
               role: "user",
               blocks,
               runIds: answered.map((run) => run.id),
-              replyToMessageId: input.replyToMessageId,
+              replyToMessageId,
               replyQuote,
             },
           });
@@ -747,7 +752,7 @@ export async function sendThreadMessage(
               messageId: message.id,
               role: "user",
               blocks,
-              replyToMessageId: input.replyToMessageId,
+              replyToMessageId,
               replyQuote,
             },
           });
@@ -793,7 +798,7 @@ export async function sendThreadMessage(
             role: "user",
             blocks,
             runIds: [run.id],
-            replyToMessageId: input.replyToMessageId,
+            replyToMessageId,
             replyQuote,
           },
         });
@@ -825,7 +830,7 @@ export async function sendThreadMessage(
         threadId: target.threadId,
         role: "user",
         blocks,
-        replyToMessageId: input.replyToMessageId,
+        replyToMessageId,
         replyQuote,
         clientNonce: input.clientNonce,
       });
@@ -952,7 +957,7 @@ export async function sendThreadMessage(
           role: "user",
           blocks,
           runIds: runs.map((run) => run.id),
-          replyToMessageId: input.replyToMessageId,
+          replyToMessageId,
           replyQuote,
         },
       });

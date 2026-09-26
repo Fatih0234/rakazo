@@ -1712,11 +1712,11 @@ export function ShellPage() {
     : snapshot?.botId === active?.id
       ? snapshot
       : null;
-  const activeReplyTarget =
-    replyTarget && activeSnapshot?.messages.some((message) => message.id === replyTarget.id)
-      ? replyTarget
-      : null;
-  const activeReplyQuote = activeReplyTarget ? replyQuote : null;
+  // Keep the armed reply even when its parent leaves the loaded page: the
+  // server resolves a paged-out target and degrades a deleted one to a plain
+  // reply instead of failing the send.
+  const activeReplyTarget = replyTarget;
+  const activeReplyQuote = replyTarget ? replyQuote : null;
   const clearReply = useCallback(() => {
     setReplyTarget(null);
     setReplyQuote(null);
@@ -4998,6 +4998,8 @@ const Composer = memo(function Composer({
   const [selectedSkill, setSelectedSkill] = useState<AgentSkillCatalogEntry | null>(null);
   const [selectedMentions, setSelectedMentions] = useState<ComposerMention[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [replyAnnouncement, setReplyAnnouncement] = useState("");
+  const prevReplyTarget = useRef<ThreadMessage | null>(null);
   const runErrorRef = useRef<HTMLDivElement>(null);
   const presentedRunErrorIdRef = useRef<string | null>(null);
   const mentionListboxId = useId();
@@ -5242,6 +5244,36 @@ const Composer = memo(function Composer({
   const showComposerPlaceholder =
     draft.length === 0 && selectedSkill === null && selectedMentions.length === 0;
   const replyName = replyTarget ? (replyTargetName ?? previewMessageText(replyTarget)) : "";
+  const replyNameRef = useRef(replyName);
+  replyNameRef.current = replyName;
+  const announceTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(announceTimer.current), []);
+
+  // Arming or retargeting a reply unmounts the control that started it, so
+  // focus would drop to <body>; announce on start and when the target changes.
+  // The timer lives in a ref: a same-id rerender (e.g. the display name
+  // resolving after arming) must not cancel the pending announcement.
+  useEffect(() => {
+    const prev = prevReplyTarget.current;
+    prevReplyTarget.current = replyTarget ?? null;
+    if (!replyTarget) {
+      // Cancel (or send) within the delay must not let a stale "Replying to"
+      // overwrite the cancel announcement — kill the pending timer.
+      window.clearTimeout(announceTimer.current);
+      return;
+    }
+    if (!prev || prev.id !== replyTarget.id) {
+      textareaRef.current?.focus();
+      // Clear-then-set so a switch between same-author targets re-announces —
+      // identical live-region text would otherwise be a no-op.
+      setReplyAnnouncement("");
+      window.clearTimeout(announceTimer.current);
+      announceTimer.current = window.setTimeout(
+        () => setReplyAnnouncement(t`Replying to ${replyNameRef.current}`),
+        50,
+      );
+    }
+  }, [replyTarget, replyName, t]);
 
   return (
     <fieldset
@@ -5255,6 +5287,9 @@ const Composer = memo(function Composer({
         draggingFiles ? "rounded-[14px] ring-2 ring-inset ring-ring" : ""
       }`}
     >
+      <div role="status" data-testid="composer-announcement" className="sr-only">
+        {replyAnnouncement}
+      </div>
       {sendError || runError ? (
         <div
           ref={runErrorRef}
@@ -5290,7 +5325,12 @@ const Composer = memo(function Composer({
           <button
             type="button"
             aria-label={t`Cancel reply`}
-            onClick={onClearReply}
+            onClick={() => {
+              onClearReply?.();
+              setReplyAnnouncement(t`Reply cancelled`);
+              // The chip unmounts with this button — keep focus in the composer.
+              textareaRef.current?.focus();
+            }}
             className="shrink-0 text-muted-foreground hover:text-foreground"
           >
             <X size={13} strokeWidth={2} />
@@ -5668,6 +5708,15 @@ function previewMessageText(message: ThreadMessage): string {
   return t`Message`;
 }
 
+/** Bound reply excerpts used in accessible names (visible UI truncates via CSS). */
+function accessibleReplyExcerpt(text: string, max = 120): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) return normalized;
+  // Reserve a slot for the ellipsis; never split a surrogate pair at the cut.
+  const end = (normalized.charCodeAt(max - 2) & 0xfc00) === 0xd800 ? max - 2 : max - 1;
+  return `${normalized.slice(0, end).trimEnd()}…`;
+}
+
 function formatRosterTime(isoDate?: string | null): string {
   if (!isoDate) return "";
   try {
@@ -5928,7 +5977,15 @@ const MessageView = memo(function MessageView({
         <button
           type="button"
           data-testid="reply-parent-preview"
-          aria-label={t`Jump to replied message`}
+          // Name the action and a short excerpt; a bare action label would
+          // hide the quote, and an unbounded quote can be thousands of chars.
+          aria-label={
+            message.replyQuote
+              ? t`Jump to replied message: “${accessibleReplyExcerpt(message.replyQuote)}”`
+              : replyPreview
+                ? t`Jump to replied message: ${accessibleReplyExcerpt(previewMessageText(replyPreview))}`
+                : t`Jump to replied message`
+          }
           onClick={() => onJumpToMessage?.(parentJumpId)}
           className="mb-2 block max-w-[74%] truncate rounded-[14px] border border-border bg-background px-3 py-2 text-start text-[12.5px] text-muted-foreground hover:border-border hover:text-foreground/75"
           dir="auto"

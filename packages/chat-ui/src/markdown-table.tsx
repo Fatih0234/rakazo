@@ -5,6 +5,7 @@ import { CheckIcon, CopyIcon } from "./icons";
 import type { ExtractedTable, HastNode, TableAlign, TableSortDirection } from "./table-utils";
 import {
   columnMinWidths,
+  columnSortLabel,
   extractTable,
   isNumericColumn,
   nextSort,
@@ -54,7 +55,9 @@ export const TableCard = memo(function TableCard({
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const [copiedSignature, setCopiedSignature] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState("");
   const copiedTimer = useRef<number | undefined>(undefined);
+  const announceTimer = useRef<number | undefined>(undefined);
   const expandButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -105,11 +108,32 @@ export const TableCard = memo(function TableCard({
     setPage(0);
     setExpanded(false);
   }, [schemaKey]);
-  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(copiedTimer.current);
+      window.clearTimeout(announceTimer.current);
+    },
+    [],
+  );
+
+  // Clear then restore so identical successive strings still fire a live-region update.
+  const announce = (text: string) => {
+    window.clearTimeout(announceTimer.current);
+    setAnnouncement("");
+    announceTimer.current = window.setTimeout(() => setAnnouncement(text), 0);
+  };
 
   const toggleSort = (column: number) => {
-    setSort((current) => nextSort(current, column));
+    const next = nextSort(sort, column);
+    setSort(next);
     setPage(0);
+    announce(
+      next
+        ? `Sorted by ${columnSortLabel(columns, column)}, ${
+            next.direction === "asc" ? "ascending" : "descending"
+          }`
+        : "Sort cleared",
+    );
   };
 
   const copyRows = () => {
@@ -118,6 +142,7 @@ export const TableCard = memo(function TableCard({
       .writeText(tableToTsv(columns, sortedRows))
       .then(() => {
         setCopiedSignature(dataSignature);
+        announce("Copied");
         window.clearTimeout(copiedTimer.current);
         copiedTimer.current = window.setTimeout(() => setCopiedSignature(null), 1500);
       })
@@ -165,7 +190,10 @@ export const TableCard = memo(function TableCard({
         className="rk-table-tool"
         aria-label="Previous page"
         disabled={safePage === 0}
-        onClick={() => setPage(safePage - 1)}
+        onClick={() => {
+          setPage(safePage - 1);
+          announce(`Page ${safePage} of ${pageCount}`);
+        }}
       >
         <ChevronLeftIcon />
       </button>
@@ -174,7 +202,10 @@ export const TableCard = memo(function TableCard({
         className="rk-table-tool"
         aria-label="Next page"
         disabled={safePage >= pageCount - 1}
-        onClick={() => setPage(safePage + 1)}
+        onClick={() => {
+          setPage(safePage + 1);
+          announce(`Page ${safePage + 2} of ${pageCount}`);
+        }}
       >
         <ChevronRightIcon />
       </button>
@@ -227,22 +258,39 @@ export const TableCard = memo(function TableCard({
     </div>
   );
 
+  const status = (
+    <div role="status" className="rk-sr-only">
+      {announcement}
+    </div>
+  );
+
   return (
     <Dialog open={expanded} onOpenChange={setExpanded}>
       <div className="rk-table-card rk-table-box" data-testid="table-card">
+        {/* Keep the live region in the active view — dialog content is outside the card. */}
+        {expanded ? null : status}
         {tools("card")}
-        <div className="rk-table-scroll">{tableView("card")}</div>
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must
+            be keyboard-focusable (WCAG 2.1.1 / axe scrollable-region-focusable). */}
+        <section className="rk-table-scroll" aria-label="Table" tabIndex={0}>
+          {tableView("card")}
+        </section>
         {pager}
       </div>
       <DialogContent
         showCloseButton={false}
         initialFocus={closeButtonRef}
         finalFocus={expandButtonRef}
-        className="rk-table-dialog rk-table-box rk-chat-markdown"
+        className="rk-table-dialog rk-table-box rk-chat-markdown w-auto sm:max-w-none"
       >
         <DialogTitle className="rk-table-dialog-title">Table</DialogTitle>
+        {expanded ? status : null}
         {tools("dialog")}
-        <div className="rk-table-scroll rk-table-dialog-scroll">{tableView("dialog")}</div>
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must
+            be keyboard-focusable (WCAG 2.1.1 / axe scrollable-region-focusable). */}
+        <section className="rk-table-scroll rk-table-dialog-scroll" aria-label="Table" tabIndex={0}>
+          {tableView("dialog")}
+        </section>
         {pager}
       </DialogContent>
     </Dialog>
@@ -281,6 +329,9 @@ function TableView({
     const align = aligns[index] ?? (numericColumns.has(index) ? "right" : "left");
     return align && align !== "left" ? `rk-align-${align}` : undefined;
   };
+  // Sort labels need disambiguation: empty headers and duplicate names would
+  // otherwise produce identical or blank "Sort by" announcements.
+  const sortLabel = (index: number) => columnSortLabel(columns, index);
   return (
     <table className="rk-table" aria-label="Markdown table">
       <thead>
@@ -289,7 +340,7 @@ function TableView({
           {columns.map((column, i) => (
             <SortableColumnHeader
               key={i}
-              column={column}
+              column={sortLabel(i)}
               content={renderedHeaders?.[i] ?? column}
               direction={sort?.column === i ? sort.direction : null}
               className={alignClass(i)}
