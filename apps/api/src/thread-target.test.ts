@@ -1,5 +1,6 @@
 import type { SandboxProvider } from "@rakazo/adapter-kit";
 import type { Actor, MessageBlock } from "@rakazo/contracts";
+import type * as MessageQuoteModule from "@rakazo/core/message-quote";
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -15,7 +16,7 @@ import {
 // Passthrough mock: every hint derives for real except the sentinel that
 // exercises the "derivation must never cost the send" path.
 vi.mock("@rakazo/core/message-quote", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@rakazo/core/message-quote")>();
+  const actual = await importOriginal<typeof MessageQuoteModule>();
   return {
     ...actual,
     deriveMessageQuote: (
