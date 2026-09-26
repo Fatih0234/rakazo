@@ -4670,9 +4670,13 @@ const Transcript = memo(function Transcript({
   }, [scrollRef]);
 
   const scrolledJump = useRef<number | null>(null);
+  const jumpScrolling = useRef(false);
+  const jumpScrollTimer = useRef<number | undefined>(undefined);
   // A jump scroll must win over follow-the-tail: unfollow inside the commit
-  // that mounts the row so a live commit cannot cancel the animation, and keep
-  // retrying while the pinned window is still rendering.
+  // that mounts the row so a live commit cannot cancel the animation, keep
+  // retrying while the pinned window is still rendering, and suppress the
+  // near-end follow re-arm for the jump's own scroll events (a downward jump
+  // to a message near the end passes through the near-end region).
   useLayoutEffect(() => {
     if (!scrollRequest || scrolledJump.current === scrollRequest.nonce) return;
     const row = scrollRef.current?.querySelector(
@@ -4682,6 +4686,11 @@ const Transcript = memo(function Transcript({
     scrolledJump.current = scrollRequest.nonce;
     following.current = false;
     autoScrolling.current = false;
+    jumpScrolling.current = true;
+    window.clearTimeout(jumpScrollTimer.current);
+    jumpScrollTimer.current = window.setTimeout(() => {
+      jumpScrolling.current = false;
+    }, 2_000);
     row.scrollIntoView({ behavior: "smooth", block: "center" });
     onScrollRequestHandled();
   }, [messages, scrollRequest, scrollRef, onScrollRequestHandled]);
@@ -4717,6 +4726,7 @@ const Transcript = memo(function Transcript({
   useEffect(
     () => () => {
       window.clearTimeout(autoScrollTimer.current);
+      window.clearTimeout(jumpScrollTimer.current);
     },
     [],
   );
@@ -4751,6 +4761,9 @@ const Transcript = memo(function Transcript({
           lastScrollTop.current = event.currentTarget.scrollTop;
           const nearEnd = transcriptIsNearEnd(event.currentTarget);
           setAtEnd(nearEnd);
+          // A jump scroll owns the viewport until its animation settles; its
+          // own near-end crossings must not re-arm tail-following.
+          if (jumpScrolling.current) return;
           if (nearEnd) {
             if (scrolledDown) following.current = true;
             if (autoScrolling.current) {
