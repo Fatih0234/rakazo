@@ -249,8 +249,9 @@ test("selecting text inside a table cell quotes the rendered cell", async ({ pag
   await quoteButton.click();
   const replyChip = page.getByTestId("reply-chip");
   await expect(replyChip).toBeVisible();
-  await expect(replyChip).toContainText(cellText);
-  await expect(replyChip).not.toContainText("|");
+  // Exact match: an excerpt that picked up an adjacent cell or chrome would
+  // still satisfy a substring check.
+  await expect(replyChip).toHaveText(new RegExp(`^Replying to .+: “${cellText}”$`));
   await expect(composer).toBeFocused();
 
   // The sent reply persists the server-derived excerpt from the same cell.
@@ -264,8 +265,7 @@ test("selecting text inside a table cell quotes the rendered cell", async ({ pag
     .first();
   await expect(replyRow).toBeVisible({ timeout: 20_000 });
   const parentPreview = replyRow.getByTestId("reply-parent-preview");
-  await expect(parentPreview).toContainText(cellText);
-  await expect(parentPreview).not.toContainText("|");
+  await expect(parentPreview).toHaveText(`“${cellText}”`);
 });
 
 test("an armed reply survives the parent paging out of the transcript", async ({ page }) => {
