@@ -2319,9 +2319,8 @@ function QuoteSheet({
         style={{
           flex: 1,
           backgroundColor: tokens.background,
-          // The sheet sits below the notch — the presenting screen's top inset
-          // would double-pad; only the home indicator inset still applies.
-          paddingTop: 12,
+          // Page sheets clear the notch on iOS; Android modals are full-screen.
+          paddingTop: Platform.OS === "ios" ? 12 : insets.top + 12,
           paddingBottom: insets.bottom,
         }}
       >
