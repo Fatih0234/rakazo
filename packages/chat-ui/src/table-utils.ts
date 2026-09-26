@@ -139,6 +139,23 @@ export function isNumericColumn(rows: string[][], columnIndex: number): boolean 
   return seen;
 }
 
+/** Accessible sort label: empty → position; duplicates / collisions append position. */
+export function columnSortLabel(columns: string[], index: number): string {
+  const column = columns[index] ?? "";
+  if (!column) {
+    // Empty header falls back to its position; a literal header may already
+    // claim that name (or the ", empty" disambiguation), so keep suffixing.
+    let label = `column ${index + 1}`;
+    while (columns.includes(label)) label += ", empty";
+    return label;
+  }
+  const duplicated = columns.indexOf(column) !== columns.lastIndexOf(column);
+  if (!duplicated) return column;
+  let label = `${column}, column ${index + 1}`;
+  while (columns.includes(label)) label += ", empty";
+  return label;
+}
+
 /** Compare non-empty cells: numeric when both parse, else text. */
 export function compareCellText(a: string, b: string): number {
   const an = parseNumericText(a);

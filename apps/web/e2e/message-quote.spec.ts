@@ -94,12 +94,16 @@ test("selecting a text span quotes it into a reply", async ({ page }, testInfo) 
   await page.keyboard.press("Escape");
   await expect(quoteButton).toHaveCount(0);
 
-  // Quoting arms the existing reply flow with the excerpt in the chip.
+  // Quoting arms the existing reply flow with the excerpt in the chip. The
+  // pill unmounts on click, so focus must land in the composer — and the
+  // chip's arrival is announced through the composer live region.
   await selectAndRelease(page, sourceRow, "**forty two percent**");
   await expect(quoteButton).toBeVisible();
   await quoteButton.click();
   const replyChip = page.getByTestId("reply-chip");
   await expect(replyChip).toBeVisible();
+  await expect(composer).toBeFocused();
+  await expect(page.getByTestId("composer-announcement")).toHaveText(/Replying to/);
   await expect(replyChip).toContainText(/Replying to/);
   await expect(replyChip).toContainText("**forty two percent**");
 
@@ -117,6 +121,9 @@ test("selecting a text span quotes it into a reply", async ({ page }, testInfo) 
   await expect(replyRow).toBeVisible({ timeout: 20_000 });
   const parentPreview = replyRow.getByTestId("reply-parent-preview");
   await expect(parentPreview).toBeVisible();
+  // The accessible name names the action AND the excerpt — the quote must not
+  // be masked by a bare "Jump to replied message" label.
+  await expect(parentPreview).toHaveAccessibleName(/Jump to replied message:.*forty two percent/);
   await expect(parentPreview).toContainText("**forty two percent**");
   await expect(parentPreview).not.toContainText("quote-source");
   await captureScreenshot(page, testInfo, "message-quote-reply");
@@ -216,4 +223,58 @@ test("a selection spanning two messages offers no quote action", async ({ page }
 
   await selectAndRelease(page, transcript, firstText, secondText);
   await expect(page.getByTestId("quote-selection")).toHaveCount(0);
+});
+
+test("quoting a second message retargets the armed reply", async ({ page }) => {
+  const stamp = Date.now();
+  await signup(page, `quote-switch-${stamp}@rakazo.test`, "password12", "Quote Tester");
+  await completeOnboarding(page);
+
+  const transcript = page.getByTestId("transcript");
+  const composer = page.getByRole("combobox", { name: /Message/ });
+  const quoteButton = page.getByTestId("quote-selection");
+  const replyChip = page.getByTestId("reply-chip");
+  const userRow = (text: string) =>
+    transcript
+      .locator("[data-message-id]")
+      .filter({ has: page.getByTestId("message-user-bubble") })
+      .filter({ hasText: text })
+      .first();
+
+  const firstText = `quote-switch-a-${stamp}`;
+  const secondText = `quote-switch-b-${stamp}`;
+  // Each send must resolve before the next Enter — the composer swallows
+  // input while a send is in flight.
+  const sentFirst = page.waitForResponse(
+    (response) => response.url().includes("/rpc/threads/send") && response.ok(),
+  );
+  await composer.fill(firstText);
+  await composer.press("Enter");
+  await sentFirst;
+  const firstRow = userRow(firstText);
+  await expect(firstRow).toBeVisible({ timeout: 20_000 });
+  const sentSecond = page.waitForResponse(
+    (response) => response.url().includes("/rpc/threads/send") && response.ok(),
+  );
+  await composer.fill(secondText);
+  await composer.press("Enter");
+  await sentSecond;
+  const secondRow = userRow(secondText);
+  await expect(secondRow).toBeVisible({ timeout: 20_000 });
+
+  // Arm a quote on the first message…
+  await selectAndRelease(page, firstRow, firstText);
+  await quoteButton.click();
+  await expect(replyChip).toContainText("switch-a");
+  await expect(composer).toBeFocused();
+
+  // …then quote the second: the chip retargets, the announcement re-fires,
+  // and focus returns to the composer instead of dropping to <body>.
+  await secondRow.scrollIntoViewIfNeeded();
+  await selectAndRelease(page, secondRow, secondText);
+  await quoteButton.click();
+  await expect(replyChip).toContainText("switch-b");
+  await expect(replyChip).not.toContainText("switch-a");
+  await expect(composer).toBeFocused();
+  await expect(page.getByTestId("composer-announcement")).toHaveText(/Replying to/);
 });
