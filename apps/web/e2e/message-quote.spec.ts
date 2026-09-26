@@ -137,7 +137,9 @@ test("selecting a text span quotes it into a reply", async ({ page }, testInfo) 
   );
 });
 
-test("rendered markdown selections survive server quote derivation", async ({ page }) => {
+test("rendered markdown selections survive server quote derivation", async ({
+  page,
+}, testInfo) => {
   const stamp = Date.now();
   await signup(page, `quote-markdown-${stamp}@rakazo.test`, "password12", "Quote Tester");
   await completeOnboarding(page);
@@ -181,6 +183,7 @@ test("rendered markdown selections survive server quote derivation", async ({ pa
   await expect(await quoteAndSend("cell-a", "cell-d", `reply-table-rows-${stamp}`)).toContainText(
     "cell-a cell-b cell-c cell-d",
   );
+  await captureScreenshot(page, testInfo, "quote-table-row-selection");
   await expect(await quoteAndSend("cell-c", "rows", `reply-table-footer-${stamp}`)).toContainText(
     "cell-c cell-d",
   );
