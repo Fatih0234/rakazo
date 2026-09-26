@@ -1,5 +1,5 @@
 import type { MessageBlock } from "@rakazo/contracts";
-import { truncateReplyQuote } from "@rakazo/contracts";
+import { droppedTableHtmlText, truncateReplyQuote } from "@rakazo/contracts";
 import { toText } from "hast-util-to-text";
 import { toHast } from "mdast-util-to-hast";
 import remarkGfm from "remark-gfm";
@@ -12,39 +12,9 @@ const MAX_QUOTABLE_SOURCE_LENGTH = 100_000;
 type MdastNode = { type?: string; value?: string; children?: MdastNode[] };
 
 /* The web renderer salvages <br> and <img alt> text inside table cells
-   (preserveSkippedTableText in @rakazo/chat-ui). The canonical text must carry
-   the same tokens or a quote of a rendered cell can never match. Keep the two
-   salvage implementations in sync. */
-function droppedTableHtmlText(html: string): string | null {
-  if (/^<br[\s/>]/i.test(html)) return " ";
-  const alt = html.match(/<img[^>]*\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i);
-  return alt ? decodeHtmlEntities(alt[1] ?? alt[2] ?? alt[3] ?? "") : null;
-}
-
-function decodeHtmlEntities(value: string): string {
-  const named: Record<string, string> = {
-    amp: "&",
-    apos: "'",
-    gt: ">",
-    lt: "<",
-    nbsp: "\u00a0",
-    quot: '"',
-  };
-  return value.replace(
-    /&(#(?:x[\da-f]+|\d+)|amp|apos|gt|lt|nbsp|quot);/gi,
-    (entity, code: string) => {
-      if (!code.startsWith("#")) return named[code.toLowerCase()] ?? entity;
-      const point = Number.parseInt(
-        code.slice(code[1]?.toLowerCase() === "x" ? 2 : 1),
-        code[1]?.toLowerCase() === "x" ? 16 : 10,
-      );
-      return Number.isInteger(point) && point > 0 && point <= 0x10ffff
-        ? String.fromCodePoint(point)
-        : entity;
-    },
-  );
-}
-
+   (preserveSkippedTableText in @rakazo/chat-ui). Both sides share
+   droppedTableHtmlText from @rakazo/contracts so a quote of a rendered cell
+   validates against the same canonical text. */
 function salvageSkippedTableHtml(node: MdastNode, insideCell = false): void {
   const inCell = insideCell || node.type === "tableCell";
   if (!node.children) return;
