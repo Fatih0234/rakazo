@@ -5027,6 +5027,9 @@ const Composer = memo(function Composer({
   const [selectedMentions, setSelectedMentions] = useState<ComposerMention[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [replyAnnouncement, setReplyAnnouncement] = useState("");
+  // What the live region currently holds — a send disarming the reply clears
+  // "reply" text, while an explicit cancel must keep "Reply cancelled".
+  const replyAnnouncementKind = useRef<"reply" | "cancelled" | null>(null);
   const prevReplyTarget = useRef<ThreadMessage | null>(null);
   const runErrorRef = useRef<HTMLDivElement>(null);
   const presentedRunErrorIdRef = useRef<string | null>(null);
@@ -5288,6 +5291,13 @@ const Composer = memo(function Composer({
       // Cancel (or send) within the delay must not let a stale "Replying to"
       // overwrite the cancel announcement — kill the pending timer.
       window.clearTimeout(announceTimer.current);
+      // A send disarms the reply without touching the region — drop the stale
+      // "Replying to" so it cannot linger or re-announce. An explicit cancel
+      // sets "Reply cancelled" in the same event, so only clear "reply" text.
+      if (replyAnnouncementKind.current === "reply") {
+        replyAnnouncementKind.current = null;
+        setReplyAnnouncement("");
+      }
       return;
     }
     if (!prev || prev.id !== replyTarget.id) {
@@ -5295,11 +5305,12 @@ const Composer = memo(function Composer({
       // Clear-then-set so a switch between same-author targets re-announces —
       // identical live-region text would otherwise be a no-op.
       setReplyAnnouncement("");
+      replyAnnouncementKind.current = null;
       window.clearTimeout(announceTimer.current);
-      announceTimer.current = window.setTimeout(
-        () => setReplyAnnouncement(t`Replying to ${replyNameRef.current}`),
-        50,
-      );
+      announceTimer.current = window.setTimeout(() => {
+        replyAnnouncementKind.current = "reply";
+        setReplyAnnouncement(t`Replying to ${replyNameRef.current}`);
+      }, 50);
     }
   }, [replyTarget, replyName, t]);
 
@@ -5354,6 +5365,11 @@ const Composer = memo(function Composer({
             type="button"
             aria-label={t`Cancel reply`}
             onClick={() => {
+              replyAnnouncementKind.current = "cancelled";
+              // Kill a pending arm announce in this event — the effect's
+              // cleanup can lag the timer, and a late "Replying to" would
+              // then be cleared as stale, dropping the cancel announcement.
+              window.clearTimeout(announceTimer.current);
               onClearReply?.();
               setReplyAnnouncement(t`Reply cancelled`);
               // The chip unmounts with this button — keep focus in the composer.

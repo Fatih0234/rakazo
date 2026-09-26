@@ -111,6 +111,9 @@ test("selecting a text span quotes it into a reply", async ({ page }, testInfo) 
   await composer.fill(replyText);
   await composer.press("Enter");
   await expect(replyChip).toHaveCount(0);
+  // Sending disarms the reply — the live region must not keep a stale
+  // "Replying to" that no longer describes anything after the chip is gone.
+  await expect(page.getByTestId("composer-announcement")).toHaveText("");
 
   // The sent message shows the excerpt and keeps jump-to-source.
   const replyRow = transcript
@@ -366,4 +369,11 @@ test("quoting a second message retargets the armed reply", async ({ page }) => {
   await expect(replyChip).not.toContainText("switch-a");
   await expect(composer).toBeFocused();
   await expect(page.getByTestId("composer-announcement")).toHaveText(/Replying to/);
+
+  // Cancelling announces the cancel in the same event that disarms the reply —
+  // the send-disarm clear must not wipe it.
+  await page.getByRole("button", { name: "Cancel reply" }).click();
+  await expect(replyChip).toHaveCount(0);
+  await expect(composer).toBeFocused();
+  await expect(page.getByTestId("composer-announcement")).toHaveText(/Reply cancelled/);
 });
