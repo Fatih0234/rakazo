@@ -210,9 +210,7 @@ describe("columnSortLabel", () => {
   });
 
   it("keeps suffixing while a literal header claims the label", () => {
-    expect(columnSortLabel(["", "column 1", "column 1, empty"], 0)).toBe(
-      "column 1, empty, empty",
-    );
+    expect(columnSortLabel(["", "column 1", "column 1, empty"], 0)).toBe("column 1, empty, empty");
     expect(columnSortLabel(["a", "a", "a, column 1"], 0)).toBe("a, column 1, empty");
   });
 });

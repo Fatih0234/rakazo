@@ -5256,7 +5256,12 @@ const Composer = memo(function Composer({
   useEffect(() => {
     const prev = prevReplyTarget.current;
     prevReplyTarget.current = replyTarget ?? null;
-    if (!replyTarget) return;
+    if (!replyTarget) {
+      // Cancel (or send) within the delay must not let a stale "Replying to"
+      // overwrite the cancel announcement — kill the pending timer.
+      window.clearTimeout(announceTimer.current);
+      return;
+    }
     if (!prev || prev.id !== replyTarget.id) {
       textareaRef.current?.focus();
       // Clear-then-set so a switch between same-author targets re-announces —
