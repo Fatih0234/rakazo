@@ -124,11 +124,8 @@ export const TableCard = memo(function TableCard({
   };
 
   const toggleSort = (column: number) => {
-    let next: ReturnType<typeof nextSort> = null;
-    setSort((current) => {
-      next = nextSort(current, column);
-      return next;
-    });
+    const next = nextSort(sort, column);
+    setSort(next);
     setPage(0);
     announce(
       next

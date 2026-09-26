@@ -5253,8 +5253,13 @@ const Composer = memo(function Composer({
     if (!replyTarget) return;
     if (!prev || prev.id !== replyTarget.id) {
       textareaRef.current?.focus();
-      setReplyAnnouncement(t`Replying to ${replyName}`);
+      // Clear-then-set so a switch between same-author targets re-announces —
+      // identical live-region text would otherwise be a no-op.
+      setReplyAnnouncement("");
+      const timer = window.setTimeout(() => setReplyAnnouncement(t`Replying to ${replyName}`), 50);
+      return () => window.clearTimeout(timer);
     }
+    return undefined;
   }, [replyTarget, replyName, t]);
 
   return (
@@ -5694,7 +5699,9 @@ function previewMessageText(message: ThreadMessage): string {
 function accessibleReplyExcerpt(text: string, max = 120): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length <= max) return normalized;
-  return `${normalized.slice(0, max - 1).trimEnd()}…`;
+  // Reserve a slot for the ellipsis; never split a surrogate pair at the cut.
+  const end = (normalized.charCodeAt(max - 2) & 0xfc00) === 0xd800 ? max - 2 : max - 1;
+  return `${normalized.slice(0, end).trimEnd()}…`;
 }
 
 function formatRosterTime(isoDate?: string | null): string {

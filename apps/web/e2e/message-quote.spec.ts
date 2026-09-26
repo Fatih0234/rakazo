@@ -212,3 +212,47 @@ test("a selection spanning two messages offers no quote action", async ({ page }
   await selectAndRelease(page, transcript, firstText, secondText);
   await expect(page.getByTestId("quote-selection")).toHaveCount(0);
 });
+
+test("quoting a second message retargets the armed reply", async ({ page }) => {
+  const stamp = Date.now();
+  await signup(page, `quote-switch-${stamp}@rakazo.test`, "password12", "Quote Tester");
+  await completeOnboarding(page);
+
+  const transcript = page.getByTestId("transcript");
+  const composer = page.getByRole("combobox", { name: /Message/ });
+  const quoteButton = page.getByTestId("quote-selection");
+  const replyChip = page.getByTestId("reply-chip");
+  const userRow = (text: string) =>
+    transcript
+      .locator("[data-message-id]")
+      .filter({ has: page.getByTestId("message-user-bubble") })
+      .filter({ hasText: text })
+      .first();
+
+  const firstText = `quote-switch-a-${stamp}`;
+  const secondText = `quote-switch-b-${stamp}`;
+  await composer.fill(firstText);
+  await composer.press("Enter");
+  const firstRow = userRow(firstText);
+  await expect(firstRow).toBeVisible({ timeout: 20_000 });
+  await composer.fill(secondText);
+  await composer.press("Enter");
+  const secondRow = userRow(secondText);
+  await expect(secondRow).toBeVisible({ timeout: 20_000 });
+
+  // Arm a quote on the first message…
+  await selectAndRelease(page, firstRow, firstText);
+  await quoteButton.click();
+  await expect(replyChip).toContainText("switch-a");
+  await expect(composer).toBeFocused();
+
+  // …then quote the second: the chip retargets, the announcement re-fires,
+  // and focus returns to the composer instead of dropping to <body>.
+  await secondRow.scrollIntoViewIfNeeded();
+  await selectAndRelease(page, secondRow, secondText);
+  await quoteButton.click();
+  await expect(replyChip).toContainText("switch-b");
+  await expect(replyChip).not.toContainText("switch-a");
+  await expect(composer).toBeFocused();
+  await expect(page.getByTestId("composer-announcement")).toHaveText(/Replying to/);
+});
