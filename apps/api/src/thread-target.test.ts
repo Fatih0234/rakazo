@@ -2748,13 +2748,18 @@ describe("stopThreadRuns", () => {
     const execute = vi.fn(async function* () {
       yield { type: "exit", code: 0 };
     });
+    let nextEventSeq = 0;
     const transaction = {
       $queryRaw: vi.fn(),
+      thread: {
+        update: vi.fn(async () => ({ nextEventSeq: ++nextEventSeq })),
+      },
       run: {
         updateManyAndReturn: vi.fn().mockResolvedValue([
           { id: "run-a", botId: "bot-a" },
           { id: "run-b", botId: "bot-b" },
         ]),
+        findUnique: vi.fn().mockResolvedValue({ status: "cancelled" }),
       },
       steeringMessage: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       computer: {
@@ -2784,6 +2789,10 @@ describe("stopThreadRuns", () => {
           { computerId: "computer-db-team", botId: "bot-b", runId: "run-b", fence: 4 },
         ]),
       },
+      event: {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+        deleteMany: vi.fn().mockResolvedValue({ count: 2 }),
+      },
     };
     const prisma = {
       $transaction: vi.fn(async (callback: (client: typeof transaction) => unknown) =>
@@ -2798,7 +2807,6 @@ describe("stopThreadRuns", () => {
       computerExecutionLease: {
         updateMany: vi.fn().mockResolvedValue({ count: 2 }),
       },
-      event: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
     } as unknown as PrismaClient;
     const actor = {
       spaceId: "workspace-1",
@@ -2814,7 +2822,11 @@ describe("stopThreadRuns", () => {
     } satisfies ThreadTarget;
 
     await stopThreadRuns(
-      { prisma, sandbox: { releaseScreen, execute } as unknown as SandboxProvider },
+      {
+        prisma,
+        sandbox: { releaseScreen, execute } as unknown as SandboxProvider,
+        events: { notify: vi.fn().mockResolvedValue(undefined) } as never,
+      },
       actor,
       target,
     );
@@ -2878,8 +2890,12 @@ describe("stopThreadRuns", () => {
     });
     const transaction = {
       $queryRaw: vi.fn(),
+      thread: {
+        update: vi.fn().mockResolvedValue({ nextEventSeq: 5 }),
+      },
       run: {
         updateManyAndReturn: vi.fn().mockResolvedValue([{ id: "run-a", botId: "bot-a" }]),
+        findUnique: vi.fn().mockResolvedValue({ status: "cancelled" }),
       },
       steeringMessage: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       computer: {
@@ -2903,6 +2919,10 @@ describe("stopThreadRuns", () => {
             { computerId: "computer-db-a", botId: "bot-a", runId: "run-a", fence: 2 },
           ]),
       },
+      event: {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => data),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
     };
     const prisma = {
       $transaction: vi.fn(async (callback: (client: typeof transaction) => unknown) =>
@@ -2915,7 +2935,6 @@ describe("stopThreadRuns", () => {
       computerExecutionLease: {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
-      event: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
     } as unknown as PrismaClient;
     const actor = {
       spaceId: "workspace-1",
@@ -2931,7 +2950,11 @@ describe("stopThreadRuns", () => {
     } satisfies ThreadTarget;
 
     await stopThreadRuns(
-      { prisma, sandbox: { releaseScreen, execute } as unknown as SandboxProvider },
+      {
+        prisma,
+        sandbox: { releaseScreen, execute } as unknown as SandboxProvider,
+        events: { notify: vi.fn().mockResolvedValue(undefined) } as never,
+      },
       actor,
       target,
     );
@@ -2964,5 +2987,149 @@ describe("stopThreadRuns", () => {
       expect.anything(),
       expect.objectContaining({ runId: "run-b" }),
     );
+  });
+
+  it("writes a run.cancelled event per cancelled run ahead of the progress purge", async () => {
+    // Two earlier progress events already hold seqs 0 and 1; a client may have
+    // applied cursor 1 before Stop deletes those rows.
+    let nextEventSeq = 2;
+    const writes: string[] = [];
+    const created: Array<Record<string, unknown>> = [];
+    const transaction = {
+      $queryRaw: vi.fn(),
+      thread: {
+        update: vi.fn(async () => ({ nextEventSeq: ++nextEventSeq })),
+      },
+      run: {
+        updateManyAndReturn: vi.fn().mockResolvedValue([
+          { id: "run-a", botId: "bot-a" },
+          { id: "run-b", botId: "bot-b" },
+        ]),
+        // appendEventInTransaction re-reads the run after the flip.
+        findUnique: vi.fn().mockResolvedValue({ status: "cancelled" }),
+      },
+      steeringMessage: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      computer: { findMany: vi.fn().mockResolvedValue([]) },
+      computerExecutionLease: { findMany: vi.fn().mockResolvedValue([]) },
+      event: {
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          writes.push("event.create");
+          created.push(data);
+          return data;
+        }),
+        deleteMany: vi.fn(async () => {
+          writes.push("event.deleteMany");
+          return { count: 4 };
+        }),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+      computer: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      computerExecutionLease: { updateMany: vi.fn().mockResolvedValue({ count: 2 }) },
+      // No event delegate: a post-commit progress delete would throw here.
+    } as unknown as PrismaClient;
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const actor = {
+      spaceId: "workspace-1",
+      userId: "user-1",
+    } as Actor;
+    const target = {
+      kind: "group",
+      groupId: "group-1",
+      groupName: "Test group",
+      threadId: "thread-1",
+      members: [],
+      memberBotIds: ["bot-a", "bot-b"],
+    } satisfies ThreadTarget;
+
+    await stopThreadRuns(
+      {
+        prisma,
+        sandbox: {} as SandboxProvider,
+        events: { notify } as never,
+      },
+      actor,
+      target,
+    );
+
+    expect(created).toEqual([
+      expect.objectContaining({
+        spaceId: "workspace-1",
+        threadId: "thread-1",
+        botId: "bot-a",
+        type: "run.cancelled",
+        runId: "run-a",
+        payload: {},
+        seq: 2,
+      }),
+      expect.objectContaining({
+        spaceId: "workspace-1",
+        threadId: "thread-1",
+        botId: "bot-b",
+        type: "run.cancelled",
+        runId: "run-b",
+        payload: {},
+        seq: 3,
+      }),
+    ]);
+    // The terminal seqs sit above every deleted progress seq, so max(seq) never
+    // rewinds below an applied cursor — the freeze regression.
+    expect(Math.max(...created.map((data) => data.seq as number))).toBeGreaterThan(1);
+    expect(writes.lastIndexOf("event.create")).toBeLessThan(writes.indexOf("event.deleteMany"));
+    expect(transaction.event.deleteMany).toHaveBeenCalledWith({
+      where: { type: "thread.progress", runId: { in: ["run-a", "run-b"] } },
+    });
+    expect(notify).toHaveBeenCalledWith("thread-1", 3);
+  });
+
+  it("emits no event and skips the wake when nothing was running", async () => {
+    const transaction = {
+      $queryRaw: vi.fn(),
+      thread: { update: vi.fn() },
+      run: {
+        updateManyAndReturn: vi.fn().mockResolvedValue([]),
+        findUnique: vi.fn(),
+      },
+      steeringMessage: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      computer: { findMany: vi.fn() },
+      computerExecutionLease: { findMany: vi.fn() },
+      event: { create: vi.fn(), deleteMany: vi.fn() },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+      computer: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      computerExecutionLease: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    } as unknown as PrismaClient;
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const actor = {
+      spaceId: "workspace-1",
+      userId: "user-1",
+    } as Actor;
+    const target = {
+      kind: "bot",
+      botId: "bot-1",
+      threadId: "thread-1",
+      bot: { computer: null },
+    } as ThreadTarget;
+
+    await stopThreadRuns(
+      {
+        prisma,
+        sandbox: {} as SandboxProvider,
+        events: { notify } as never,
+      },
+      actor,
+      target,
+    );
+
+    expect(transaction.event.create).not.toHaveBeenCalled();
+    expect(transaction.event.deleteMany).not.toHaveBeenCalled();
+    expect(transaction.thread.update).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 });

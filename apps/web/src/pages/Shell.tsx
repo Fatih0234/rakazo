@@ -2182,7 +2182,7 @@ export function ShellPage() {
           }
           return;
         }
-        // Stop has no terminal event; clear run UI before refresh races with in-flight gets.
+        // Clear run UI ahead of the run.cancelled event so refresh races with in-flight gets.
         if (activeGroupId.current === groupTarget) {
           updateSnapshot((prev) =>
             prev && prev.groupId === groupTarget ? clearActiveThreadRuns(prev) : prev,
@@ -2201,7 +2201,7 @@ export function ShellPage() {
         }
         return;
       }
-      // Stop does not emit a terminal thread event. Clear local run/busy immediately so a
+      // Clear local run/busy immediately rather than waiting for run.cancelled so a
       // superseded in-flight refresh (older cursor) cannot leave Stop enabled / Take control
       // blocked while the API is already idle.
       if (activeBotId.current === botTarget) {

@@ -109,3 +109,23 @@ export async function assertRunCanWriteHistory(
   }
   return run;
 }
+
+/**
+ * run.cancelled is recorded by the path that cancelled the run, after the row
+ * already reads cancelled — where the liveness assert above would reject it.
+ * Requiring the terminal status keeps the event truthful: it can never announce
+ * a cancellation the row did not commit.
+ */
+export async function assertRunIsCancelled(
+  tx: Prisma.TransactionClient,
+  runId?: string,
+): Promise<void> {
+  if (!runId) return;
+  const run = await tx.run.findUnique({
+    where: { id: runId },
+    select: { status: true },
+  });
+  if (run?.status !== "cancelled") {
+    throw new RunHistoryWriteError();
+  }
+}
