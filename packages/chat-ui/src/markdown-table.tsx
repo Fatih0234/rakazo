@@ -4,9 +4,7 @@ import { Children, isValidElement, memo, useEffect, useMemo, useRef, useState } 
 import { CheckIcon, CopyIcon } from "./icons";
 import type { ExtractedTable, HastNode, TableAlign, TableSortDirection } from "./table-utils";
 import {
-  columnMinWidths,
   extractTable,
-  isNumericColumn,
   nextSort,
   sortRows,
   TABLE_PAGE_SIZE,
@@ -48,8 +46,8 @@ export const TableCard = memo(function TableCard({
   renderedHeaders?: ReactNode[];
   renderedRows?: ReactNode[][];
 }) {
-  const { columns, aligns, rows } = table;
-  const schemaKey = JSON.stringify([columns, aligns]);
+  const { columns, aligns, rows, schemaKey, dataSignature, numericColumns, minWidths, rowKeys } =
+    table;
   const [sort, setSort] = useState<SortState>(null);
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState(false);
@@ -58,29 +56,8 @@ export const TableCard = memo(function TableCard({
   const expandButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  const dataSignature = JSON.stringify([columns, rows]);
   const copied = copiedSignature === dataSignature;
 
-  const numericColumns = useMemo(() => {
-    const numeric = new Set<number>();
-    columns.forEach((_, i) => {
-      if (isNumericColumn(rows, i)) numeric.add(i);
-    });
-    return numeric;
-  }, [columns, rows]);
-
-  const minWidths = useMemo(() => columnMinWidths(columns, rows), [columns, rows]);
-  const rowKeys = useMemo(() => {
-    const occurrences = new Map<string, number>();
-    return new Map(
-      rows.map((row) => {
-        const signature = JSON.stringify(row);
-        const occurrence = occurrences.get(signature) ?? 0;
-        occurrences.set(signature, occurrence + 1);
-        return [row, `${signature}:${occurrence}`] as const;
-      }),
-    );
-  }, [rows]);
   const renderedRowsBySource = useMemo(
     () => new Map(rows.map((row, index) => [row, renderedRows?.[index]])),
     [renderedRows, rows],
@@ -267,7 +244,7 @@ function TableView({
   aligns: TableAlign[];
   rows: string[][];
   rowOffset: number;
-  numericColumns: Set<number>;
+  numericColumns: ReadonlySet<number>;
   minWidths: Record<number, string>;
   renderedHeaders?: ReactNode[];
   renderedRows: Map<string[], ReactNode[] | undefined>;
