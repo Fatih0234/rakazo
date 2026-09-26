@@ -139,6 +139,17 @@ export function isNumericColumn(rows: string[][], columnIndex: number): boolean 
   return seen;
 }
 
+/**
+ * Accessible column name for sort labels/announcements: empty headers fall
+ * back to position, duplicates get their position appended.
+ */
+export function columnSortLabel(columns: string[], index: number): string {
+  const column = columns[index] ?? "";
+  const duplicated = column !== "" && columns.indexOf(column) !== columns.lastIndexOf(column);
+  if (!column) return `column ${index + 1}`;
+  return duplicated ? `${column}, column ${index + 1}` : column;
+}
+
 /** Compare non-empty cells: numeric when both parse, else text. */
 export function compareCellText(a: string, b: string): number {
   const an = parseNumericText(a);

@@ -91,12 +91,16 @@ test("selecting a text span quotes it into a reply", async ({ page }, testInfo) 
   await page.keyboard.press("Escape");
   await expect(quoteButton).toHaveCount(0);
 
-  // Quoting arms the existing reply flow with the excerpt in the chip.
+  // Quoting arms the existing reply flow with the excerpt in the chip. The
+  // pill unmounts on click, so focus must land in the composer — and the
+  // chip's arrival is announced through the composer live region.
   await selectAndRelease(page, sourceRow, "**forty two percent**");
   await expect(quoteButton).toBeVisible();
   await quoteButton.click();
   const replyChip = page.getByTestId("reply-chip");
   await expect(replyChip).toBeVisible();
+  await expect(composer).toBeFocused();
+  await expect(page.getByTestId("composer-announcement")).toHaveText(/Replying to/);
   await expect(replyChip).toContainText(/Replying to/);
   await expect(replyChip).toContainText("**forty two percent**");
 
@@ -114,6 +118,9 @@ test("selecting a text span quotes it into a reply", async ({ page }, testInfo) 
   await expect(replyRow).toBeVisible({ timeout: 20_000 });
   const parentPreview = replyRow.getByTestId("reply-parent-preview");
   await expect(parentPreview).toBeVisible();
+  // The accessible name names the action AND the excerpt — the quote must not
+  // be masked by a bare "Jump to replied message" label.
+  await expect(parentPreview).toHaveAccessibleName(/Jump to replied message:.*forty two percent/);
   await expect(parentPreview).toContainText("**forty two percent**");
   await expect(parentPreview).not.toContainText("quote-source");
   await captureScreenshot(page, testInfo, "message-quote-reply");
