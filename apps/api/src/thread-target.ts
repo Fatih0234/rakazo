@@ -1032,11 +1032,12 @@ export async function stopThreadRuns(
   deps: {
     prisma: PrismaClient;
     sandbox: SandboxProvider;
+    events: ThreadEvents;
   },
   actor: Actor,
   target: ThreadTarget,
 ) {
-  const { runIds, computers, leases } = await deps.prisma.$transaction(async (tx) => {
+  const { runIds, computers, leases, eventSeq } = await deps.prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM threads WHERE id = ${target.threadId} FOR UPDATE`;
     const cancelled = await tx.run.updateManyAndReturn({
       where: {
@@ -1044,7 +1045,7 @@ export async function stopThreadRuns(
         status: { in: [...ACTIVE_RUN_STATUSES] },
       },
       data: { status: "cancelled", completedAt: new Date() },
-      select: { id: true },
+      select: { id: true, botId: true },
     });
     const ids = cancelled.map((run) => run.id);
     await tx.steeringMessage.deleteMany({
@@ -1083,8 +1084,38 @@ export async function stopThreadRuns(
           },
         })
       : [];
-    return { runIds: ids, computers, leases };
+    // One terminal event per cancelled run, in the same commit as the status
+    // flip and the progress purge below. Other clients learn the run ended, and
+    // the fresh seq keeps max(seq) above every deleted progress row so a client
+    // whose cursor pointed at one never discards later refreshes as stale.
+    let eventSeq: number | null = null;
+    for (const run of cancelled) {
+      const event = await appendEventInTransaction(tx, {
+        spaceId: actor.spaceId,
+        threadId: target.threadId,
+        botId: run.botId,
+        type: "run.cancelled",
+        runId: run.id,
+        payload: {},
+      });
+      eventSeq = event.seq;
+    }
+    if (ids.length) {
+      await tx.event.deleteMany({
+        where: {
+          type: "thread.progress",
+          runId: { in: ids },
+        },
+      });
+    }
+    return { runIds: ids, computers, leases, eventSeq };
   });
+  if (eventSeq !== null) {
+    // The events are durable; subscribers refetch from their persisted cursor.
+    await deps.events.notify(target.threadId, eventSeq).catch((error) => {
+      getLogger().error("thread stop realtime notification", error);
+    });
+  }
   // Keep the DB lease until after teardown so a replacement run cannot claim the
   // screen while we still need the cancelled run's screenLeaseId to release it.
   const computerById = new Map(computers.map((computer) => [computer.id, computer]));
@@ -1152,12 +1183,6 @@ export async function stopThreadRuns(
       executionRunId: null,
       executionBotId: null,
       executionLeaseExpiresAt: null,
-    },
-  });
-  await deps.prisma.event.deleteMany({
-    where: {
-      type: "thread.progress",
-      runId: { in: runIds },
     },
   });
 }

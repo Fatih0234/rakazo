@@ -1502,19 +1502,17 @@ export function createRouter(deps: RouterDeps) {
         );
         await Promise.all(
           archived.computers.map(async (computer) => {
-            if (!computer.providerRef || !computer.executionBotId || !computer.executionRunId) {
-              return;
-            }
+            if (!computer.providerRef) return;
             const adapterContext = {
               operationId: "stop",
               traceId: "stop",
               spaceId: context.actor.spaceId,
               userId: context.actor.userId,
-              botId: computer.executionBotId,
-              runId: computer.executionRunId,
+              botId: computer.botId,
+              runId: computer.runId,
               screenLeaseId: screenLeaseIdForRun(
-                { runId: computer.executionRunId, fence: computer.executionFence },
-                computer.executionRunId,
+                { runId: computer.runId, fence: computer.fence },
+                computer.runId,
               ),
               cancelRunWork: true,
               signal: new AbortController().signal,
@@ -1524,12 +1522,15 @@ export function createRouter(deps: RouterDeps) {
               deps.sandbox,
               ref,
               computer.id,
-              computer.executionRunId,
+              computer.runId,
               adapterContext,
             );
             await deps.sandbox.releaseScreen?.(ref, adapterContext).catch(() => undefined);
           }),
         );
+        // Expire the leases only after teardown: while they were live, no other run could claim
+        // these screens.
+        await groupRepos.releaseArchivedRunLeases(archived.cancelledRunIds);
         return { ok: true as const };
       }),
       restore: authed.groups.restore.handler(async ({ context, input }) => {

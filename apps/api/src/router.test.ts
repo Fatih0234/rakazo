@@ -1,5 +1,9 @@
 import { RPCHandler } from "@orpc/server/fetch";
-import { COMPUTER_SCREEN_UNAVAILABLE, ComputerScreenUnavailableError } from "@rakazo/adapters";
+import {
+  COMPUTER_SCREEN_UNAVAILABLE,
+  ComputerScreenUnavailableError,
+  screenLeaseIdForRun,
+} from "@rakazo/adapters";
 import type { Actor, Bot } from "@rakazo/contracts";
 import { REPLY_QUOTE_MAX_LENGTH } from "@rakazo/contracts";
 import { openScreenCapability } from "@rakazo/core/node/screen-capability";
@@ -1898,4 +1902,136 @@ describe("bot restore computer quota", () => {
 
 afterEach(() => {
   delete process.env.SANDBOX_MAX_COMPUTERS_PER_USER;
+});
+
+describe("groups.archive", () => {
+  async function archiveGroup(archivedAt: Date | null) {
+    const calls: string[] = [];
+    const groupUpdate = vi.fn();
+    // As in production: the run's computer is known only through its execution lease.
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "group-1" }]),
+      chatGroup: {
+        findFirst: vi.fn().mockResolvedValue({
+          archivedAt,
+          thread: { id: "thread-1" },
+        }),
+        update: groupUpdate,
+      },
+      run: {
+        findMany: vi.fn().mockResolvedValue([{ id: "run-1", taskId: "task-1" }]),
+        updateMany: vi.fn(),
+      },
+      attempt: { updateMany: vi.fn() },
+      task: { updateMany: vi.fn() },
+      computerExecutionLease: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            { computerId: "computer-1", botId: "bot-1", runId: "run-1", fence: 3 },
+          ]),
+        updateMany: vi.fn(async () => {
+          calls.push("expire lease");
+        }),
+      },
+      computer: {
+        findMany: vi.fn(async ({ where }: { where: { OR?: unknown } }) =>
+          where.OR
+            ? [
+                {
+                  id: "computer-1",
+                  homeKey: "home-1",
+                  kind: "docker",
+                  providerRef: "computer-1",
+                  executionBotId: null,
+                  executionRunId: null,
+                },
+              ]
+            : [],
+        ),
+        updateMany: vi.fn(),
+      },
+      event: { deleteMany: vi.fn() },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+      computerExecutionLease: {
+        updateMany: vi.fn(async () => {
+          calls.push("expire lease");
+        }),
+      },
+      computer: { updateMany: vi.fn() },
+    } as unknown as PrismaClient;
+    const releaseScreen = vi.fn(async () => {
+      calls.push("release screen");
+    });
+    const execute = vi.fn(() => {
+      calls.push("cancel run work");
+      return [];
+    });
+    const deps = {
+      prisma,
+      env: {
+        defaultProvider: "fake",
+        defaultModel: "fake-model",
+        webOrigin: "http://127.0.0.1:5173",
+        screenProxySecret: "fake-test-secret",
+        sandboxProvider: "fake",
+      },
+      dataDir: "/tmp/rakazo-router-test",
+      sandbox: { releaseScreen, execute },
+      jobs: { cancel: vi.fn().mockResolvedValue(undefined) },
+    } as unknown as RouterDeps;
+    const actor = {
+      spaceId: "workspace-1",
+      userId: "user-1",
+      email: "user@rakazo.test",
+      isDeploymentOwner: true,
+    } satisfies Actor;
+
+    const { response } = await new RPCHandler(createRouter(deps)).handle(
+      new Request("http://127.0.0.1/rpc/groups/archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ json: { groupId: "group-1" } }),
+      }),
+      { prefix: "/rpc", context: { actor } },
+    );
+    return { response, releaseScreen, calls, groupUpdate };
+  }
+
+  it("stops each member's run work and releases its screen before expiring the lease", async () => {
+    const { response, releaseScreen, calls } = await archiveGroup(null);
+
+    expect(response?.status).toBe(200);
+    expect(releaseScreen).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "computer-1" }),
+      expect.objectContaining({
+        botId: "bot-1",
+        runId: "run-1",
+        screenLeaseId: screenLeaseIdForRun({ runId: "run-1", fence: 3 }, "run-1"),
+        cancelRunWork: true,
+      }),
+    );
+    expect(calls).toEqual(["cancel run work", "release screen", "expire lease"]);
+  });
+
+  it("finishes teardown when the group is already archived and a lease is still live", async () => {
+    const { response, releaseScreen, calls, groupUpdate } = await archiveGroup(
+      new Date("2026-09-26T00:00:00.000Z"),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(groupUpdate).not.toHaveBeenCalled();
+    expect(releaseScreen).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "computer-1" }),
+      expect.objectContaining({
+        botId: "bot-1",
+        runId: "run-1",
+        screenLeaseId: screenLeaseIdForRun({ runId: "run-1", fence: 3 }, "run-1"),
+        cancelRunWork: true,
+      }),
+    );
+    expect(calls).toEqual(["cancel run work", "release screen", "expire lease"]);
+  });
 });
