@@ -1712,11 +1712,11 @@ export function ShellPage() {
     : snapshot?.botId === active?.id
       ? snapshot
       : null;
-  const activeReplyTarget =
-    replyTarget && activeSnapshot?.messages.some((message) => message.id === replyTarget.id)
-      ? replyTarget
-      : null;
-  const activeReplyQuote = activeReplyTarget ? replyQuote : null;
+  // Keep the armed reply even when its parent leaves the loaded page: the
+  // server resolves a paged-out target and degrades a deleted one to a plain
+  // reply instead of failing the send.
+  const activeReplyTarget = replyTarget;
+  const activeReplyQuote = replyTarget ? replyQuote : null;
   const clearReply = useCallback(() => {
     setReplyTarget(null);
     setReplyQuote(null);
