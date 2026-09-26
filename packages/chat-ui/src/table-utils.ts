@@ -9,6 +9,8 @@ export interface HastNode {
   tagName?: string;
   value?: string;
   properties?: Record<string, unknown>;
+  /** Source offsets supplied by the markdown parser, when available. */
+  position?: { start?: { offset?: number }; end?: { offset?: number } };
   children?: HastNode[];
 }
 

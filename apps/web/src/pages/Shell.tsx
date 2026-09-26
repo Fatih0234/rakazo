@@ -4574,8 +4574,18 @@ const Transcript = memo(function Transcript({
     setQuoteDraft((prev) => {
       if (!draft) return null;
       // Repeat firings for an unchanged selection reuse the draft so the
-      // transcript isn't re-rendered by every unrelated selection event.
-      if (prev && prev.message === draft.message && prev.text === draft.text) return prev;
+      // transcript isn't re-rendered by every unrelated selection event. A
+      // moved selection (e.g. keyboard-selecting a second occurrence of the
+      // same text) must carry its new Range — the pill anchors to it.
+      if (
+        prev &&
+        prev.message === draft.message &&
+        prev.text === draft.text &&
+        prev.range.compareBoundaryPoints(Range.START_TO_START, range) === 0 &&
+        prev.range.compareBoundaryPoints(Range.END_TO_END, range) === 0
+      ) {
+        return prev;
+      }
       return { ...draft, range };
     });
   }, [messageById]);

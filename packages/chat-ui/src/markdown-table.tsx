@@ -1,6 +1,16 @@
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@rakazo/ui-web";
 import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from "react";
-import { Children, isValidElement, memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Children,
+  createContext,
+  isValidElement,
+  memo,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { CheckIcon, CopyIcon } from "./icons";
 import type { ExtractedTable, HastNode, TableAlign, TableSortDirection } from "./table-utils";
 import {
@@ -11,6 +21,10 @@ import {
   tableToCsv,
   tableToTsv,
 } from "./table-utils";
+
+/** The markdown source a render was parsed from — lets a reparsed-but-
+    unchanged table reuse its extraction by content instead of node identity. */
+export const MarkdownTableSourceContext = createContext("");
 
 /**
  * Renders a GFM markdown table as an interactive data card. Extracted plain
@@ -27,7 +41,16 @@ export const MarkdownTable = memo(function MarkdownTable({
   tableProps?: ComponentPropsWithoutRef<"table">;
   children?: ReactNode;
 }) {
-  const extracted = useMemo(() => extractTable(node), [node]);
+  const source = useContext(MarkdownTableSourceContext);
+  const start = node?.position?.start?.offset;
+  const end = node?.position?.end?.offset;
+  const sourceKey =
+    typeof start === "number" && typeof end === "number" && start <= end && end <= source.length
+      ? source.slice(start, end)
+      : null;
+  // sourceKey pins the extraction to the source text; node identity is only
+  // the fallback when the parser supplies no position.
+  const extracted = useMemo(() => extractTable(node), [sourceKey ?? node]);
   const rendered = useMemo(() => extractRenderedCells(children), [children]);
   if (!extracted) return <table {...tableProps}>{children}</table>;
   return (
