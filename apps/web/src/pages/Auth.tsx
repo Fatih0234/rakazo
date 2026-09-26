@@ -60,9 +60,12 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
       .catch(() => undefined)
       .finally(() => clearTimeout(timer));
     return () => {
+      // Do not abort on unmount: a guard redirect that bounces through this
+      // page only mounts it for a render or two, and the cancelled fetch then
+      // surfaces as a failed request. Letting the probe finish is harmless —
+      // `active` already drops the result — and the timeout still bounds it.
       active = false;
       clearTimeout(timer);
-      controller.abort();
     };
   }, [mode]);
 

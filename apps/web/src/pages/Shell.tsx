@@ -664,6 +664,11 @@ export function ShellPage() {
   const expandedHistoryThread = useRef<string | null>(null);
   const historyEpoch = useRef(0);
   const jumpGeneration = useRef(0);
+  const [scrollRequest, setScrollRequest] = useState<{
+    messageId: string;
+    nonce: number;
+  } | null>(null);
+  const clearScrollRequest = useCallback(() => setScrollRequest(null), []);
   const initiallyScrolledThread = useRef<string | null>(null);
   const messageScroll = useRef<HTMLDivElement>(null);
   const pinnedAroundRef = useRef<{
@@ -1655,20 +1660,20 @@ export function ShellPage() {
       setRoutines([]);
       setRoutinesBotId(null);
     }
-    window.requestAnimationFrame(() => {
-      if (epoch !== historyEpoch.current || jumpId !== jumpGeneration.current) return;
-      if (!targetInPage) {
+    if (targetInPage) {
+      // The transcript owns the scroll: it retries until the pinned row is
+      // mounted and unfollows the tail, so live commits cannot cancel it.
+      setScrollRequest({ messageId: target.messageId, nonce: jumpId });
+    } else {
+      window.requestAnimationFrame(() => {
+        if (epoch !== historyEpoch.current || jumpId !== jumpGeneration.current) return;
         const element = messageScroll.current;
         if (element) {
           element.scrollTop = element.scrollHeight;
           initiallyScrolledThread.current = page.threadId;
         }
-        return;
-      }
-      document
-        .querySelector(`[data-message-id="${target.messageId}"]`)
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
+      });
+    }
   }
 
   useEffect(() => {
@@ -1916,7 +1921,7 @@ export function ShellPage() {
     if (existing) {
       // Cancel any in-flight around-fetch so it cannot overwrite this scroll.
       jumpGeneration.current += 1;
-      existing.scrollIntoView({ behavior: "smooth", block: "center" });
+      setScrollRequest({ messageId, nonce: jumpGeneration.current });
       return;
     }
     const groupId = activeGroupId.current;
@@ -3423,6 +3428,8 @@ export function ShellPage() {
           <Transcript
             key={activeSnapshot?.threadId}
             scrollRef={messageScroll}
+            scrollRequest={scrollRequest}
+            onScrollRequestHandled={clearScrollRequest}
             artifactTarget={transcriptArtifactTarget}
             messages={transcriptMessages}
             olderCursor={activeSnapshot?.olderCursor ?? null}
@@ -4474,6 +4481,8 @@ export function ShellPage() {
 
 const Transcript = memo(function Transcript({
   scrollRef,
+  scrollRequest,
+  onScrollRequestHandled,
   artifactTarget,
   messages,
   olderCursor,
@@ -4500,6 +4509,8 @@ const Transcript = memo(function Transcript({
   onOpenComputer,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
+  scrollRequest: { messageId: string; nonce: number } | null;
+  onScrollRequestHandled: () => void;
   artifactTarget: ArtifactTarget;
   messages: ThreadMessage[];
   olderCursor: number | null;
@@ -4657,6 +4668,23 @@ const Transcript = memo(function Transcript({
       reducedMotion ? 0 : 2_000,
     );
   }, [scrollRef]);
+
+  const scrolledJump = useRef<number | null>(null);
+  // A jump scroll must win over follow-the-tail: unfollow inside the commit
+  // that mounts the row so a live commit cannot cancel the animation, and keep
+  // retrying while the pinned window is still rendering.
+  useLayoutEffect(() => {
+    if (!scrollRequest || scrolledJump.current === scrollRequest.nonce) return;
+    const row = scrollRef.current?.querySelector(
+      `[data-message-id="${CSS.escape(scrollRequest.messageId)}"]`,
+    );
+    if (!row) return;
+    scrolledJump.current = scrollRequest.nonce;
+    following.current = false;
+    autoScrolling.current = false;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    onScrollRequestHandled();
+  }, [messages, scrollRequest, scrollRef, onScrollRequestHandled]);
 
   useLayoutEffect(() => {
     if (following.current) snapToEnd();
