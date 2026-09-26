@@ -14,6 +14,7 @@ import {
 import {
   ACTIVE_RUN_STATUSES,
   isActive,
+  isConversationalRun,
   projectMessages,
   resolveGroupTargetBotIds,
   runFailureError,
@@ -64,6 +65,19 @@ const THREAD_MESSAGE_PAGE_SIZE = 100;
 const RUNS_NEEDING_CONTINUE = new Set(["queued", "waiting_takeover"]);
 
 const STEERABLE_RUN_STATUSES = new Set(["queued", "leased", "running", "waiting_takeover"]);
+/**
+ * A routine's, webhook's, or creation intro's turn is its own prompt, not the conversation.
+ * A user message that lands while one is busy (not `waiting_input`) is stored as pending
+ * steering (no run): that run never claims it, and the continuation started when it finishes
+ * answers with the full thread. Starting a second run beside the intro overlaps it on a
+ * dedicated computer, where there is no per-bot execution lease, and both can reply.
+ * Composer text answers a waiting ask, including a routine or webhook ask, only when no
+ * steerable conversational run is active. When one is, the text steers that run and the
+ * ask stays on its card.
+ */
+function steersUserMessage(run: { status: string; trigger?: string | null }) {
+  return STEERABLE_RUN_STATUSES.has(run.status) && isConversationalRun(run.trigger);
+}
 
 type MentionTargetInput = string | { kind: "bot" | "group" | "routine" | "connector"; id: string };
 
@@ -646,19 +660,16 @@ export async function sendThreadMessage(
           replyQuote,
           clientNonce: input.clientNonce,
         });
-        // The creation intro has no tools. A message sent while it is still
-        // active must start its own run, not steer into that turn.
         const activeRuns = await tx.run.findMany({
           where: {
             threadId: target.threadId,
             botId: target.botId,
             status: { in: [...ACTIVE_RUN_STATUSES] },
-            trigger: { not: "created" },
           },
-          select: { id: true, taskId: true, status: true },
+          select: { id: true, taskId: true, status: true, trigger: true },
         });
         const waitingRuns = activeRuns.filter((run) => run.status === "waiting_input");
-        if (waitingRuns.length) {
+        if (waitingRuns.length && !activeRuns.some(steersUserMessage)) {
           const answerText = input.text?.trim();
           if (!answerText) {
             throw new ORPCError("CONFLICT", {
@@ -700,19 +711,23 @@ export async function sendThreadMessage(
           });
           return { message, runs: answered, eventSeq: event.seq };
         }
-        if (activeRuns.some((run) => !STEERABLE_RUN_STATUSES.has(run.status))) {
+        if (
+          activeRuns.some(
+            (run) => run.status !== "waiting_input" && !STEERABLE_RUN_STATUSES.has(run.status),
+          )
+        ) {
           throw new ORPCError("CONFLICT", {
             message: "Answer the pending ask first.",
           });
         }
-        const active = activeRuns[0];
+        const active = activeRuns.find(steersUserMessage) ?? activeRuns[0];
         if (active) {
           await tx.steeringMessage.create({
             data: {
               messageId: message.id,
               botId: target.botId,
               userId: actor.userId,
-              runId: active.id,
+              runId: steersUserMessage(active) ? active.id : null,
             },
           });
           await tx.message.update({ where: { id: message.id }, data: { runId: active.id } });
@@ -814,12 +829,16 @@ export async function sendThreadMessage(
           botId: { in: targetBotIds },
           status: { in: [...ACTIVE_RUN_STATUSES] },
         },
-        select: { id: true, taskId: true, botId: true, status: true },
+        select: { id: true, taskId: true, botId: true, status: true, trigger: true },
       });
       const activeByBotId = new Map<string, (typeof activeRuns)[number]>();
       const answeredByBotId = new Map<string, Array<(typeof activeRuns)[number]>>();
+      const conversationalBotIds = new Set(
+        activeRuns.filter(steersUserMessage).map((run) => run.botId),
+      );
       for (const run of activeRuns) {
         if (run.status === "waiting_input") {
+          if (conversationalBotIds.has(run.botId)) continue;
           const answerText = input.text?.trim();
           if (!answerText) {
             throw new ORPCError("CONFLICT", {
@@ -849,7 +868,10 @@ export async function sendThreadMessage(
             message: "Answer the pending ask first.",
           });
         }
-        if (!activeByBotId.has(run.botId)) activeByBotId.set(run.botId, run);
+        const current = activeByBotId.get(run.botId);
+        if (!current || (!steersUserMessage(current) && steersUserMessage(run))) {
+          activeByBotId.set(run.botId, run);
+        }
       }
       const runs: Array<{ id: string; taskId: string; botId: string; status: string }> = [];
       for (const botId of targetBotIds) {
@@ -861,7 +883,12 @@ export async function sendThreadMessage(
         const active = activeByBotId.get(botId);
         if (active) {
           await tx.steeringMessage.create({
-            data: { messageId: message.id, botId, userId: actor.userId, runId: active.id },
+            data: {
+              messageId: message.id,
+              botId,
+              userId: actor.userId,
+              runId: steersUserMessage(active) ? active.id : null,
+            },
           });
           runs.push(active);
           continue;
