@@ -4672,28 +4672,34 @@ const Transcript = memo(function Transcript({
   const scrolledJump = useRef<number | null>(null);
   const jumpScrolling = useRef(false);
   const jumpScrollTimer = useRef<number | undefined>(undefined);
+  const endJumpScroll = useCallback(() => {
+    jumpScrolling.current = false;
+    window.clearTimeout(jumpScrollTimer.current);
+    scrollRef.current?.removeEventListener("scrollend", endJumpScroll);
+  }, [scrollRef]);
   // A jump scroll must win over follow-the-tail: unfollow inside the commit
   // that mounts the row so a live commit cannot cancel the animation, keep
   // retrying while the pinned window is still rendering, and suppress the
-  // near-end follow re-arm for the jump's own scroll events (a downward jump
-  // to a message near the end passes through the near-end region).
+  // near-end follow re-arm only for the jump's own scroll events — scrollend
+  // (or user input interrupting it, which also fires scrollend) ends the
+  // suppression, with the timeout as fallback when no scroll happens.
   useLayoutEffect(() => {
     if (!scrollRequest || scrolledJump.current === scrollRequest.nonce) return;
-    const row = scrollRef.current?.querySelector(
+    const element = scrollRef.current;
+    const row = element?.querySelector(
       `[data-message-id="${CSS.escape(scrollRequest.messageId)}"]`,
     );
-    if (!row) return;
+    if (!element || !row) return;
     scrolledJump.current = scrollRequest.nonce;
     following.current = false;
     autoScrolling.current = false;
     jumpScrolling.current = true;
+    element.addEventListener("scrollend", endJumpScroll, { once: true });
     window.clearTimeout(jumpScrollTimer.current);
-    jumpScrollTimer.current = window.setTimeout(() => {
-      jumpScrolling.current = false;
-    }, 2_000);
+    jumpScrollTimer.current = window.setTimeout(endJumpScroll, 2_000);
     row.scrollIntoView({ behavior: "smooth", block: "center" });
     onScrollRequestHandled();
-  }, [messages, scrollRequest, scrollRef, onScrollRequestHandled]);
+  }, [messages, scrollRequest, scrollRef, endJumpScroll, onScrollRequestHandled]);
 
   useLayoutEffect(() => {
     if (following.current) snapToEnd();
