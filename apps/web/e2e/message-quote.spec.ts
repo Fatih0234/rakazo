@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { captureScreenshot, completeOnboarding, signup } from "./helpers";
+import { activeBotId, captureScreenshot, completeOnboarding, rpc, signup } from "./helpers";
 
 /**
  * Build a real browser Selection over `startNeedle` … `endNeedle` inside `scope`
@@ -195,6 +195,74 @@ test("rendered markdown selections survive server quote derivation", async ({ pa
   await expect(await quoteAndSend("code-a", "code-b", `reply-code-${stamp}`)).toContainText(
     "code-a --- code-b",
   );
+});
+
+test("an armed reply survives the parent paging out of the transcript", async ({ page }) => {
+  const stamp = Date.now();
+  await signup(page, `quote-evict-${stamp}@rakazo.test`, "password12", "Quote Tester");
+  await completeOnboarding(page);
+
+  const transcript = page.getByTestId("transcript");
+  const composer = page.getByRole("combobox", { name: /Message/ });
+  const botId = activeBotId(page);
+  const userRow = (text: string) =>
+    transcript
+      .locator("[data-message-id]")
+      .filter({ has: page.getByTestId("message-user-bubble") })
+      .filter({ hasText: text })
+      .first();
+
+  const parentText = `quote-evict-parent-${stamp}`;
+  await composer.fill(parentText);
+  await composer.press("Enter");
+  const parentRow = userRow(parentText);
+  await expect(parentRow).toBeVisible({ timeout: 20_000 });
+
+  await selectAndRelease(page, parentRow, `evict-parent-${stamp}`);
+  await page.getByTestId("quote-selection").click();
+  const replyChip = page.getByTestId("reply-chip");
+  await expect(replyChip).toBeVisible();
+  await expect(replyChip).toContainText(`evict-parent-${stamp}`);
+
+  // Newer durable messages push the parent out of the latest page (window is
+  // 100). While the flood's runs are alive, every refresh races the event
+  // stream and gets discarded as stale — so stop the thread first: the
+  // cancel/terminal event then triggers a refresh whose snapshot cannot be
+  // stale, committing the post-flood window without the parent.
+  for (let i = 0; i < 105; i++) {
+    await rpc(page, "threads/send", {
+      botId,
+      text: `quote-filler-${stamp}-${i}`,
+      clientNonce: `qf-${stamp}-${i}`,
+    });
+  }
+  const lastFiller = userRow(`quote-filler-${stamp}-104`);
+  await expect(lastFiller).toBeVisible({ timeout: 30_000 });
+  await rpc(page, "threads/stop", { botId });
+  // If every run already finished before the stop, no terminal event fires —
+  // nudge a refresh by reopening the computer panel until one lands quiet.
+  const computerButton = page.getByTitle("Agent computer");
+  await expect(async () => {
+    if ((await computerButton.getAttribute("data-active")) !== null) {
+      await computerButton.click();
+    }
+    await computerButton.click();
+    expect(await parentRow.count()).toBe(0);
+  }).toPass({ timeout: 30_000 });
+  await expect(replyChip).toBeVisible();
+
+  const replyText = `quote-evict-reply-${stamp}`;
+  await composer.fill(replyText);
+  await composer.press("Enter");
+  const replyRow = userRow(replyText);
+  await expect(replyRow).toBeVisible({ timeout: 20_000 });
+  const parentPreview = replyRow.getByTestId("reply-parent-preview");
+  await expect(parentPreview).toBeVisible();
+  await expect(parentPreview).toContainText(`evict-parent-${stamp}`);
+
+  // The link still reaches the evicted parent via the around-page jump.
+  await parentPreview.click();
+  await expect(userRow(parentText)).toBeVisible({ timeout: 20_000 });
 });
 
 test("a selection spanning two messages offers no quote action", async ({ page }) => {
