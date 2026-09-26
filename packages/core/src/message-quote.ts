@@ -1,5 +1,5 @@
 import type { MessageBlock } from "@rakazo/contracts";
-import { REPLY_QUOTE_MAX_LENGTH } from "@rakazo/contracts";
+import { truncateReplyQuote } from "@rakazo/contracts";
 import { toText } from "hast-util-to-text";
 import { toHast } from "mdast-util-to-hast";
 import remarkGfm from "remark-gfm";
@@ -8,6 +8,55 @@ import { unified } from "unified";
 
 const markdownParser = unified().use(remarkParse).use(remarkGfm);
 const MAX_QUOTABLE_SOURCE_LENGTH = 100_000;
+
+type MdastNode = { type?: string; value?: string; children?: MdastNode[] };
+
+/* The web renderer salvages <br> and <img alt> text inside table cells
+   (preserveSkippedTableText in @rakazo/chat-ui). The canonical text must carry
+   the same tokens or a quote of a rendered cell can never match. Keep the two
+   salvage implementations in sync. */
+function droppedTableHtmlText(html: string): string | null {
+  if (/^<br[\s/>]/i.test(html)) return " ";
+  const alt = html.match(/<img[^>]*\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i);
+  return alt ? decodeHtmlEntities(alt[1] ?? alt[2] ?? alt[3] ?? "") : null;
+}
+
+function decodeHtmlEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: "\u00a0",
+    quot: '"',
+  };
+  return value.replace(
+    /&(#(?:x[\da-f]+|\d+)|amp|apos|gt|lt|nbsp|quot);/gi,
+    (entity, code: string) => {
+      if (!code.startsWith("#")) return named[code.toLowerCase()] ?? entity;
+      const point = Number.parseInt(
+        code.slice(code[1]?.toLowerCase() === "x" ? 2 : 1),
+        code[1]?.toLowerCase() === "x" ? 16 : 10,
+      );
+      return Number.isInteger(point) && point > 0 && point <= 0x10ffff
+        ? String.fromCodePoint(point)
+        : entity;
+    },
+  );
+}
+
+function salvageSkippedTableHtml(node: MdastNode, insideCell = false): void {
+  const inCell = insideCell || node.type === "tableCell";
+  if (!node.children) return;
+  node.children = node.children.flatMap((child) => {
+    if (inCell && child.type === "html") {
+      const value = droppedTableHtmlText(child.value ?? "");
+      return value === null ? child : { type: "text", value };
+    }
+    salvageSkippedTableHtml(child, inCell);
+    return child;
+  });
+}
 
 type NormalizedText = {
   text: string;
@@ -18,6 +67,7 @@ type NormalizedText = {
 /** Render Markdown to the text exposed by the web renderer, without UI chrome. */
 export function visibleTextFromMarkdown(markdown: string): string {
   const mdast = markdownParser.parse(markdown);
+  salvageSkippedTableHtml(mdast as MdastNode);
   return toText(toHast(mdast));
 }
 
@@ -68,7 +118,7 @@ export function deriveMessageQuote(
   quoteHint: string,
   format: "markdown" | "plain-text",
 ): string | undefined {
-  const hint = normalizeWithOffsets(quoteHint.trim().slice(0, REPLY_QUOTE_MAX_LENGTH)).text;
+  const hint = normalizeWithOffsets(truncateReplyQuote(quoteHint.trim())).text;
   if (!hint) return undefined;
 
   const textBlocks = blocks.filter(
@@ -91,8 +141,9 @@ export function deriveMessageQuote(
     const start = canonical.starts[match];
     const end = canonical.ends[match + hint.length - 1];
     if (start === undefined || end === undefined) continue;
-    const quote = cleanVisibleExcerpt(visible.slice(start, end));
-    if (quote.length <= REPLY_QUOTE_MAX_LENGTH) return quote;
+    // The cleaned slice can exceed the cap when the hint collapsed whitespace
+    // runs; cap rather than drop, matching capture-time truncation.
+    return truncateReplyQuote(cleanVisibleExcerpt(visible.slice(start, end)));
   }
   return undefined;
 }

@@ -625,15 +625,20 @@ export async function sendThreadMessage(
         });
         if (!reply) throw new IsolationError();
         // Persist only text derived from the authoritative parent. A mismatch
-        // still sends a plain reply so quote verification cannot lose a message.
+        // or a derivation failure still sends a plain reply so quote
+        // verification cannot lose a message.
         if (requestedReplyQuote) {
           const parsedBlocks = MessageBlockSchema.array().safeParse(reply.blocks);
           if (parsedBlocks.success) {
-            replyQuote = deriveMessageQuote(
-              parsedBlocks.data,
-              requestedReplyQuote,
-              reply.role === "user" ? "plain-text" : "markdown",
-            );
+            try {
+              replyQuote = deriveMessageQuote(
+                parsedBlocks.data,
+                requestedReplyQuote,
+                reply.role === "user" ? "plain-text" : "markdown",
+              );
+            } catch {
+              replyQuote = undefined;
+            }
           }
         }
       }
