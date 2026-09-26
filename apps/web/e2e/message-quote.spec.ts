@@ -231,12 +231,22 @@ test("quoting a second message retargets the armed reply", async ({ page }) => {
 
   const firstText = `quote-switch-a-${stamp}`;
   const secondText = `quote-switch-b-${stamp}`;
+  // Each send must resolve before the next Enter — the composer swallows
+  // input while a send is in flight.
+  const sentFirst = page.waitForResponse(
+    (response) => response.url().includes("/rpc/threads/send") && response.ok(),
+  );
   await composer.fill(firstText);
   await composer.press("Enter");
+  await sentFirst;
   const firstRow = userRow(firstText);
   await expect(firstRow).toBeVisible({ timeout: 20_000 });
+  const sentSecond = page.waitForResponse(
+    (response) => response.url().includes("/rpc/threads/send") && response.ok(),
+  );
   await composer.fill(secondText);
   await composer.press("Enter");
+  await sentSecond;
   const secondRow = userRow(secondText);
   await expect(secondRow).toBeVisible({ timeout: 20_000 });
 

@@ -5244,9 +5244,15 @@ const Composer = memo(function Composer({
   const showComposerPlaceholder =
     draft.length === 0 && selectedSkill === null && selectedMentions.length === 0;
   const replyName = replyTarget ? (replyTargetName ?? previewMessageText(replyTarget)) : "";
+  const replyNameRef = useRef(replyName);
+  replyNameRef.current = replyName;
+  const announceTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(announceTimer.current), []);
 
   // Arming or retargeting a reply unmounts the control that started it, so
   // focus would drop to <body>; announce on start and when the target changes.
+  // The timer lives in a ref: a same-id rerender (e.g. the display name
+  // resolving after arming) must not cancel the pending announcement.
   useEffect(() => {
     const prev = prevReplyTarget.current;
     prevReplyTarget.current = replyTarget ?? null;
@@ -5256,10 +5262,12 @@ const Composer = memo(function Composer({
       // Clear-then-set so a switch between same-author targets re-announces —
       // identical live-region text would otherwise be a no-op.
       setReplyAnnouncement("");
-      const timer = window.setTimeout(() => setReplyAnnouncement(t`Replying to ${replyName}`), 50);
-      return () => window.clearTimeout(timer);
+      window.clearTimeout(announceTimer.current);
+      announceTimer.current = window.setTimeout(
+        () => setReplyAnnouncement(t`Replying to ${replyNameRef.current}`),
+        50,
+      );
     }
-    return undefined;
   }, [replyTarget, replyName, t]);
 
   return (
