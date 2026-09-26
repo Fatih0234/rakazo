@@ -7,7 +7,7 @@ import "./markdown-table.css";
 import { droppedTableHtmlText } from "@rakazo/contracts";
 import { CheckIcon, CopyIcon } from "./icons";
 import { type ChatMarkdownProps, closeUnterminatedFence, sanitizeMarkdownUrl } from "./markdown";
-import { MarkdownTable } from "./markdown-table";
+import { MarkdownTable, MarkdownTableSourceContext } from "./markdown-table";
 
 function preserveSkippedTableText() {
   return (tree: HastNode) => {
@@ -87,15 +87,17 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 
   return (
     <div className={streaming ? "rk-chat-markdown rk-chat-markdown-streaming" : "rk-chat-markdown"}>
-      <ReactMarkdown
-        components={components}
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[preserveSkippedTableText]}
-        skipHtml
-        urlTransform={(url) => sanitizeMarkdownUrl(url, true) ?? ""}
-      >
-        {source}
-      </ReactMarkdown>
+      <MarkdownTableSourceContext.Provider value={source}>
+        <ReactMarkdown
+          components={components}
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[preserveSkippedTableText]}
+          skipHtml
+          urlTransform={(url) => sanitizeMarkdownUrl(url, true) ?? ""}
+        >
+          {source}
+        </ReactMarkdown>
+      </MarkdownTableSourceContext.Provider>
       {streaming ? <span aria-hidden="true" className="rk-chat-markdown-cursor" /> : null}
     </div>
   );
