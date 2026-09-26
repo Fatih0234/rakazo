@@ -225,10 +225,8 @@ test("an armed reply survives the parent paging out of the transcript", async ({
   await expect(replyChip).toContainText(`evict-parent-${stamp}`);
 
   // Newer durable messages push the parent out of the latest page (window is
-  // 100). While the flood's runs are alive, every refresh races the event
-  // stream and gets discarded as stale — so stop the thread first: the
-  // cancel/terminal event then triggers a refresh whose snapshot cannot be
-  // stale, committing the post-flood window without the parent.
+  // 100). While the flood's runs are alive, refreshes race the event stream and
+  // get discarded as stale — so stop the thread to end the churn first.
   for (let i = 0; i < 105; i++) {
     await rpc(page, "threads/send", {
       botId,
@@ -238,16 +236,26 @@ test("an armed reply survives the parent paging out of the transcript", async ({
   }
   const lastFiller = userRow(`quote-filler-${stamp}-104`);
   await expect(lastFiller).toBeVisible({ timeout: 30_000 });
+  const lastFillerId = await lastFiller.getAttribute("data-message-id");
+  expect(lastFillerId).toBeTruthy();
   await rpc(page, "threads/stop", { botId });
-  // If every run already finished before the stop, no terminal event fires —
-  // nudge a refresh by reopening the computer panel until one lands quiet.
+  // stop deletes the cancelled runs' thread.progress events; if one of those
+  // was the last applied event, the live cursor outranks every later snapshot
+  // and refreshes are discarded as stale. A reaction writes one durable event
+  // past the wedge — no run, no new churn — so the next refresh can commit.
+  await rpc(page, "threads/react", {
+    botId,
+    messageId: lastFillerId,
+    reaction: "👍",
+    clientNonce: `qr-${stamp}`,
+  });
   const computerButton = page.getByTitle("Agent computer");
   await expect(async () => {
     if ((await computerButton.getAttribute("data-active")) !== null) {
       await computerButton.click();
     }
     await computerButton.click();
-    expect(await parentRow.count()).toBe(0);
+    await expect(parentRow).toHaveCount(0, { timeout: 3_000 });
   }).toPass({ timeout: 30_000 });
   await expect(replyChip).toBeVisible();
 
@@ -263,6 +271,9 @@ test("an armed reply survives the parent paging out of the transcript", async ({
   // The link still reaches the evicted parent via the around-page jump.
   await parentPreview.click();
   await expect(userRow(parentText)).toBeVisible({ timeout: 20_000 });
+
+  // Stop the reply's run so its continues cannot churn into the next test.
+  await rpc(page, "threads/stop", { botId });
 });
 
 test("a selection spanning two messages offers no quote action", async ({ page }) => {
