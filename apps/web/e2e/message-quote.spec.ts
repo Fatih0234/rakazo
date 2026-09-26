@@ -17,6 +17,9 @@ async function selectAndRelease(
 ) {
   await scope.evaluate(
     (el, { startNeedle, endNeedle }) => {
+      // The quote pill positions itself off the selection rect — keep the scope
+      // inside the viewport or a fixed-position pill renders offscreen.
+      el.scrollIntoView({ block: "center" });
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
       const nodes: Text[] = [];
       let node = walker.nextNode();
@@ -134,7 +137,7 @@ test("selecting a text span quotes it into a reply", async ({ page }, testInfo) 
   );
 });
 
-test("rendered markdown selections survive server quote derivation", async ({ page }) => {
+test("rendered markdown selections survive server quote derivation", async ({ page }, testInfo) => {
   const stamp = Date.now();
   await signup(page, `quote-markdown-${stamp}@rakazo.test`, "password12", "Quote Tester");
   await completeOnboarding(page);
@@ -172,6 +175,15 @@ test("rendered markdown selections survive server quote derivation", async ({ pa
   );
   await expect(await quoteAndSend("cell-a", "cell-b", `reply-table-${stamp}`)).toContainText(
     "cell-a cell-b",
+  );
+  // Row drags cross the card's row-number gutter and pager footer — chrome
+  // text is unselectable so the excerpt still matches the rendered table.
+  await expect(await quoteAndSend("cell-a", "cell-d", `reply-table-rows-${stamp}`)).toContainText(
+    "cell-a cell-b cell-c cell-d",
+  );
+  await captureScreenshot(page, testInfo, "quote-table-row-selection");
+  await expect(await quoteAndSend("cell-c", "rows", `reply-table-footer-${stamp}`)).toContainText(
+    "cell-c cell-d",
   );
   await expect(await quoteAndSend("code-a", "code-b", `reply-code-${stamp}`)).toContainText(
     "code-a --- code-b",

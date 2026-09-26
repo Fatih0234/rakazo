@@ -34,6 +34,16 @@
   color: var(--foreground);
 }
 
+/* Chrome is not table text: row numbers, the toolbar strip, the pager range,
+   and the empty state must stay out of text selections so a dragged excerpt
+   still matches the message's rendered text for quoting. */
+.rk-table-head,
+.rk-table-gutter,
+.rk-table-footer,
+.rk-table-empty {
+  user-select: none;
+}
+
 .rk-table-scroll {
   overflow: auto;
   max-height: 20em;
