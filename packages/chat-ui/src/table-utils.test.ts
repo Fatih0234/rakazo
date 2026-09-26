@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HastNode } from "./table-utils";
 import {
+  columnSortLabel,
   compareCellText,
   extractTable,
   isNumericColumn,
@@ -238,6 +239,31 @@ describe("nextSort", () => {
     expect(nextSort({ column: 0, direction: "asc" }, 0)).toEqual({ column: 0, direction: "desc" });
     expect(nextSort({ column: 0, direction: "desc" }, 0)).toBeNull();
     expect(nextSort({ column: 0, direction: "desc" }, 1)).toEqual({ column: 1, direction: "asc" });
+  });
+});
+
+describe("columnSortLabel", () => {
+  it("returns the header when unique and non-empty", () => {
+    expect(columnSortLabel(["Item", "Qty"], 0)).toBe("Item");
+  });
+
+  it("falls back to position for empty headers", () => {
+    expect(columnSortLabel(["", "Qty"], 0)).toBe("column 1");
+  });
+
+  it("disambiguates duplicate headers", () => {
+    expect(columnSortLabel(["Qty", "Qty"], 0)).toBe("Qty, column 1");
+    expect(columnSortLabel(["Qty", "Qty"], 1)).toBe("Qty, column 2");
+  });
+
+  it("disambiguates empty fallbacks that collide with a literal header", () => {
+    expect(columnSortLabel(["", "column 1"], 0)).toBe("column 1, empty");
+    expect(columnSortLabel(["", "column 1"], 1)).toBe("column 1");
+  });
+
+  it("keeps suffixing while a literal header claims the label", () => {
+    expect(columnSortLabel(["", "column 1", "column 1, empty"], 0)).toBe("column 1, empty, empty");
+    expect(columnSortLabel(["a", "a", "a, column 1"], 0)).toBe("a, column 1, empty");
   });
 });
 
