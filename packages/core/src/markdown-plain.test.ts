@@ -92,6 +92,13 @@ describe("plainTextFromMarkdown", () => {
     expect(plainTextFromMarkdown("![plot](https://example.com/a_(b_(c)))")).toBe("plot");
   });
 
+  it("keeps a link label with nested brackets", () => {
+    expect(plainTextFromMarkdown("See [the [inner] docs](https://example.com)")).toBe(
+      "See the [inner] docs",
+    );
+    expect(plainTextFromMarkdown("see ![a [b] icon](img.png) here")).toBe("see a [b] icon here");
+  });
+
   it("keeps CommonMark autolink text", () => {
     expect(plainTextFromMarkdown("<https://example.com>")).toBe("https://example.com");
     expect(plainTextFromMarkdown("Open <https://example.com/a_(b)> now")).toBe(
@@ -259,6 +266,14 @@ describe("plainTextFromMarkdown", () => {
     expect(plainTextFromMarkdown("> | q | r |")).toBe("q, r");
   });
 
+  it("treats a marked separator row as syntax, not cells", () => {
+    expect(plainTextFromMarkdown("> | --- |")).toBe("");
+    expect(plainTextFromMarkdown("- | --- |")).toBe("");
+    expect(plainTextFromMarkdown("| a | b |\n| --- | --- |\n> | --- | --- |\n| c | d |")).toBe(
+      "a, b c, d",
+    );
+  });
+
   it("keeps separator-shaped lines inside fenced code", () => {
     expect(plainTextFromMarkdown("```\n|---|\n```")).toBe("|---|");
     expect(plainTextFromMarkdown("| a |\n| - |\n```\nx | y\n```")).toBe("a x | y");
@@ -272,6 +287,14 @@ describe("plainTextFromMarkdown", () => {
   it("keeps escaped asterisks literal inside table cells", () => {
     // Android parity: \* must survive as "*" past the emphasis strips.
     expect(plainTextFromMarkdown("| \\*x\\* | y |\n| - | - |")).toBe("*x*, y");
+  });
+
+  it("strips ordered list markers in both styles", () => {
+    // Android parity: `1)` is a list marker like `1.` — a shared fix.
+    expect(plainTextFromMarkdown("1. first\n2) second")).toBe("first second");
+    expect(plainTextFromMarkdown("  3) third")).toBe("third");
+    // No space after the marker keeps the digits as text.
+    expect(plainTextFromMarkdown("1)st place")).toBe("1)st place");
   });
 
   it("strips quote markers without a space and indented headings", () => {

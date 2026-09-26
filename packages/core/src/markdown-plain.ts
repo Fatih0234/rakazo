@@ -72,7 +72,7 @@ function stripLineMarker(line: string): string {
     .replace(/^\s{0,3}#{1,6}\s+/, "")
     .replace(/^\s*>\s?/, "")
     .replace(/^\s*[-*+]\s+/, "")
-    .replace(/^\s*\d+\.\s+/, "");
+    .replace(/^\s*\d+[.)]\s+/, "");
   return /^\s*[-*_]{3,}\s*$/.test(stripped) ? "" : stripped;
 }
 
@@ -93,7 +93,8 @@ function tableCells(line: string): string {
  * dash-only rows are data. Pipe-wrapped lines still flatten leniently outside
  * tables so sloppy single rows preview cleanly. Lines carrying a block
  * marker (heading, quote, list, break) can never be table rows — they end the
- * table — but a quoted stand-alone row like `> | a |` still flattens.
+ * table — but a quoted stand-alone row like `> | a |` still flattens, while a
+ * marked separator row stays syntax.
  */
 function flattenTableRows(text: string): string {
   const out: string[] = [];
@@ -106,7 +107,10 @@ function flattenTableRows(text: string): string {
       inTable = false;
       prevHadPipe = false;
       prevFlattened = false;
-      out.push(TABLE_ROW.test(line) ? tableCells(line) : line);
+      // A separator row stays syntax even behind a quote or list marker.
+      if (!isTableSeparator(line)) {
+        out.push(TABLE_ROW.test(line) ? tableCells(line) : line);
+      }
       continue;
     }
     if (!line.includes("|")) {
