@@ -137,9 +137,7 @@ test("selecting a text span quotes it into a reply", async ({ page }, testInfo) 
   );
 });
 
-test("rendered markdown selections survive server quote derivation", async ({
-  page,
-}, testInfo) => {
+test("rendered markdown selections survive server quote derivation", async ({ page }, testInfo) => {
   const stamp = Date.now();
   await signup(page, `quote-markdown-${stamp}@rakazo.test`, "password12", "Quote Tester");
   await completeOnboarding(page);
