@@ -57,6 +57,7 @@ export const TableCard = memo(function TableCard({
   const [copiedSignature, setCopiedSignature] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const copiedTimer = useRef<number | undefined>(undefined);
+  const announceTimer = useRef<number | undefined>(undefined);
   const expandButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -107,13 +108,29 @@ export const TableCard = memo(function TableCard({
     setPage(0);
     setExpanded(false);
   }, [schemaKey]);
-  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(copiedTimer.current);
+      window.clearTimeout(announceTimer.current);
+    },
+    [],
+  );
+
+  // Clear then restore so identical successive strings still fire a live-region update.
+  const announce = (text: string) => {
+    window.clearTimeout(announceTimer.current);
+    setAnnouncement("");
+    announceTimer.current = window.setTimeout(() => setAnnouncement(text), 0);
+  };
 
   const toggleSort = (column: number) => {
-    const next = nextSort(sort, column);
-    setSort(next);
+    let next: ReturnType<typeof nextSort> = null;
+    setSort((current) => {
+      next = nextSort(current, column);
+      return next;
+    });
     setPage(0);
-    setAnnouncement(
+    announce(
       next
         ? `Sorted by ${columnSortLabel(columns, column)}, ${
             next.direction === "asc" ? "ascending" : "descending"
@@ -128,7 +145,7 @@ export const TableCard = memo(function TableCard({
       .writeText(tableToTsv(columns, sortedRows))
       .then(() => {
         setCopiedSignature(dataSignature);
-        setAnnouncement("Copied");
+        announce("Copied");
         window.clearTimeout(copiedTimer.current);
         copiedTimer.current = window.setTimeout(() => setCopiedSignature(null), 1500);
       })
@@ -178,7 +195,7 @@ export const TableCard = memo(function TableCard({
         disabled={safePage === 0}
         onClick={() => {
           setPage(safePage - 1);
-          setAnnouncement(`Page ${safePage} of ${pageCount}`);
+          announce(`Page ${safePage} of ${pageCount}`);
         }}
       >
         <ChevronLeftIcon />
@@ -190,7 +207,7 @@ export const TableCard = memo(function TableCard({
         disabled={safePage >= pageCount - 1}
         onClick={() => {
           setPage(safePage + 1);
-          setAnnouncement(`Page ${safePage + 2} of ${pageCount}`);
+          announce(`Page ${safePage + 2} of ${pageCount}`);
         }}
       >
         <ChevronRightIcon />
@@ -244,12 +261,17 @@ export const TableCard = memo(function TableCard({
     </div>
   );
 
+  const status = (
+    <div role="status" className="rk-sr-only">
+      {announcement}
+    </div>
+  );
+
   return (
     <Dialog open={expanded} onOpenChange={setExpanded}>
       <div className="rk-table-card rk-table-box" data-testid="table-card">
-        <div role="status" className="rk-sr-only">
-          {announcement}
-        </div>
+        {/* Keep the live region in the active view — dialog content is outside the card. */}
+        {expanded ? null : status}
         {tools("card")}
         {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must
             be keyboard-focusable (WCAG 2.1.1 / axe scrollable-region-focusable). */}
@@ -265,6 +287,7 @@ export const TableCard = memo(function TableCard({
         className="rk-table-dialog rk-table-box rk-chat-markdown w-auto sm:max-w-none"
       >
         <DialogTitle className="rk-table-dialog-title">Table</DialogTitle>
+        {expanded ? status : null}
         {tools("dialog")}
         {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must
             be keyboard-focusable (WCAG 2.1.1 / axe scrollable-region-focusable). */}

@@ -5245,13 +5245,13 @@ const Composer = memo(function Composer({
     draft.length === 0 && selectedSkill === null && selectedMentions.length === 0;
   const replyName = replyTarget ? (replyTargetName ?? previewMessageText(replyTarget)) : "";
 
-  // Arming a reply (quote pill or hover Reply) unmounts the control that
-  // started it, so focus would drop to <body>; the announcement covers the
-  // chip appearing, and cancel announces itself on the chip's own button.
+  // Arming or retargeting a reply unmounts the control that started it, so
+  // focus would drop to <body>; announce on start and when the target changes.
   useEffect(() => {
-    const wasReplying = prevReplyTarget.current != null;
+    const prev = prevReplyTarget.current;
     prevReplyTarget.current = replyTarget ?? null;
-    if (replyTarget && !wasReplying) {
+    if (!replyTarget) return;
+    if (!prev || prev.id !== replyTarget.id) {
       textareaRef.current?.focus();
       setReplyAnnouncement(t`Replying to ${replyName}`);
     }
@@ -5690,6 +5690,13 @@ function previewMessageText(message: ThreadMessage): string {
   return t`Message`;
 }
 
+/** Bound reply excerpts used in accessible names (visible UI truncates via CSS). */
+function accessibleReplyExcerpt(text: string, max = 120): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, max - 1).trimEnd()}…`;
+}
+
 function formatRosterTime(isoDate?: string | null): string {
   if (!isoDate) return "";
   try {
@@ -5950,13 +5957,13 @@ const MessageView = memo(function MessageView({
         <button
           type="button"
           data-testid="reply-parent-preview"
-          // The label names the action AND the content; a bare action label
-          // would hide the quoted excerpt from screen readers entirely.
+          // Name the action and a short excerpt; a bare action label would
+          // hide the quote, and an unbounded quote can be thousands of chars.
           aria-label={
             message.replyQuote
-              ? t`Jump to replied message: “${message.replyQuote}”`
+              ? t`Jump to replied message: “${accessibleReplyExcerpt(message.replyQuote)}”`
               : replyPreview
-                ? t`Jump to replied message: ${previewMessageText(replyPreview)}`
+                ? t`Jump to replied message: ${accessibleReplyExcerpt(previewMessageText(replyPreview))}`
                 : t`Jump to replied message`
           }
           onClick={() => onJumpToMessage?.(parentJumpId)}

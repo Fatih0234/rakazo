@@ -139,14 +139,15 @@ export function isNumericColumn(rows: string[][], columnIndex: number): boolean 
   return seen;
 }
 
-/**
- * Accessible column name for sort labels/announcements: empty headers fall
- * back to position, duplicates get their position appended.
- */
+/** Accessible sort label: empty → position; duplicates / collisions append position. */
 export function columnSortLabel(columns: string[], index: number): string {
   const column = columns[index] ?? "";
-  const duplicated = column !== "" && columns.indexOf(column) !== columns.lastIndexOf(column);
-  if (!column) return `column ${index + 1}`;
+  if (!column) {
+    const fallback = `column ${index + 1}`;
+    // A literal header "column N" would otherwise share the empty-header fallback.
+    return columns.includes(fallback) ? `${fallback}, empty` : fallback;
+  }
+  const duplicated = columns.indexOf(column) !== columns.lastIndexOf(column);
   return duplicated ? `${column}, column ${index + 1}` : column;
 }
 
