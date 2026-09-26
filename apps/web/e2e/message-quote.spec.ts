@@ -218,6 +218,56 @@ test("rendered markdown selections survive server quote derivation", async ({ pa
   await captureScreenshot(page, testInfo, "reply-preview-plain-text");
 });
 
+test("selecting text inside a table cell quotes the rendered cell", async ({ page }, testInfo) => {
+  const stamp = Date.now();
+  await signup(page, `quote-cell-${stamp}@rakazo.test`, "password12", "Quote Tester");
+  await completeOnboarding(page);
+
+  const transcript = page.getByTestId("transcript");
+  const composer = page.getByRole("combobox", { name: /Message/ });
+  const cellText = `quarterly revenue ${stamp}`;
+  // The scripted bot echoes the prompt, so the reply carries a table card.
+  // Chrome (row numbers, toolbar, pager) is unselectable; cell text is not.
+  await composer.fill(
+    `show this table:\n\n| Metric | Value |\n| --- | --- |\n| ${cellText} | 42 |\n| cloud spend | 7 |`,
+  );
+  await composer.press("Enter");
+
+  const sourceRow = transcript
+    .locator("[data-message-id]")
+    .filter({ has: page.getByTestId("message-bot-bubble") })
+    .filter({ hasText: cellText })
+    .first();
+  await expect(sourceRow.getByTestId("table-card")).toBeVisible({ timeout: 20_000 });
+
+  // A selection contained in one cell offers Quote, and the armed chip shows
+  // the flattened cell text — never raw `| … |` Markdown or card chrome.
+  await selectAndRelease(page, sourceRow, cellText);
+  const quoteButton = page.getByTestId("quote-selection");
+  await expect(quoteButton).toBeVisible();
+  await captureScreenshot(page, testInfo, "quote-table-cell-selection");
+  await quoteButton.click();
+  const replyChip = page.getByTestId("reply-chip");
+  await expect(replyChip).toBeVisible();
+  await expect(replyChip).toContainText(cellText);
+  await expect(replyChip).not.toContainText("|");
+  await expect(composer).toBeFocused();
+
+  // The sent reply persists the server-derived excerpt from the same cell.
+  const replyText = `quote-cell-${stamp} confirmed?`;
+  await composer.fill(replyText);
+  await composer.press("Enter");
+  const replyRow = transcript
+    .locator("[data-message-id]")
+    .filter({ has: page.getByTestId("message-user-bubble") })
+    .filter({ hasText: replyText })
+    .first();
+  await expect(replyRow).toBeVisible({ timeout: 20_000 });
+  const parentPreview = replyRow.getByTestId("reply-parent-preview");
+  await expect(parentPreview).toContainText(cellText);
+  await expect(parentPreview).not.toContainText("|");
+});
+
 test("an armed reply survives the parent paging out of the transcript", async ({ page }) => {
   const stamp = Date.now();
   await signup(page, `quote-evict-${stamp}@rakazo.test`, "password12", "Quote Tester");
