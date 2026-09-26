@@ -636,7 +636,8 @@ export async function sendThreadMessage(
                 requestedReplyQuote,
                 reply.role === "user" ? "plain-text" : "markdown",
               );
-            } catch {
+            } catch (error) {
+              getLogger().error("thread send quote derivation", error);
               replyQuote = undefined;
             }
           }
