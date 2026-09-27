@@ -243,6 +243,8 @@ import {
   modelAcceptsImageInput,
   modelIdSupportsImages,
 } from "./model-vision.js";
+import type { CodexLiveCatalog } from "./pi-codex-catalog.js";
+import { codexLiveListsModel } from "./pi-codex-catalog.js";
 import { toOAuthCredential } from "./pi-credentials.js";
 import {
   parseModelSecret,
@@ -585,6 +587,11 @@ export interface ExecutorDeps {
   cloudAgent?: CloudAgentConnection | null;
   /** Optional Auto Review verifier. When omitted, the factory selects from env (llm | jev | scripted). */
   autoReview?: AutoReviewProvider;
+  /**
+   * Live Codex model catalog; when present, a statically excluded Codex model
+   * can still run for the OAuth account whose backend lists it.
+   */
+  codexCatalog?: CodexLiveCatalog;
   /** Aborted when createApp stop() begins so in-flight continueRun boot waits exit promptly. */
   shutdownSignal?: AbortSignal;
 }
@@ -5201,6 +5208,13 @@ function deploymentKeyFor(deps: ExecutorDeps, provider: string): string | undefi
   return provider === resolveDeploymentModel().provider ? deps.deploymentModelKey : undefined;
 }
 
+/**
+ * A run can afford a longer catalog wait than the models.list read bound — the
+ * account answer decides whether a statically excluded model is allowed at all.
+ * Still bounded well under the fetch's own abort timeout.
+ */
+const CODEX_LIVE_RUN_WAIT_MS = 8_000;
+
 async function resolveModelKey(
   deps: ExecutorDeps,
   userId: string,
@@ -5234,8 +5248,6 @@ async function resolveModelKey(
       });
       if (!row) return { apiKey: deploymentKeyFor(deps, provider), redact: [] };
       const plaintext = deps.secretStore.load(row.ciphertext, row.id);
-      const authError = validateModelAuthAvailability(provider, modelId, plaintext);
-      if (authError) throw new UnavailableModelForAuthError(authError);
       registerSecrets?.(secretValuesToRedact(parseModelSecret(plaintext)));
       const persist = async (next: string) => {
         const stored = await deps.secretStore.put(
@@ -5254,9 +5266,28 @@ async function resolveModelKey(
           data: { ciphertext: stored.ciphertext },
         });
       };
-      const resolved = await resolveModelAuth(plaintext, credential.provider, {
-        persist,
-      });
+      const resolveAuth = () => resolveModelAuth(plaintext, credential.provider, { persist });
+      let resolved: Awaited<ReturnType<typeof resolveAuth>> | undefined;
+      const authError = validateModelAuthAvailability(provider, modelId, plaintext);
+      if (authError) {
+        // A statically excluded Codex model may still run when the backend's
+        // per-account catalog lists it for this credential. The catalog path
+        // never refreshes or writes credentials, so resolve inside this lock
+        // first — rotating a stale token the way any run would — then ask.
+        let liveListed = false;
+        if (deps.codexCatalog && parseModelSecret(plaintext).kind === "oauth") {
+          resolved = await resolveAuth();
+          liveListed = await codexLiveListsModel(
+            deps.codexCatalog,
+            userId,
+            resolved.secret,
+            modelId,
+            { waitMs: CODEX_LIVE_RUN_WAIT_MS },
+          );
+        }
+        if (!liveListed) throw new UnavailableModelForAuthError(authError);
+      }
+      resolved ??= await resolveAuth();
       const oauth = resolved.secret.kind === "oauth" ? resolved.secret.credential : undefined;
       const baseUrl =
         resolved.secret.kind === "openai_compatible" ? resolved.secret.baseUrl : undefined;

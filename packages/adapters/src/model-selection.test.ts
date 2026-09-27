@@ -291,6 +291,8 @@ describe("space catalog auth", () => {
 
     expect(auth.byModel["openai-codex"]?.[spark]).toBe("api_key");
     expect(auth.byProvider["openai-codex"]).toBe("oauth");
+    expect(auth.secretIdByModel["openai-codex"]?.[spark]).toBe("secret-api");
+    expect(auth.secretIdByProvider["openai-codex"]).toBe("secret-oauth");
     expect(listsSpark(auth)).toBe(true);
     expect(
       listAvailablePiCatalog(auth.byProvider, auth.byModel).some(
@@ -339,6 +341,8 @@ describe("space catalog auth", () => {
     );
 
     expect(auth.byModel["openai-codex"]?.[spark]).toBe("oauth");
+    expect(auth.secretIdByModel["openai-codex"]?.[spark]).toBe("secret-oauth");
+    expect(auth.secretIdByProvider["openai-codex"]).toBe("secret-api");
     expect(listsSpark(auth)).toBe(false);
   });
 
@@ -500,6 +504,152 @@ describe("stored model auth", () => {
     await expect(
       readStoredModelAuth(prisma, { load }, userId, "secret-oauth", "openai-codex", "gpt-6-luna"),
     ).resolves.toEqual({ status: "ready" });
+  });
+
+  it("keeps a decryptable-but-corrupt secret unreadable even when the live catalog lists the model", async () => {
+    const prisma = {
+      secret: {
+        findFirst: vi.fn(async () => ({
+          id: "secret-corrupt",
+          ciphertext: "cipher-corrupt",
+        })),
+      },
+    } as unknown as PrismaClient;
+    // Decrypts fine, but the stored JSON claims oauth without a credential.
+    const load = vi.fn(() => JSON.stringify({ kind: "oauth" }));
+    const live = {
+      read: vi.fn(async () => [
+        {
+          slug: "gpt-5.3-codex-spark",
+          reasoningEfforts: [],
+          supportsImages: false,
+          supportsFastTier: true,
+        },
+      ]),
+    };
+
+    await expect(
+      readStoredModelAuth(
+        prisma,
+        { load },
+        userId,
+        "secret-corrupt",
+        "openai-codex",
+        "gpt-5.3-codex-spark",
+        live,
+      ),
+    ).resolves.toEqual({ status: "unreadable" });
+    expect(live.read).not.toHaveBeenCalled();
+  });
+
+  it("accepts a statically excluded model when its own account's live catalog lists it", async () => {
+    const prisma = {
+      secret: {
+        findFirst: vi.fn(async () => ({
+          id: "secret-oauth",
+          ciphertext: "cipher-oauth",
+        })),
+      },
+    } as unknown as PrismaClient;
+    const oauthWithAccount = JSON.stringify({
+      type: "oauth",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "acct-live",
+    });
+    const load = vi.fn(() => oauthWithAccount);
+    const live = {
+      read: vi.fn(async (_userId: string, account: { accountId: string }) =>
+        account.accountId === "acct-live"
+          ? [
+              {
+                slug: "gpt-5.3-codex-spark",
+                reasoningEfforts: [],
+                supportsImages: false,
+                supportsFastTier: true,
+              },
+            ]
+          : undefined,
+      ),
+    };
+
+    await expect(
+      readStoredModelAuth(
+        prisma,
+        { load },
+        userId,
+        "secret-oauth",
+        "openai-codex",
+        "gpt-5.3-codex-spark",
+        live,
+      ),
+    ).resolves.toEqual({ status: "ready" });
+    expect(live.read).toHaveBeenCalledWith(
+      userId,
+      expect.objectContaining({ accountId: "acct-live" }),
+      undefined,
+    );
+
+    // A catalog that does not list the model keeps the static rejection.
+    await expect(
+      readStoredModelAuth(
+        prisma,
+        { load },
+        userId,
+        "secret-oauth",
+        "openai-codex",
+        "gpt-5.3-codex-spark",
+        { read: vi.fn(async () => []) },
+      ),
+    ).resolves.toEqual({
+      status: "rejected",
+      message: expect.stringMatching(/not available with your current sign-in/i),
+    });
+  });
+
+  it("does not consult the live catalog for an expired credential", async () => {
+    const prisma = {
+      secret: {
+        findFirst: vi.fn(async () => ({
+          id: "secret-oauth",
+          ciphertext: "cipher-oauth",
+        })),
+      },
+    } as unknown as PrismaClient;
+    const load = vi.fn(() =>
+      JSON.stringify({
+        type: "oauth",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() - 1_000,
+        accountId: "acct-live",
+      }),
+    );
+    const read = vi.fn(
+      async (
+        _userId: string,
+        account: { accountId: string; accessToken: () => Promise<string | null> },
+      ) => {
+        // The catalog path must see an expired credential as "no usable token".
+        return (await account.accessToken()) === null ? undefined : [];
+      },
+    );
+
+    await expect(
+      readStoredModelAuth(
+        prisma,
+        { load },
+        userId,
+        "secret-oauth",
+        "openai-codex",
+        "gpt-5.3-codex-spark",
+        { read },
+      ),
+    ).resolves.toEqual({
+      status: "rejected",
+      message: expect.stringMatching(/not available with your current sign-in/i),
+    });
   });
 });
 

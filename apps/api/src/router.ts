@@ -42,7 +42,8 @@ import {
   cancelComputerRunWork,
   checkpointAndRecordComputerWorkspace,
   clearInactiveUserComputerControl,
-  codexLiveCatalogForSpace,
+  codexLiveCatalogsForSpace,
+  codexLiveListsModel,
   computerSupportsUpdate,
   computerUpdateView,
   createVoiceProvider,
@@ -65,6 +66,7 @@ import {
   mapScratchpadItem,
   modelCredentialAuthKindsForSpace,
   modelCredentialDto,
+  parseModelSecret,
   pickReusableConnection,
   planLiveConnectionSync,
   prepareApiInstall,
@@ -870,7 +872,7 @@ export function createRouter(deps: RouterDeps) {
           context.actor,
         );
         const available = listAvailablePiCatalog(auth.byProvider, auth.byModel);
-        const live = await codexLiveCatalogForSpace(
+        const live = await codexLiveCatalogsForSpace(
           deps.prisma,
           deps.secrets,
           context.actor,
@@ -878,7 +880,7 @@ export function createRouter(deps: RouterDeps) {
           codexCatalog,
         );
         return [
-          ...(live ? applyCodexLiveCatalog(available, auth, live) : available),
+          ...(live.size > 0 ? applyCodexLiveCatalog(available, auth, live) : available),
           scriptedCatalogEntry,
         ];
       }),
@@ -954,14 +956,19 @@ export function createRouter(deps: RouterDeps) {
             message: error instanceof Error ? error.message : "Invalid model connection",
           });
         }
-        return persistModelCredential(deps, context.actor, {
-          provider: input.provider,
-          plaintext,
-          label: input.label,
-          modelId: input.modelId,
-          supportsImages: input.supportsImages,
-          signal: context.signal,
-        });
+        return persistModelCredential(
+          deps,
+          context.actor,
+          {
+            provider: input.provider,
+            plaintext,
+            label: input.label,
+            modelId: input.modelId,
+            supportsImages: input.supportsImages,
+            signal: context.signal,
+          },
+          codexCatalog,
+        );
       }),
       probeOpenAiCompatible: authed.models.probeOpenAiCompatible.handler(
         async ({ context, input }) => {
@@ -1001,15 +1008,20 @@ export function createRouter(deps: RouterDeps) {
           input.loginId,
           context.actor,
           async (login) => {
-            return persistModelCredential(deps, context.actor, {
-              provider: login.provider,
-              plaintext: serializeModelSecret({ kind: "oauth", credential: login.credential }),
-              label:
-                login.label ??
-                listPiCatalog().find((entry) => entry.provider === login.provider)?.providerName,
-              modelId: login.modelId,
-              signal: login.signal,
-            });
+            return persistModelCredential(
+              deps,
+              context.actor,
+              {
+                provider: login.provider,
+                plaintext: serializeModelSecret({ kind: "oauth", credential: login.credential }),
+                label:
+                  login.label ??
+                  listPiCatalog().find((entry) => entry.provider === login.provider)?.providerName,
+                modelId: login.modelId,
+                signal: login.signal,
+              },
+              codexCatalog,
+            );
           },
         );
         if (result.status === "pending") {
@@ -1066,6 +1078,7 @@ export function createRouter(deps: RouterDeps) {
                   candidate.secretId,
                   input.provider,
                   input.modelId,
+                  codexCatalog,
                 );
                 if (auth.status === "unreadable") continue;
                 sawReadable = true;
@@ -1207,6 +1220,7 @@ export function createRouter(deps: RouterDeps) {
               credential.secretId,
               input.modelProvider,
               input.modelId,
+              codexCatalog,
             );
             if (authError) throw new ORPCError("BAD_REQUEST", { message: authError });
           }
@@ -5350,13 +5364,27 @@ async function persistModelCredential(
     supportsImages?: boolean;
     signal?: AbortSignal;
   },
+  codexCatalog: CodexLiveCatalog,
 ) {
   throwIfAborted(input.signal);
   const requestedModelId = usableModelId(input.modelId);
   const authError = requestedModelId
     ? validateModelAuthAvailability(input.provider, requestedModelId, input.plaintext)
     : undefined;
-  if (authError) throw new ORPCError("BAD_REQUEST", { message: authError });
+  // The backend's live catalog can clear a static OAuth exclusion for the
+  // account this credential signs into (e.g. Codex Spark on ChatGPT plans).
+  if (
+    authError &&
+    requestedModelId &&
+    !(await codexLiveListsModel(
+      codexCatalog,
+      actor.userId,
+      parseModelSecret(input.plaintext),
+      requestedModelId,
+    ))
+  ) {
+    throw new ORPCError("BAD_REQUEST", { message: authError });
+  }
   const stored = await deps.secrets.put(input.plaintext, {
     operationId: "cred",
     traceId: "cred",

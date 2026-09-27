@@ -1,13 +1,12 @@
-import type { OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai";
+import type { OAuthCredential } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@rakazo/contracts";
 import { ThinkingLevelSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
-import { findModelCredential } from "@rakazo/db";
 import type { ModelCredentialAuthKind } from "./pi-catalog-availability.js";
 import type { PiCatalogEntry } from "./pi-models.js";
-import { catalogModelLabel, listPiCatalog } from "./pi-models.js";
+import { listPiCatalog } from "./pi-models.js";
 import type { StoredModelSecret } from "./pi-oauth.js";
-import { CHATGPT_OAUTH_PROVIDER, parseModelSecret, resolveModelAuth } from "./pi-oauth.js";
+import { CHATGPT_OAUTH_PROVIDER, parseModelSecret } from "./pi-oauth.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
 /**
@@ -44,14 +43,24 @@ export type CodexCatalogResult =
   | { status: "ok"; models: CodexCatalogModel[] }
   | { status: "error"; reason: CodexCatalogFailureReason; httpStatus?: number };
 
-/** Account-scoped handle for one catalog read. `accessToken` may refresh lazily. */
+/**
+ * Account-scoped handle for one catalog read. `accessToken` returns the bearer
+ * the credential already holds, or null once it expires — the catalog path
+ * never refreshes or writes credentials; the runtime's locked refresh owns all
+ * token writes. A credential that needs a refresh therefore simply yields no
+ * catalog until a run refreshes it.
+ */
 export type CodexCatalogAccount = {
   accountId: string;
   accessToken: () => Promise<string | null>;
 };
 
 export interface CodexLiveCatalog {
-  read(userId: string, account: CodexCatalogAccount): Promise<CodexCatalogModel[] | undefined>;
+  read(
+    userId: string,
+    account: CodexCatalogAccount,
+    opts?: { waitMs?: number },
+  ): Promise<CodexCatalogModel[] | undefined>;
 }
 
 /** GET the backend's per-account model list. Failure modes are typed, never thrown. */
@@ -213,8 +222,10 @@ type CodexCatalogCacheEntry =
  * In-memory per (userId, accountId) catalog with a single in-flight refresh per key.
  * Reads never block past `waitMs`: a fresh hit returns immediately, a stale hit serves
  * the last good list while a background refresh runs, and a cold miss waits a short
- * bounded time before giving up. Failures are cached briefly to avoid a retry storm.
- * Process-lifetime only — restart loses the catalog until the next fetch.
+ * bounded time before giving up. A failed refresh keeps the last good catalog — the
+ * stale entry stays servable and only re-arms a retry after the failure TTL, so a
+ * transient outage cannot hide live-listed models. Process-lifetime only — restart
+ * loses the catalog until the next fetch.
  */
 export class CodexCatalogCache implements CodexLiveCatalog {
   private readonly entries = new Map<string, CodexCatalogCacheEntry>();
@@ -248,8 +259,9 @@ export class CodexCatalogCache implements CodexLiveCatalog {
   async read(
     userId: string,
     account: CodexCatalogAccount,
+    opts?: { waitMs?: number },
   ): Promise<CodexCatalogModel[] | undefined> {
-    const key = `${userId}${account.accountId}`;
+    const key = `${userId}:${account.accountId}`;
     const entry = this.entries.get(key);
     if (entry && entry.expiresAt > this.now()) return entry.ok ? entry.models : undefined;
     if (entry) {
@@ -257,7 +269,7 @@ export class CodexCatalogCache implements CodexLiveCatalog {
       return entry.ok ? entry.models : undefined;
     }
     const pending = this.inflight.get(key) ?? this.revalidate(key, account);
-    return Promise.race([pending, sleep(this.waitMs).then(() => undefined)]);
+    return Promise.race([pending, sleep(opts?.waitMs ?? this.waitMs).then(() => undefined)]);
   }
 
   private revalidate(
@@ -272,16 +284,23 @@ export class CodexCatalogCache implements CodexLiveCatalog {
     ]);
     const tracked = work.then((models) => {
       if (this.inflight.get(key) === tracked) this.inflight.delete(key);
-      this.store(
-        key,
-        models && models.length > 0
-          ? { ok: true, models, expiresAt: this.now() + this.ttlMs }
-          : { ok: false, expiresAt: this.now() + this.failureTtlMs },
-      );
+      this.store(key, this.nextEntry(key, models));
       return models && models.length > 0 ? models : undefined;
     });
     this.inflight.set(key, tracked);
     return tracked;
+  }
+
+  private nextEntry(key: string, models: CodexCatalogModel[] | undefined): CodexCatalogCacheEntry {
+    if (models && models.length > 0) {
+      return { ok: true, models, expiresAt: this.now() + this.ttlMs };
+    }
+    const prior = this.entries.get(key);
+    if (prior?.ok) {
+      // Keep serving the last good catalog; the failure TTL only paces the retry.
+      return { ok: true, models: prior.models, expiresAt: this.now() + this.failureTtlMs };
+    }
+    return { ok: false, expiresAt: this.now() + this.failureTtlMs };
   }
 
   private async fetchModels(
@@ -306,97 +325,105 @@ export class CodexCatalogCache implements CodexLiveCatalog {
   }
 }
 
-/**
- * The space's OAuth account handle for `openai-codex`, when the credential the
- * provider-level model selection would use is a ChatGPT sign-in. `modelIds` names
- * fallback model preferences whose owning credentials are also OAuth — covers a
- * space whose provider default is an API key but a model preference is ChatGPT.
- * The decrypted token stays server-side inside the `accessToken` thunk.
- */
-export async function codexCatalogAuthForSpace(
-  prisma: PrismaClient,
-  secretStore: Pick<EncryptedSecretStore, "load" | "put">,
-  scope: { userId: string; spaceId: string },
-  opts: {
-    modelIds?: readonly string[];
-    oauth?: Pick<OAuthAuth, "refresh" | "toAuth">;
-  } = {},
-): Promise<CodexCatalogAccount | null> {
-  for (const modelId of [undefined, ...(opts.modelIds ?? []).slice(0, 4)]) {
-    const account = await codexCatalogAccountForModel(prisma, secretStore, scope, modelId, opts);
-    if (account) return account;
-  }
-  return null;
-}
+export type CodexCatalogSpaceAuth = {
+  byProvider: Partial<Record<string, ModelCredentialAuthKind>>;
+  byModel: Partial<
+    Record<string, Partial<Record<string, ModelCredentialAuthKind | "disconnected">>>
+  >;
+  /**
+   * Secret id of the credential governing each provider/model slot, as resolved by
+   * `modelCredentialAuthKindsForSpace`. Missing ids keep that slot on the static
+   * catalog — the live overlay is only as per-credential as this mapping.
+   */
+  secretIdByProvider?: Partial<Record<string, string>>;
+  secretIdByModel?: Partial<Record<string, Partial<Record<string, string>>>>;
+};
 
-async function codexCatalogAccountForModel(
-  prisma: PrismaClient,
-  secretStore: Pick<EncryptedSecretStore, "load" | "put">,
-  scope: { userId: string; spaceId: string },
-  modelId: string | undefined,
-  opts: { oauth?: Pick<OAuthAuth, "refresh" | "toAuth"> },
-): Promise<CodexCatalogAccount | null> {
-  const credential = await findModelCredential(prisma, scope, CHATGPT_OAUTH_PROVIDER, modelId);
-  if (!credential) return null;
-  const secrets = await prisma.secret.findMany({
-    where: { id: credential.secretId, userId: scope.userId, spaceId: null },
-    select: { id: true, ciphertext: true },
-  });
-  const secret = secrets[0];
-  if (!secret) return null;
-  let plaintext: string;
-  try {
-    plaintext = secretStore.load(secret.ciphertext, secret.id);
-  } catch {
-    return null;
-  }
-  const parsed: StoredModelSecret = parseModelSecret(plaintext);
-  if (parsed.kind !== "oauth") return null;
-  const accountId = codexAccountId(parsed.credential);
+/** Account handle over a stored ChatGPT OAuth credential; null without an account id. */
+function codexAccountHandle(credential: OAuthCredential): CodexCatalogAccount | null {
+  const accountId = codexAccountId(credential);
   if (!accountId) return null;
-  // The thunk runs inside the cache's single-flight revalidation, detached from
-  // any caller's abort signal — one cancelled list request must not abort a
-  // refresh other readers share.
   return {
     accountId,
-    accessToken: () =>
-      codexAccessToken(plaintext, secretStore, prisma, secret.id, scope, opts.oauth).catch(
-        () => null,
-      ),
+    accessToken: async () => (credential.expires > Date.now() ? credential.access : null),
   };
 }
 
-/** Resolve a usable bearer for the catalog request; refreshes + persists near-expiry. */
-async function codexAccessToken(
-  plaintext: string,
-  secretStore: Pick<EncryptedSecretStore, "load" | "put">,
+/**
+ * Whether the live catalog for the account this credential signs into lists
+ * `modelId` — the selection/run-time half of the models.list overlay, consulted
+ * only when the static auth gate already rejected a catalog model.
+ */
+export async function codexLiveListsModel(
+  catalog: CodexLiveCatalog | undefined,
+  userId: string,
+  secret: StoredModelSecret,
+  modelId: string,
+  opts?: { waitMs?: number },
+): Promise<boolean> {
+  if (!catalog || secret.kind !== "oauth") return false;
+  const account = codexAccountHandle(secret.credential);
+  if (!account) return false;
+  const models = await catalog.read(userId, account, opts).catch(() => undefined);
+  return Boolean(models?.some((model) => model.slug === modelId));
+}
+
+/**
+ * The live per-account catalog for every ChatGPT OAuth credential governing a
+ * codex slot in this space, keyed by credential secret id. Credentials that are
+ * unreadable, non-OAuth, or lack an account id — and reads that fail — map to no
+ * entry, so their models keep the static availability (which hides Codex Spark).
+ * No token refresh or credential write happens here.
+ */
+export async function codexLiveCatalogsForSpace(
   prisma: PrismaClient,
-  secretId: string,
+  secretStore: Pick<EncryptedSecretStore, "load">,
   scope: { userId: string; spaceId: string },
-  oauth?: Pick<OAuthAuth, "refresh" | "toAuth">,
-): Promise<string | null> {
-  const resolved = await resolveModelAuth(plaintext, CHATGPT_OAUTH_PROVIDER, {
-    oauth,
-    persist: async (next) => {
-      const stored = await secretStore.put(
-        next,
-        {
-          operationId: "codex-catalog",
-          traceId: "codex-catalog",
-          spaceId: scope.spaceId,
-          userId: scope.userId,
-          signal: new AbortController().signal,
-        },
-        secretId,
-      );
-      await prisma.secret.update({
-        where: { id: secretId },
-        data: { ciphertext: stored.ciphertext },
-      });
-    },
+  auth: CodexCatalogSpaceAuth,
+  catalog: CodexLiveCatalog,
+): Promise<Map<string, CodexCatalogModel[]>> {
+  const live = new Map<string, CodexCatalogModel[]>();
+  const secretIds = oauthCodexSecretIds(auth);
+  if (secretIds.length === 0) return live;
+  const secrets = await prisma.secret.findMany({
+    where: { id: { in: secretIds }, userId: scope.userId, spaceId: null },
+    select: { id: true, ciphertext: true },
   });
-  if (resolved.secret.kind !== "oauth") return null;
-  return resolved.apiKey || null;
+  const accounts = new Map<string, CodexCatalogAccount>();
+  for (const secret of secrets) {
+    let credential: OAuthCredential | undefined;
+    try {
+      const parsed = parseModelSecret(secretStore.load(secret.ciphertext, secret.id));
+      credential = parsed.kind === "oauth" ? parsed.credential : undefined;
+    } catch {
+      // Unreadable secrets keep static behavior.
+    }
+    const account = credential ? codexAccountHandle(credential) : null;
+    if (account) accounts.set(secret.id, account);
+  }
+  await Promise.all(
+    [...accounts].map(async ([secretId, account]) => {
+      const models = await catalog.read(scope.userId, account).catch(() => undefined);
+      if (models) live.set(secretId, models);
+    }),
+  );
+  return live;
+}
+
+/** Distinct secret ids of credentials governing an OAuth-kind codex slot. */
+function oauthCodexSecretIds(auth: CodexCatalogSpaceAuth): string[] {
+  const ids = new Set<string>();
+  if (auth.byProvider[CHATGPT_OAUTH_PROVIDER] === "oauth") {
+    const id = auth.secretIdByProvider?.[CHATGPT_OAUTH_PROVIDER];
+    if (id) ids.add(id);
+  }
+  const byModel = auth.byModel[CHATGPT_OAUTH_PROVIDER] ?? {};
+  for (const modelId of Object.keys(byModel)) {
+    if (byModel[modelId] !== "oauth") continue;
+    const id = auth.secretIdByModel?.[CHATGPT_OAUTH_PROVIDER]?.[modelId];
+    if (id) ids.add(id);
+  }
+  return [...ids];
 }
 
 /** `chatgpt-account-id` from the stored credential, else decoded from the access JWT. */
@@ -426,79 +453,54 @@ function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   }
 }
 
-export type CodexCatalogSpaceAuth = {
-  byProvider: Partial<Record<string, ModelCredentialAuthKind>>;
-  byModel: Partial<
-    Record<string, Partial<Record<string, ModelCredentialAuthKind | "disconnected">>>
-  >;
-};
-
 /**
- * The live per-account catalog for this space, or `undefined` when the space has
- * no usable ChatGPT OAuth credential or the read failed — callers then keep the
- * static catalog (the conservative fallback that hides Codex Spark).
- */
-export async function codexLiveCatalogForSpace(
-  prisma: PrismaClient,
-  secretStore: Pick<EncryptedSecretStore, "load" | "put">,
-  scope: { userId: string; spaceId: string },
-  auth: CodexCatalogSpaceAuth,
-  catalog: CodexLiveCatalog,
-): Promise<CodexCatalogModel[] | undefined> {
-  const oauthModelIds = Object.keys(auth.byModel[CHATGPT_OAUTH_PROVIDER] ?? {}).filter(
-    (id) => auth.byModel[CHATGPT_OAUTH_PROVIDER]?.[id] === "oauth",
-  );
-  if (auth.byProvider[CHATGPT_OAUTH_PROVIDER] !== "oauth" && oauthModelIds.length === 0) {
-    return undefined;
-  }
-  const account = await codexCatalogAuthForSpace(prisma, secretStore, scope, {
-    modelIds: oauthModelIds,
-  });
-  return account ? catalog.read(scope.userId, account) : undefined;
-}
-
-/**
- * Overlay the live catalog on the static-filtered list. Entries governed by ChatGPT
- * OAuth auth are available exactly when the backend lists them — which can restore
- * statically excluded models like Codex Spark. API-key-governed and disconnected
- * entries keep static behavior. The pi catalog supplies every field the endpoint
- * lacks; a live catalog sharing no slug with it is ignored as untrusted.
+ * Overlay the live catalogs on the static-filtered list. A codex entry governed
+ * by a ChatGPT OAuth credential is available exactly when that credential's own
+ * catalog lists it — which can restore statically excluded models like Codex
+ * Spark. Entries governed by an API key, by an unreadable (per-model
+ * "disconnected") credential, or by a credential whose catalog could not be
+ * read keep their static behavior. Only slugs the pi registry knows are
+ * overlayable — a live-only model cannot resolve to a runtime Model, so unknown
+ * slugs are ignored rather than listed as broken picks. The pi catalog supplies
+ * every field the endpoint lacks; a catalog sharing no known static slug is
+ * ignored as untrusted.
  */
 export function applyCodexLiveCatalog(
   base: readonly PiCatalogEntry[],
   auth: CodexCatalogSpaceAuth,
-  live: readonly CodexCatalogModel[],
+  liveBySecretId: ReadonlyMap<string, readonly CodexCatalogModel[]>,
 ): PiCatalogEntry[] {
-  const liveBySlug = new Map(live.map((model) => [model.slug, model]));
   const knownSlugs = new Set(
     listPiCatalog()
       .filter((entry) => entry.provider === CHATGPT_OAUTH_PROVIDER)
       .map((entry) => entry.id),
   );
-  if (!live.some((model) => knownSlugs.has(model.slug))) return [...base];
+  const trusted = new Map<string, Map<string, CodexCatalogModel>>();
+  for (const [secretId, models] of liveBySecretId) {
+    if (!models.some((model) => knownSlugs.has(model.slug))) continue;
+    trusted.set(secretId, new Map(models.map((model) => [model.slug, model])));
+  }
+  if (trusted.size === 0) return [...base];
   const baseSet = new Set(base);
   const out: PiCatalogEntry[] = [];
-  const emittedCodex = new Set<string>();
-  let template: PiCatalogEntry | undefined;
   for (const entry of listPiCatalog()) {
     if (entry.provider !== CHATGPT_OAUTH_PROVIDER) {
       if (baseSet.has(entry)) out.push(entry);
       continue;
     }
-    template ??= entry;
-    const kind =
-      auth.byModel[entry.provider]?.[entry.id] ?? auth.byProvider[entry.provider] ?? "disconnected";
-    const liveModel = liveBySlug.get(entry.id);
-    const available = kind === "oauth" ? Boolean(liveModel) : baseSet.has(entry);
-    if (!available) continue;
-    emittedCodex.add(entry.id);
-    out.push(liveModel ? withLiveFields(entry, liveModel) : entry);
-  }
-  if (template) {
-    for (const model of live) {
-      if (emittedCodex.has(model.slug)) continue;
-      out.push(liveOnlyEntry(template, model));
+    const modelKind = auth.byModel[entry.provider]?.[entry.id];
+    const kind = modelKind ?? auth.byProvider[entry.provider] ?? "disconnected";
+    const secretId =
+      modelKind === undefined
+        ? auth.secretIdByProvider?.[entry.provider]
+        : auth.secretIdByModel?.[entry.provider]?.[entry.id];
+    const live = kind === "oauth" && secretId ? trusted.get(secretId) : undefined;
+    if (!live) {
+      if (baseSet.has(entry)) out.push(entry);
+      continue;
     }
+    const liveModel = live.get(entry.id);
+    if (liveModel) out.push(withLiveFields(entry, liveModel));
   }
   return out;
 }
@@ -508,17 +510,6 @@ function withLiveFields(entry: PiCatalogEntry, model: CodexCatalogModel): PiCata
   return thinkingLevels
     ? { ...entry, reasoning: true, thinkingLevels }
     : { ...entry, reasoning: entry.reasoning || model.reasoningEfforts.length > 0 };
-}
-
-function liveOnlyEntry(template: PiCatalogEntry, model: CodexCatalogModel): PiCatalogEntry {
-  const thinkingLevels = liveThinkingLevels(model);
-  return {
-    ...template,
-    id: model.slug,
-    label: catalogModelLabel(model.slug),
-    reasoning: model.reasoningEfforts.length > 0,
-    ...(thinkingLevels ? { thinkingLevels } : {}),
-  };
 }
 
 function liveThinkingLevels(model: CodexCatalogModel): ThinkingLevel[] | undefined {

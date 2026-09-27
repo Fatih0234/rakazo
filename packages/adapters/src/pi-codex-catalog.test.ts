@@ -1,19 +1,18 @@
-import type { OAuthCredential } from "@earendil-works/pi-ai";
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
 import { listAvailablePiCatalog } from "./pi-catalog-availability.js";
-import type { CodexCatalogModel } from "./pi-codex-catalog.js";
+import type { CodexCatalogModel, CodexCatalogSpaceAuth } from "./pi-codex-catalog.js";
 import {
   applyCodexLiveCatalog,
   CODEX_MODELS_ENDPOINT,
   CodexCatalogCache,
-  codexCatalogAuthForSpace,
-  codexLiveCatalogForSpace,
+  codexLiveCatalogsForSpace,
+  codexLiveListsModel,
   fetchCodexCatalog,
   parseCodexCatalog,
 } from "./pi-codex-catalog.js";
-import type { PiCatalogEntry } from "./pi-models.js";
-import { CHATGPT_OAUTH_PROVIDER } from "./pi-oauth.js";
+import { listPiCatalog } from "./pi-models.js";
+import { CHATGPT_OAUTH_PROVIDER, parseModelSecret } from "./pi-oauth.js";
 
 const SPARK = "gpt-5.3-codex-spark";
 const LUNA = "gpt-6-luna";
@@ -41,10 +40,6 @@ function okResponse(body: unknown) {
   });
 }
 
-function codexEntry(entry: PiCatalogEntry | undefined): entry is PiCatalogEntry {
-  return Boolean(entry);
-}
-
 function oauthPlaintext(access = ACCESS_TOKEN, expiresInMs = 3_600_000, accountId = ACCOUNT_ID) {
   return JSON.stringify({
     type: "oauth",
@@ -55,30 +50,8 @@ function oauthPlaintext(access = ACCESS_TOKEN, expiresInMs = 3_600_000, accountI
   });
 }
 
-function credentialRow(secretId: string, provider = CHATGPT_OAUTH_PROVIDER) {
+function authPrisma(options: { secrets?: Array<{ id: string; ciphertext: string }> }) {
   return {
-    id: `credential-${secretId}`,
-    userId: "user-1",
-    provider,
-    label: provider,
-    secretId,
-    createdAt: new Date("2026-01-01T00:00:00.000Z"),
-    updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-  };
-}
-
-function authPrisma(options: {
-  credentials?: ReturnType<typeof credentialRow>[];
-  preferences?: Array<Record<string, unknown>>;
-  secrets?: Array<{ id: string; ciphertext: string }>;
-}) {
-  return {
-    userModelCredential: {
-      findMany: vi.fn().mockResolvedValue(options.credentials ?? []),
-    },
-    spaceModelPreference: {
-      findMany: vi.fn().mockResolvedValue(options.preferences ?? []),
-    },
     secret: {
       findMany: vi
         .fn()
@@ -468,6 +441,39 @@ describe("CodexCatalogCache", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps serving the last good catalog when a refresh fails", async () => {
+    let now = 1_000_000;
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () =>
+        okResponse(catalogPayload([{ slug: SPARK, visibility: "list", supported_in_api: true }])),
+      )
+      .mockImplementation(async () => new Response("x", { status: 503 }));
+    const cache = new CodexCatalogCache({
+      fetch: fetchImpl,
+      now: () => now,
+      waitMs: 50,
+      failureTtlMs: 30_000,
+    });
+
+    expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
+
+    // Past the TTL a read serves the stale list and refreshes in the background;
+    // the refresh fails but the good catalog must not be evicted.
+    now += 16 * 60_000;
+    expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    // Let the failed refresh settle so the stale-on-failure entry is stored.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
+
+    // The failure TTL only paces the next retry, which fails again — still stale.
+    now += 31_000;
+    expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+    expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
+  });
+
   it("keeps catalogs isolated per (userId, accountId)", async () => {
     const fetchImpl = listFetch();
     const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => 0, waitMs: 50 });
@@ -476,6 +482,15 @@ describe("CodexCatalogCache", () => {
     await cache.read("user-2", account());
     await cache.read("user-1", { accountId: "acct-other", accessToken: async () => ACCESS_TOKEN });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("cannot collide keys across the userId/accountId boundary", async () => {
+    const fetchImpl = listFetch();
+    const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => 0, waitMs: 50 });
+
+    await cache.read("ab", { accountId: "c", accessToken: async () => ACCESS_TOKEN });
+    await cache.read("a", { accountId: "bc", accessToken: async () => ACCESS_TOKEN });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("treats an empty catalog as a failure so the static list stays", async () => {
@@ -492,8 +507,83 @@ describe("CodexCatalogCache", () => {
   });
 });
 
-describe("codexCatalogAuthForSpace", () => {
+describe("codexLiveListsModel", () => {
+  const oauthSecret = (access = ACCESS_TOKEN, expiresInMs = 3_600_000, accountId = ACCOUNT_ID) =>
+    parseModelSecret(oauthPlaintext(access, expiresInMs, accountId));
+
+  it("confirms a model the credential's own account catalog lists", async () => {
+    const read = vi.fn(async () => [liveModel(SPARK)]);
+    await expect(codexLiveListsModel({ read }, "user-1", oauthSecret(), SPARK)).resolves.toBe(true);
+    expect(read).toHaveBeenCalledWith(
+      "user-1",
+      expect.objectContaining({ accountId: ACCOUNT_ID }),
+      undefined,
+    );
+  });
+
+  it("rejects when the live catalog does not list the model", async () => {
+    const read = vi.fn(async () => [liveModel(LUNA)]);
+    await expect(codexLiveListsModel({ read }, "user-1", oauthSecret(), SPARK)).resolves.toBe(
+      false,
+    );
+  });
+
+  it("rejects without a catalog, an account id, or OAuth auth", async () => {
+    const read = vi.fn(async () => [liveModel(SPARK)]);
+    await expect(codexLiveListsModel(undefined, "user-1", oauthSecret(), SPARK)).resolves.toBe(
+      false,
+    );
+    await expect(
+      codexLiveListsModel({ read }, "user-1", parseModelSecret("sk-plain-key"), SPARK),
+    ).resolves.toBe(false);
+    await expect(
+      codexLiveListsModel(
+        { read },
+        "user-1",
+        oauthSecret("opaque-not-a-jwt", 3_600_000, ""),
+        SPARK,
+      ),
+    ).resolves.toBe(false);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("extracts the account id from the access JWT when the credential lacks it", async () => {
+    const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const access = `${b64({ alg: "none" })}.${b64({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-jwt" },
+    })}.sig`;
+    const read = vi.fn(async () => [liveModel(SPARK)]);
+
+    await expect(
+      codexLiveListsModel({ read }, "user-1", oauthSecret(access, 3_600_000, ""), SPARK),
+    ).resolves.toBe(true);
+    expect(read).toHaveBeenCalledWith(
+      "user-1",
+      expect.objectContaining({ accountId: "acct-jwt" }),
+      undefined,
+    );
+  });
+
+  it("never fetches for an expired token — and never refreshes or writes one", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      okResponse(catalogPayload([{ slug: SPARK, visibility: "list", supported_in_api: true }])),
+    );
+    const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => Date.now(), waitMs: 50 });
+    const expired = oauthSecret(ACCESS_TOKEN, -1_000);
+
+    await expect(codexLiveListsModel(cache, "user-1", expired, SPARK)).resolves.toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("codexLiveCatalogsForSpace", () => {
   const scope = { userId: "user-1", spaceId: "space-1" };
+  const oauthAuthFor = (secretId: string): CodexCatalogSpaceAuth => ({
+    byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" },
+    byModel: {},
+    secretIdByProvider: { [CHATGPT_OAUTH_PROVIDER]: secretId },
+    secretIdByModel: {},
+  });
 
   function secretsById(map: Record<string, string>) {
     return {
@@ -502,203 +592,131 @@ describe("codexCatalogAuthForSpace", () => {
         if (plaintext === undefined) throw new Error(`unreadable ${id}`);
         return plaintext;
       }),
-      put: vi.fn(async (plaintext: string, _ctx: unknown, id?: string) => ({
-        id: id ?? "new-secret",
-        ciphertext: `sealed:${plaintext.slice(0, 24)}`,
-      })),
+      // Deliberately present so a test can pin the read-only contract.
+      put: vi.fn(async () => ({ id: "unused", ciphertext: "unused" })),
     };
   }
 
-  it("resolves the provider-level OAuth credential into an account handle", async () => {
+  it("reads the catalog for each OAuth credential that governs a codex slot", async () => {
     const prisma = authPrisma({
-      credentials: [credentialRow("secret-oauth")],
-      secrets: [{ id: "secret-oauth", ciphertext: "cipher-oauth" }],
-    });
-    const secrets = secretsById({ "cipher-oauth": oauthPlaintext() });
-
-    const account = await codexCatalogAuthForSpace(prisma, secrets, scope);
-
-    expect(account?.accountId).toBe(ACCOUNT_ID);
-    await expect(account?.accessToken()).resolves.toBe(ACCESS_TOKEN);
-  });
-
-  it("extracts the account id from the access JWT when the credential lacks it", async () => {
-    const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-    const access = `${b64({ alg: "none" })}.${b64({
-      "https://api.openai.com/auth": { chatgpt_account_id: "acct-jwt" },
-    })}.sig`;
-    const prisma = authPrisma({
-      credentials: [credentialRow("secret-oauth")],
-      secrets: [{ id: "secret-oauth", ciphertext: "cipher-oauth" }],
-    });
-    const secrets = secretsById({
-      "cipher-oauth": JSON.stringify({
-        type: "oauth",
-        access,
-        refresh: "fake-refresh-token",
-        expires: Date.now() + 3_600_000,
-      }),
-    });
-
-    const account = await codexCatalogAuthForSpace(prisma, secrets, scope);
-
-    expect(account?.accountId).toBe("acct-jwt");
-  });
-
-  it("refreshes a near-expiry credential and persists the rotated secret", async () => {
-    const prisma = authPrisma({
-      credentials: [credentialRow("secret-oauth")],
-      secrets: [{ id: "secret-oauth", ciphertext: "cipher-oauth" }],
-    });
-    const secrets = secretsById({ "cipher-oauth": oauthPlaintext(ACCESS_TOKEN, 60_000) });
-    const rotated: OAuthCredential = {
-      type: "oauth",
-      access: "rotated-access-token",
-      refresh: "rotated-refresh-token",
-      expires: Date.now() + 3_600_000,
-      accountId: ACCOUNT_ID,
-    };
-    const oauth = {
-      refresh: vi.fn(async () => rotated),
-      toAuth: vi.fn(async () => ({ apiKey: rotated.access })),
-    };
-
-    const account = await codexCatalogAuthForSpace(prisma, secrets, scope, { oauth });
-
-    expect(account).not.toBeNull();
-    await expect(account!.accessToken()).resolves.toBe("rotated-access-token");
-    expect(oauth.refresh).toHaveBeenCalledTimes(1);
-    expect(secrets.put).toHaveBeenCalledTimes(1);
-    expect(prisma.secret.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "secret-oauth" } }),
-    );
-  });
-
-  it("returns null without an OAuth credential, account id, or readable secret", async () => {
-    const apiKeyOnly = authPrisma({
-      credentials: [credentialRow("secret-api")],
-      secrets: [{ id: "secret-api", ciphertext: "cipher-api" }],
-    });
-    const secrets = secretsById({ "cipher-api": "sk-test-plain-key" });
-    expect(await codexCatalogAuthForSpace(apiKeyOnly, secrets, scope)).toBeNull();
-
-    const noCredentials = authPrisma({ credentials: [], secrets: [] });
-    expect(await codexCatalogAuthForSpace(noCredentials, secrets, scope)).toBeNull();
-
-    const noAccountId = authPrisma({
-      credentials: [credentialRow("secret-oauth")],
-      secrets: [{ id: "secret-oauth", ciphertext: "cipher-oauth" }],
-    });
-    const missingAccount = secretsById({
-      "cipher-oauth": JSON.stringify({
-        type: "oauth",
-        access: "opaque-token",
-        refresh: "fake-refresh-token",
-        expires: Date.now() + 3_600_000,
-      }),
-    });
-    expect(await codexCatalogAuthForSpace(noAccountId, missingAccount, scope)).toBeNull();
-
-    const broken = authPrisma({
-      credentials: [credentialRow("secret-broken")],
-      secrets: [{ id: "secret-broken", ciphertext: "cipher-broken" }],
-    });
-    expect(await codexCatalogAuthForSpace(broken, secretsById({}), scope)).toBeNull();
-  });
-
-  it("falls back to the credential owning an OAuth model preference", async () => {
-    const prisma = authPrisma({
-      credentials: [
-        credentialRow("secret-api"),
-        { ...credentialRow("secret-oauth"), updatedAt: new Date("2026-02-01T00:00:00.000Z") },
-      ],
-      preferences: [
-        {
-          id: "pref-spark",
-          modelId: SPARK,
-          isDefault: false,
-          updatedAt: new Date("2026-01-02T00:00:00.000Z"),
-          credential: credentialRow("secret-oauth"),
-        },
-      ],
       secrets: [
-        { id: "secret-api", ciphertext: "cipher-api" },
-        { id: "secret-oauth", ciphertext: "cipher-oauth" },
+        { id: "secret-a", ciphertext: "cipher-a" },
+        { id: "secret-b", ciphertext: "cipher-b" },
       ],
     });
     const secrets = secretsById({
-      "cipher-api": "sk-test-plain-key",
-      "cipher-oauth": oauthPlaintext(),
+      "cipher-a": oauthPlaintext(ACCESS_TOKEN, 3_600_000, "acct-a"),
+      "cipher-b": oauthPlaintext(ACCESS_TOKEN, 3_600_000, "acct-b"),
     });
-
-    const account = await codexCatalogAuthForSpace(prisma, secrets, scope, {
-      modelIds: [SPARK],
-    });
-
-    expect(account?.accountId).toBe(ACCOUNT_ID);
-  });
-});
-
-describe("codexLiveCatalogForSpace", () => {
-  const scope = { userId: "user-1", spaceId: "space-1" };
-
-  it("reads the catalog only for spaces with OAuth-governed codex models", async () => {
-    const prisma = authPrisma({
-      credentials: [credentialRow("secret-oauth")],
-      secrets: [{ id: "secret-oauth", ciphertext: "cipher-oauth" }],
-    });
-    const secrets = {
-      load: () => oauthPlaintext(),
-      put: vi.fn(),
+    const read = vi.fn(async (_userId: string, account: { accountId: string }) =>
+      account.accountId === "acct-b" ? [liveModel(SPARK)] : [liveModel(LUNA)],
+    );
+    const auth: CodexCatalogSpaceAuth = {
+      byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" },
+      byModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "oauth" } },
+      secretIdByProvider: { [CHATGPT_OAUTH_PROVIDER]: "secret-a" },
+      secretIdByModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "secret-b" } },
     };
-    const read = vi.fn(async () => [liveModel(SPARK)]);
-    const catalog = { read };
 
-    const live = await codexLiveCatalogForSpace(
-      prisma,
-      secrets,
-      scope,
-      { byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" }, byModel: {} },
-      catalog,
-    );
+    const live = await codexLiveCatalogsForSpace(prisma, secrets, scope, auth, { read });
 
-    expect(live?.[0]?.slug).toBe(SPARK);
-    expect(read).toHaveBeenCalledWith("user-1", expect.objectContaining({ accountId: ACCOUNT_ID }));
+    expect(live.get("secret-a")?.[0]?.slug).toBe(LUNA);
+    expect(live.get("secret-b")?.[0]?.slug).toBe(SPARK);
+    const accountIds = read.mock.calls.map((call) => call[1].accountId).sort();
+    expect(accountIds).toEqual(["acct-a", "acct-b"]);
+    expect(secrets.put).not.toHaveBeenCalled();
   });
 
-  it("skips the catalog when no OAuth kind governs a codex model", async () => {
-    const read = vi.fn(async () => [liveModel(SPARK)]);
+  it("skips credentials that are not OAuth, unreadable, or lack an account id", async () => {
     const prisma = authPrisma({
-      credentials: [credentialRow("secret-api")],
-      secrets: [{ id: "secret-api", ciphertext: "cipher-api" }],
+      secrets: [
+        { id: "secret-a", ciphertext: "cipher-a" },
+        { id: "secret-b", ciphertext: "cipher-b" },
+        { id: "secret-c", ciphertext: "cipher-c" },
+      ],
     });
-    const secrets = { load: () => "sk-test-plain-key", put: vi.fn() };
+    const secrets = secretsById({
+      "cipher-a": "sk-test-plain-key",
+      "cipher-c": oauthPlaintext("opaque-token", 3_600_000, ""),
+    });
+    const read = vi.fn(async () => [liveModel(SPARK)]);
+    const auth: CodexCatalogSpaceAuth = {
+      byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" },
+      byModel: {
+        [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "oauth", [LUNA]: "oauth" },
+      },
+      secretIdByProvider: { [CHATGPT_OAUTH_PROVIDER]: "secret-a" },
+      secretIdByModel: {
+        [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "secret-b", [LUNA]: "secret-c" },
+      },
+    };
 
-    const live = await codexLiveCatalogForSpace(
+    const live = await codexLiveCatalogsForSpace(prisma, secrets, scope, auth, { read });
+
+    expect(live.size).toBe(0);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("does not read a catalog for an api_key or disconnected slot", async () => {
+    const prisma = authPrisma({ secrets: [{ id: "secret-a", ciphertext: "cipher-a" }] });
+    const secrets = secretsById({ "cipher-a": "sk-test-plain-key" });
+    const read = vi.fn(async () => [liveModel(SPARK)]);
+    const auth: CodexCatalogSpaceAuth = {
+      byProvider: { [CHATGPT_OAUTH_PROVIDER]: "api_key" },
+      byModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "disconnected" } },
+      secretIdByProvider: { [CHATGPT_OAUTH_PROVIDER]: "secret-a" },
+      secretIdByModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "secret-b" } },
+    };
+
+    const live = await codexLiveCatalogsForSpace(prisma, secrets, scope, auth, { read });
+
+    expect(live.size).toBe(0);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("never fetches for an expired credential and never writes secrets", async () => {
+    const prisma = authPrisma({ secrets: [{ id: "secret-a", ciphertext: "cipher-a" }] });
+    const secrets = secretsById({ "cipher-a": oauthPlaintext(ACCESS_TOKEN, -1_000) });
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      okResponse(catalogPayload([{ slug: SPARK, visibility: "list", supported_in_api: true }])),
+    );
+    const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => Date.now(), waitMs: 50 });
+
+    const live = await codexLiveCatalogsForSpace(
       prisma,
       secrets,
       scope,
-      { byProvider: { [CHATGPT_OAUTH_PROVIDER]: "api_key" }, byModel: {} },
-      { read },
+      oauthAuthFor("secret-a"),
+      cache,
     );
 
-    expect(live).toBeUndefined();
-    expect(read).not.toHaveBeenCalled();
+    expect(live.size).toBe(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(secrets.put).not.toHaveBeenCalled();
+    expect(prisma.secret.update).not.toHaveBeenCalled();
   });
 });
 
 describe("applyCodexLiveCatalog", () => {
-  const oauthAuth = {
-    byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" as const },
+  const oauthAuth: CodexCatalogSpaceAuth = {
+    byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" },
     byModel: {},
+    secretIdByProvider: { [CHATGPT_OAUTH_PROVIDER]: "secret-a" },
+    secretIdByModel: {},
   };
   const base = listAvailablePiCatalog(oauthAuth.byProvider, oauthAuth.byModel);
+  const liveFor = (entries: Record<string, CodexCatalogModel[]>) =>
+    new Map(Object.entries(entries));
 
   it("restores statically excluded models the account can call", () => {
     expect(
       base.some((entry) => entry.provider === CHATGPT_OAUTH_PROVIDER && entry.id === SPARK),
     ).toBe(false);
-    const merged = applyCodexLiveCatalog(base, oauthAuth, [liveModel(SPARK), liveModel(LUNA)]);
+    const merged = applyCodexLiveCatalog(
+      base,
+      oauthAuth,
+      liveFor({ "secret-a": [liveModel(SPARK), liveModel(LUNA)] }),
+    );
 
     const ids = merged
       .filter((entry) => entry.provider === CHATGPT_OAUTH_PROVIDER)
@@ -714,48 +732,55 @@ describe("applyCodexLiveCatalog", () => {
   });
 
   it("drops OAuth-governed models the live catalog does not list", () => {
-    const merged = applyCodexLiveCatalog(base, oauthAuth, [liveModel(LUNA)]);
+    const merged = applyCodexLiveCatalog(
+      base,
+      oauthAuth,
+      liveFor({ "secret-a": [liveModel(LUNA)] }),
+    );
     const codexIds = merged
       .filter((entry) => entry.provider === CHATGPT_OAUTH_PROVIDER)
       .map((entry) => entry.id);
     expect(codexIds).toEqual([LUNA]);
   });
 
-  it("synthesizes catalog entries for models the static catalog lacks", () => {
-    const merged = applyCodexLiveCatalog(base, oauthAuth, [
-      liveModel(LUNA),
-      liveModel("gpt-7-codex-new", { reasoningEfforts: ["low", "high", "not-a-level"] }),
-    ]);
+  it("ignores live-only slugs that cannot resolve to a runnable pi model", () => {
+    const merged = applyCodexLiveCatalog(
+      base,
+      oauthAuth,
+      liveFor({
+        "secret-a": [
+          liveModel(LUNA),
+          liveModel("gpt-7-codex-new", { reasoningEfforts: ["low", "high"] }),
+        ],
+      }),
+    );
 
-    const extra = merged
+    const ids = merged
       .filter((entry) => entry.provider === CHATGPT_OAUTH_PROVIDER)
-      .find((entry) => entry.id === "gpt-7-codex-new");
-    expect(extra).toBeDefined();
-    expect(extra?.auth).toBe("oauth");
-    expect(extra?.subscription).toBe(true);
-    expect(extra?.reasoning).toBe(true);
-    expect(extra?.thinkingLevels).toEqual(["low", "high"]);
-    expect(extra?.label).toBe("gpt-7-codex-new");
+      .map((entry) => entry.id);
+    expect(ids).toEqual([LUNA]);
+    expect(ids).not.toContain("gpt-7-codex-new");
   });
 
   it("overrides thinking levels only when the endpoint supplies known efforts", () => {
-    const staticEntry = listAvailablePiCatalog()
-      .concat(base)
-      .find(
-        (entry): entry is PiCatalogEntry =>
-          codexEntry(entry) && entry.provider === CHATGPT_OAUTH_PROVIDER && entry.id === LUNA,
-      )!;
-    const merged = applyCodexLiveCatalog(base, oauthAuth, [
-      liveModel(LUNA, { reasoningEfforts: ["minimal", "medium"] }),
-    ]);
+    const staticEntry = listPiCatalog().find(
+      (entry) => entry.provider === CHATGPT_OAUTH_PROVIDER && entry.id === LUNA,
+    )!;
+    const merged = applyCodexLiveCatalog(
+      base,
+      oauthAuth,
+      liveFor({ "secret-a": [liveModel(LUNA, { reasoningEfforts: ["minimal", "medium"] })] }),
+    );
     const liveEntry = merged.find(
       (entry) => entry.provider === CHATGPT_OAUTH_PROVIDER && entry.id === LUNA,
     );
     expect(liveEntry?.thinkingLevels).toEqual(["minimal", "medium"]);
 
-    const mergedUnknown = applyCodexLiveCatalog(base, oauthAuth, [
-      liveModel(LUNA, { reasoningEfforts: ["mystery-effort"] }),
-    ]);
+    const mergedUnknown = applyCodexLiveCatalog(
+      base,
+      oauthAuth,
+      liveFor({ "secret-a": [liveModel(LUNA, { reasoningEfforts: ["mystery-effort"] })] }),
+    );
     const fallback = mergedUnknown.find(
       (entry) => entry.provider === CHATGPT_OAUTH_PROVIDER && entry.id === LUNA,
     );
@@ -763,27 +788,92 @@ describe("applyCodexLiveCatalog", () => {
   });
 
   it("keeps API-key-governed codex models outside the live gate", () => {
-    const mixedAuth = {
-      byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" as const },
-      byModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "api_key" as const } },
+    const mixedAuth: CodexCatalogSpaceAuth = {
+      byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" },
+      byModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "api_key" } },
+      secretIdByProvider: { [CHATGPT_OAUTH_PROVIDER]: "secret-a" },
+      secretIdByModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "secret-api" } },
     };
     const mixedBase = listAvailablePiCatalog(mixedAuth.byProvider, mixedAuth.byModel);
-    const merged = applyCodexLiveCatalog(mixedBase, mixedAuth, [liveModel(LUNA)]);
+    const merged = applyCodexLiveCatalog(
+      mixedBase,
+      mixedAuth,
+      liveFor({ "secret-a": [liveModel(LUNA)] }),
+    );
 
     const codexIds = merged
       .filter((entry) => entry.provider === CHATGPT_OAUTH_PROVIDER)
       .map((entry) => entry.id);
-    expect(codexIds).toContain(SPARK);
     expect(codexIds).toEqual([SPARK, LUNA]);
   });
 
+  it("governs each model by the account that owns its credential", () => {
+    // Spark's model-specific preference points at account B while the provider
+    // default is account A: each slot follows its own credential's catalog.
+    const splitAuth: CodexCatalogSpaceAuth = {
+      byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" },
+      byModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "oauth" } },
+      secretIdByProvider: { [CHATGPT_OAUTH_PROVIDER]: "secret-a" },
+      secretIdByModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "secret-b" } },
+    };
+    const splitBase = listAvailablePiCatalog(splitAuth.byProvider, splitAuth.byModel);
+    const merged = applyCodexLiveCatalog(
+      splitBase,
+      splitAuth,
+      liveFor({ "secret-a": [liveModel(LUNA)], "secret-b": [liveModel(SPARK)] }),
+    );
+    const codexIds = merged
+      .filter((entry) => entry.provider === CHATGPT_OAUTH_PROVIDER)
+      .map((entry) => entry.id);
+    expect(codexIds).toEqual([SPARK, LUNA]);
+
+    // Account A listing Spark must not unlock it — B's slot has no catalog read.
+    const wrongAccount = applyCodexLiveCatalog(
+      splitBase,
+      splitAuth,
+      liveFor({ "secret-a": [liveModel(SPARK), liveModel(LUNA)] }),
+    );
+    const wrongIds = wrongAccount
+      .filter((entry) => entry.provider === CHATGPT_OAUTH_PROVIDER)
+      .map((entry) => entry.id);
+    expect(wrongIds).toEqual([LUNA]);
+  });
+
+  it("keeps a per-model disconnected slot hidden even when the provider account lists it", () => {
+    const disconnectedAuth: CodexCatalogSpaceAuth = {
+      byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" },
+      byModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "disconnected" } },
+      secretIdByProvider: { [CHATGPT_OAUTH_PROVIDER]: "secret-a" },
+      secretIdByModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "secret-b" } },
+    };
+    const disconnectedBase = listAvailablePiCatalog(
+      disconnectedAuth.byProvider,
+      disconnectedAuth.byModel,
+    );
+    const merged = applyCodexLiveCatalog(
+      disconnectedBase,
+      disconnectedAuth,
+      liveFor({ "secret-a": [liveModel(SPARK), liveModel(LUNA)] }),
+    );
+    const codexIds = merged
+      .filter((entry) => entry.provider === CHATGPT_OAUTH_PROVIDER)
+      .map((entry) => entry.id);
+    expect(codexIds).toEqual([LUNA]);
+  });
+
   it("ignores a live catalog sharing no slug with the static codex catalog", () => {
-    const foreign = [liveModel("some-unrelated-model"), liveModel("another-foreign")];
+    const foreign = liveFor({
+      "secret-a": [liveModel("some-unrelated-model"), liveModel("another-foreign")],
+    });
     expect(applyCodexLiveCatalog(base, oauthAuth, foreign)).toEqual(base);
   });
 
   it("leaves other providers untouched", () => {
-    const merged = applyCodexLiveCatalog(base, oauthAuth, [liveModel(LUNA)]);
+    const merged = applyCodexLiveCatalog(
+      base,
+      oauthAuth,
+      liveFor({ "secret-a": [liveModel(LUNA)] }),
+    );
     const otherProviders = merged.filter((entry) => entry.provider !== CHATGPT_OAUTH_PROVIDER);
     expect(otherProviders).toEqual(
       base.filter((entry) => entry.provider !== CHATGPT_OAUTH_PROVIDER),
