@@ -1119,6 +1119,13 @@ export function createRouter(deps: RouterDeps) {
         return { ok: true as const };
       }),
       disconnect: authed.models.disconnect.handler(async ({ context, input }) => {
+        // Retire pending sign-ins first so a finishing OAuth session cannot
+        // re-persist a credential the delete below is about to remove.
+        await deps.oauthLogins.cancelProvider({
+          userId: context.actor.userId,
+          spaceId: context.actor.spaceId,
+          provider: input.provider,
+        });
         await withSerializableRetry(() =>
           deps.prisma.$transaction(
             async (tx) => {

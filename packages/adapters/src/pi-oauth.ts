@@ -632,6 +632,19 @@ export class PiOAuthLogins {
     }
   }
 
+  /** Retire every sign-in for one provider so a finishing session cannot
+   *  re-persist a credential after disconnect deletes it. */
+  async cancelProvider(input: {
+    userId: string;
+    spaceId: string;
+    provider: string;
+  }): Promise<void> {
+    await this.retireActiveSession(
+      oauthScopeKey(input.userId, input.spaceId, input.provider),
+      undefined,
+    );
+  }
+
   private removeSession(session: Session): void {
     if (session.expiresTimer) clearTimeout(session.expiresTimer);
     session.expiresTimer = undefined;
