@@ -8,7 +8,11 @@ import {
   toStringRecord,
 } from "@rakazo/adapters";
 import type { Actor, AiConsentQuery, AiConsentStatus, AiRecipient } from "@rakazo/contracts";
-import { AI_DISCLOSURE_VERSION, AI_PRIVACY_URL } from "@rakazo/contracts";
+import {
+  AI_DISCLOSURE_VERSION,
+  AI_PRIVACY_URL,
+  OPENAI_COMPATIBLE_PROVIDER_ID,
+} from "@rakazo/contracts";
 import {
   findDefaultModelCredential,
   findDefaultVoiceCredential,
@@ -154,11 +158,15 @@ export async function aiConsentStatus(
       }),
     );
     for (const model of models) {
+      const baseUrl = model.credential ? baseUrls.get(model.credential.secretId) : undefined;
+      // A custom endpoint that cannot be read identifies no destination, so the
+      // model is not consentable until the credential is repaired and re-disclosed.
+      if (model.provider === OPENAI_COMPATIBLE_PROVIDER_ID && !baseUrl) continue;
       add(
         aiRecipient({
           provider: model.provider!,
           modelId: model.id!,
-          baseUrl: model.credential ? baseUrls.get(model.credential.secretId) : undefined,
+          baseUrl,
           use: "model",
         }),
       );

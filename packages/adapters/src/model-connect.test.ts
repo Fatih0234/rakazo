@@ -95,6 +95,22 @@ describe("built-in provider output limits", () => {
       /API key/,
     );
   });
+
+  it("fails a keyless update instead of dropping an unreadable stored credential", () => {
+    const corrupt = JSON.stringify({ kind: "api_key" });
+    expect(() =>
+      buildModelConnectPlaintext({ provider: "anthropic", maxTokens: 8192 }, corrupt),
+    ).toThrow(/corrupt/);
+  });
+
+  it("lets a supplied key replace an unreadable stored credential", () => {
+    const corrupt = JSON.stringify({ kind: "api_key" });
+    expect(
+      parseModelSecret(
+        buildModelConnectPlaintext({ provider: "anthropic", apiKey: "sk-new-key-123" }, corrupt),
+      ),
+    ).toEqual({ kind: "api_key", key: "sk-new-key-123" });
+  });
 });
 
 describe("openai-codex API key guard", () => {
@@ -124,16 +140,21 @@ describe("openai-codex API key guard", () => {
     );
   });
 
-  it("still carries a legacy stored API key forward without accepting new ones", () => {
+  it("rejects a keyless update that would carry a stored API key forward", () => {
     const legacyKey = buildModelConnectPlaintext({
       provider: "anthropic",
       apiKey: "sk-legacy-key",
     });
-    expect(
-      parseModelSecret(
-        buildModelConnectPlaintext({ provider: "openai-codex", maxTokens: 8192 }, legacyKey),
-      ),
-    ).toEqual({ kind: "api_key", key: "sk-legacy-key", maxTokens: 8192 });
+    expect(() =>
+      buildModelConnectPlaintext({ provider: "openai-codex", maxTokens: 8192 }, legacyKey),
+    ).toThrow(/ChatGPT subscription sign-in is required/);
+  });
+
+  it("fails a keyless update when the stored credential is corrupt", () => {
+    const corrupt = JSON.stringify({ kind: "oauth", credential: { type: "oauth" } });
+    expect(() =>
+      buildModelConnectPlaintext({ provider: "openai-codex", maxTokens: 8192 }, corrupt),
+    ).toThrow(/corrupt/);
   });
 
   it("keeps other providers' API keys working", () => {
@@ -474,6 +495,18 @@ describe("compatible connection updates", () => {
       apiKey: "fake-replacement-key",
       visionModelIds: ["bot-vision-model", "another-vision-model", "arbitrary-model"],
     });
+  });
+  it("fails a keyless update instead of dropping an unreadable saved connection", () => {
+    const corrupt = JSON.stringify({ kind: "openai_compatible" });
+    expect(() => buildModelConnectPlaintext(input, corrupt)).toThrow(/corrupt/);
+  });
+  it("lets an explicit key replace an unreadable saved connection", () => {
+    const corrupt = JSON.stringify({ kind: "openai_compatible" });
+    expect(
+      parseModelSecret(
+        buildModelConnectPlaintext({ ...input, apiKey: "fake-replacement-key" }, corrupt),
+      ),
+    ).toMatchObject({ kind: "openai_compatible", apiKey: "fake-replacement-key" });
   });
   it("revalidates inherited keys against the public-HTTPS policy", () => {
     vi.stubEnv("RAKAZO_OPENAI_COMPAT_ALLOW_PUBLIC", "1");

@@ -1006,10 +1006,12 @@ describe("model credential persistence", () => {
       prisma: {
         userModelCredential,
         spaceModelPreference,
+        secret: { findFirst: vi.fn().mockResolvedValue(null) },
         $transaction: vi.fn(async (fn: (client: typeof tx) => unknown) => fn(tx)),
       },
       secrets: {
         put: vi.fn().mockResolvedValue({ id: "secret-1", ciphertext: "cipher" }),
+        load: vi.fn(),
       },
       oauthLogins: {
         finish,
@@ -1104,6 +1106,70 @@ describe("model credential persistence", () => {
       json: expect.objectContaining({
         code: "BAD_REQUEST",
         message: expect.stringContaining("ChatGPT subscription sign-in is required"),
+      }),
+    });
+    expect(deps.secrets.put).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a keyless Codex update that would carry a stored API key forward", async () => {
+    const { upsert, deps, handler } = persistDeps();
+    vi.mocked(deps.prisma.userModelCredential.findFirst).mockResolvedValue({
+      id: "cred-1",
+      userId: actor.userId,
+      provider: "openai-codex",
+      label: "Codex",
+      secretId: "secret-1",
+      supportsImages: false,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    } as never);
+    vi.mocked(deps.prisma.secret.findFirst).mockResolvedValue({ ciphertext: "cipher" } as never);
+    vi.mocked(deps.secrets.load).mockReturnValue("sk-legacy-codex-key");
+
+    const response = await call(handler, "models/connect", {
+      provider: "openai-codex",
+      maxTokens: 8192,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      json: expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("ChatGPT subscription sign-in is required"),
+      }),
+    });
+    expect(deps.secrets.put).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it("fails a keyless update when the stored credential is unreadable", async () => {
+    const { upsert, deps, handler } = persistDeps();
+    vi.mocked(deps.prisma.userModelCredential.findFirst).mockResolvedValue({
+      id: "cred-1",
+      userId: actor.userId,
+      provider: "anthropic",
+      label: "Anthropic",
+      secretId: "secret-1",
+      supportsImages: false,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    } as never);
+    vi.mocked(deps.prisma.secret.findFirst).mockResolvedValue({ ciphertext: "cipher" } as never);
+    vi.mocked(deps.secrets.load).mockReturnValue(
+      JSON.stringify({ kind: "oauth", credential: { type: "oauth" } }),
+    );
+
+    const response = await call(handler, "models/connect", {
+      provider: "anthropic",
+      maxTokens: 8192,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      json: expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("corrupt"),
       }),
     });
     expect(deps.secrets.put).not.toHaveBeenCalled();

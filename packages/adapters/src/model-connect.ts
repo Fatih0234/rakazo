@@ -26,7 +26,7 @@ export function buildModelConnectPlaintext(
 ): string {
   if (input.provider === OPENAI_COMPATIBLE_PROVIDER_ID) {
     const prepared = prepareOpenAiCompatibleConnect(input);
-    const previous = tryParseModelSecret(previousPlaintext);
+    const previous = tryParseModelSecret(previousPlaintext, input.apiKey === undefined);
     const sameEndpoint =
       previous?.kind === "openai_compatible" && previous.baseUrl === prepared.baseUrl;
     if (input.apiKey === undefined && sameEndpoint) {
@@ -86,7 +86,7 @@ export function buildModelConnectPlaintext(
   if (input.provider === CHATGPT_OAUTH_PROVIDER && apiKey) {
     throw new Error(CHATGPT_SUBSCRIPTION_REQUIRED_MESSAGE);
   }
-  const previous = tryParseModelSecret(previousPlaintext);
+  const previous = tryParseModelSecret(previousPlaintext, !apiKey);
   const maxTokens = connectMaxTokens(input.maxTokens, previous?.maxTokens);
   if (apiKey) {
     if (apiKey.length < 8) throw new Error("API key must contain at least 8 characters");
@@ -95,6 +95,11 @@ export function buildModelConnectPlaintext(
       key: apiKey,
       ...(maxTokens !== undefined ? { maxTokens } : {}),
     });
+  }
+  // A stored api_key can never authenticate the Codex transport either, so a
+  // keyless update forces re-sign-in instead of keeping the dead credential.
+  if (input.provider === CHATGPT_OAUTH_PROVIDER && previous?.kind === "api_key") {
+    throw new Error(CHATGPT_SUBSCRIPTION_REQUIRED_MESSAGE);
   }
   if (previous?.kind === "api_key" && previous.key.trim().length >= 8) {
     return serializeModelSecret({
@@ -119,12 +124,20 @@ export function buildModelConnectPlaintext(
 const CHATGPT_SUBSCRIPTION_REQUIRED_MESSAGE =
   "ChatGPT subscription sign-in is required for this provider.";
 
-/** Inherited fields come from the previous secret; a corrupt one counts as absent. */
-function tryParseModelSecret(plaintext?: string): StoredModelSecret | undefined {
+/**
+ * Inherited fields come from the previous secret. A corrupt one counts as
+ * absent only when the caller supplied a replacement key; a keyless update
+ * fails instead of silently dropping the stored credential.
+ */
+function tryParseModelSecret(
+  plaintext: string | undefined,
+  keylessUpdate: boolean,
+): StoredModelSecret | undefined {
   if (!plaintext) return undefined;
   try {
     return parseModelSecret(plaintext);
-  } catch {
+  } catch (error) {
+    if (keylessUpdate) throw error;
     return undefined;
   }
 }

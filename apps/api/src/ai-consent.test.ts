@@ -65,6 +65,57 @@ describe("consent grants", () => {
     expect(status.recipients[0]?.name).toBe("OpenAI");
     expect(deps.prisma.spaceVoicePreference.findMany).not.toHaveBeenCalled();
   });
+  it("discloses the endpoint origin for a readable custom connection", async () => {
+    const { deps, actor } = setup();
+    deps.env.agentRuntime = "pi";
+    vi.mocked(deps.prisma.spaceModelPreference.findMany).mockResolvedValue([
+      {
+        modelId: "qwen3-4b",
+        isDefault: false,
+        credential: { provider: "openai-compatible", secretId: "secret-compat" },
+      },
+    ] as never);
+    vi.mocked(deps.prisma.secret.findMany).mockResolvedValue([
+      { id: "secret-compat", ciphertext: "cipher-compat" },
+    ] as never);
+    deps.secrets = {
+      load: vi.fn(() =>
+        JSON.stringify({ kind: "openai_compatible", baseUrl: "https://models.example.test/v1" }),
+      ),
+    } as unknown as RouterDeps["secrets"];
+    const status = await aiConsentStatus(deps, actor, { uses: ["model"] });
+    expect(status.recipients).toHaveLength(1);
+    expect(status.recipients[0]?.name).toContain("https://models.example.test");
+  });
+  it("does not offer a custom connection whose stored endpoint is unreadable", async () => {
+    const { deps, actor } = setup();
+    deps.env.agentRuntime = "pi";
+    vi.mocked(deps.prisma.spaceModelPreference.findMany).mockResolvedValue([
+      {
+        modelId: "qwen3-4b",
+        isDefault: false,
+        credential: { provider: "openai-compatible", secretId: "secret-broken" },
+      },
+      {
+        modelId: "claude",
+        isDefault: false,
+        credential: { provider: "anthropic", secretId: "secret-key" },
+      },
+    ] as never);
+    vi.mocked(deps.prisma.secret.findMany).mockResolvedValue([
+      { id: "secret-broken", ciphertext: "cipher-broken" },
+      { id: "secret-key", ciphertext: "cipher-key" },
+    ] as never);
+    deps.secrets = {
+      load: vi.fn((ciphertext: string) =>
+        ciphertext === "cipher-broken"
+          ? JSON.stringify({ kind: "openai_compatible" })
+          : "sk-anthropic-key",
+      ),
+    } as unknown as RouterDeps["secrets"];
+    const status = await aiConsentStatus(deps, actor, { uses: ["model"] });
+    expect(status.recipients.map((recipient) => recipient.name)).toEqual(["Anthropic"]);
+  });
   it("returns an operator policy without requiring a hosted provider", async () => {
     const { deps, actor } = setup();
     deps.env.privacyPolicyUrl = "https://example.com/privacy";
