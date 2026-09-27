@@ -402,7 +402,8 @@ Layer `infra/compose/docker-compose.prod.docker.yml` after the base file in ever
 invocation to run bot computers as local Docker containers instead of a remote provider:
 
 ```bash
-# Pull the registry images first; --pull never fails when they are absent locally.
+# Pull only the pull-only dependency images (postgres, caddy, busybox);
+# --pull never fails when they are absent locally.
 docker compose --env-file .env \
   -f infra/compose/docker-compose.prod.yml \
   -f infra/compose/docker-compose.prod.docker.yml \
@@ -410,8 +411,15 @@ docker compose --env-file .env \
 docker compose --env-file .env \
   -f infra/compose/docker-compose.prod.yml \
   -f infra/compose/docker-compose.prod.docker.yml \
-  up -d --build --wait --pull never
+  up -d --build --wait --wait-timeout 300 --pull never
 ```
+
+In this topology `api`, `worker`, `web`, `supervisor`, and `computer` always build
+from the checkout — `pull --ignore-buildable` only covers dependencies that have no
+`build` section. To deploy published app images instead of building, use the base
+file without the overlay. If `docker compose up --help` lacks `--wait-timeout`
+(older Compose), drop `--wait` and verify with `docker compose ... ps` instead;
+`--wait` alone can hang on one-shot services.
 
 The overlay adds the supervisor (app image, `user: root`, Docker socket), the one-shot `computer`
 image build and `data-init` ownership fix, points the API and worker at `http://supervisor:7091`,
