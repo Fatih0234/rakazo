@@ -36,6 +36,7 @@ import {
 } from "./openai-tool-parameters.js";
 import { PiRuntimeCredentialStore, toOAuthCredential } from "./pi-credentials.js";
 import { registerLocalProvider } from "./pi-local-provider.js";
+import { codexComputeResidency } from "./pi-oauth.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_ID,
   registerOpenAiCompatibleCatalog,
@@ -261,7 +262,16 @@ export class PiAgentRuntime implements AgentRuntime {
           sessionId: conversationSessionId(request.threadId, request.botId),
           steeringMode: "all",
           streamFn: (m, ctx, options) =>
-            models.streamSimple(m, ctx, reliableStreamOptions(m, options, request.model.maxTokens)),
+            models.streamSimple(
+              m,
+              ctx,
+              reliableStreamOptions(
+                m,
+                options,
+                request.model.maxTokens,
+                request.model.oauth?.credential.access ?? apiKey,
+              ),
+            ),
           getApiKey: async () => apiKey,
           transformContext: async (messages) =>
             pruneComputerScreenshotContext(
@@ -1079,7 +1089,12 @@ async function executeSubagent(host: ToolHost, executionId: string, args: Record
       selectedModel.models.streamSimple(
         m,
         ctx,
-        reliableStreamOptions(m, options, requestModel.maxTokens),
+        reliableStreamOptions(
+          m,
+          options,
+          requestModel.maxTokens,
+          requestModel.oauth?.credential.access ?? selectedModel.apiKey,
+        ),
       ),
     getApiKey: async () => selectedModel.apiKey,
     transformContext: async (messages) =>
@@ -1812,6 +1827,7 @@ export function reliableStreamOptions(
   model: Pick<Model<Api>, "api" | "provider" | "maxTokens" | "reasoning">,
   options?: SimpleStreamOptions,
   configuredMaxTokens?: number,
+  accessToken?: string,
 ): SimpleStreamOptions {
   let next: SimpleStreamOptions = {
     ...options,
@@ -1830,6 +1846,15 @@ export function reliableStreamOptions(
     // runs then surface abnormal close 1006 as a terminal model error. SSE has
     // bounded network retries and no long-lived connection between tool turns.
     next = { ...next, transport: "sse" };
+    // Forward the account's compute residency so the Codex backend routes to the
+    // right region. An explicit caller header wins.
+    const residency = codexComputeResidency(accessToken);
+    if (residency) {
+      next = {
+        ...next,
+        headers: { "x-openai-internal-codex-residency": residency, ...next.headers },
+      };
+    }
   }
 
   // OpenCode Go/Zen require a sticky x-opencode-session header (affinity + some
