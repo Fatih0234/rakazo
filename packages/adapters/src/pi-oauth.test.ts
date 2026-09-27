@@ -205,6 +205,34 @@ describe("terminalOAuthRefreshErrorMarker", () => {
 
   it.each([
     [
+      "4xx marker outer, 5xx inner",
+      new Error('OpenAI Codex token refresh failed (400): {"error":"invalid_grant"}', {
+        cause: new Error("gateway upstream failed (502)"),
+      }),
+    ],
+    [
+      "5xx outer, 4xx marker inner",
+      new Error("OAuth refresh failed for openai-codex (503)", {
+        cause: new Error('{"error":"invalid_grant"}', {
+          cause: new Error("token endpoint rejected (400)"),
+        }),
+      }),
+    ],
+    [
+      "kimi unauthorized marker with a 5xx layer",
+      new Error("Kimi Code token refresh unauthorized (status 403)", {
+        cause: new Error("proxy hop failed with status 504"),
+      }),
+    ],
+  ])("does not classify a %s chain as terminal", (_label, error) => {
+    // A 5xx anywhere in the chain vetoes a terminal 4xx + marker elsewhere —
+    // the deeper gateway failure means the token endpoint never judged the
+    // credential.
+    expect(terminalOAuthRefreshErrorMarker(error)).toBeUndefined();
+  });
+
+  it.each([
+    [
       "5xx body quoting a marker",
       new Error('OpenAI Codex token refresh failed (500): {"error":"invalid_grant"}'),
     ],

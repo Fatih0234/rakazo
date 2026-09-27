@@ -107,12 +107,15 @@ const MAX_REFRESH_ERROR_CHAIN_DEPTH = 10;
  * wraps provider errors in `ModelsError("oauth", "OAuth refresh failed for
  * <provider>", { cause })`, and the provider-level message embeds the token
  * endpoint's HTTP status and body, so inspect the whole `cause` chain: a
- * marker retires only when a terminal 4xx status accompanies it anywhere in
- * the chain — a 5xx body can still quote `invalid_grant` and must not retire.
+ * marker retires only when a terminal 4xx status accompanies it — and a 5xx
+ * reported by ANY layer vetoes it, since a gateway failure deeper in the
+ * chain can wrap a quoted marker without the token endpoint having judged
+ * the credential at all.
  */
 export function terminalOAuthRefreshErrorMarker(error: unknown): string | undefined {
   let marker: string | undefined;
   let terminalStatus = false;
+  let serverErrorStatus = false;
   let current: unknown = error;
   for (
     let depth = 0;
@@ -124,13 +127,14 @@ export function terminalOAuthRefreshErrorMarker(error: unknown): string | undefi
     marker ??= TERMINAL_REFRESH_ERROR_PATTERNS.find(([, pattern]) => pattern.test(message))?.[0];
     for (const pattern of REFRESH_ERROR_STATUS_PATTERNS) {
       for (const match of message.matchAll(pattern)) {
-        if (TERMINAL_REFRESH_HTTP_STATUSES.has(Number(match[1]))) terminalStatus = true;
+        const status = Number(match[1]);
+        if (TERMINAL_REFRESH_HTTP_STATUSES.has(status)) terminalStatus = true;
+        else if (status >= 500 && status <= 599) serverErrorStatus = true;
       }
     }
-    if (marker !== undefined && terminalStatus) return marker;
     current = current instanceof Error ? current.cause : undefined;
   }
-  return marker !== undefined && terminalStatus ? marker : undefined;
+  return marker !== undefined && terminalStatus && !serverErrorStatus ? marker : undefined;
 }
 
 export type StoredModelSecret =
