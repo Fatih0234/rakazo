@@ -105,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           branch="deps/pi-catalog-ai-${NEW_AI}-core-${NEW_CORE}"
           git checkout -B "$branch"
           git add packages/adapters/package.json pnpm-lock.yaml
@@ -119,8 +119,8 @@ jobs:
           # overwrite commits added after a closed PR.
           if git ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1; then
             git fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"
-            tip_author="$(git log -1 --format='%an <%ae>' "origin/$branch")"
-            if [ "$tip_author" != "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" ]; then
+            tip_author="$(git log -1 --format='%an' "origin/$branch")"
+            if [ "$tip_author" != "github-actions[bot]" ]; then
               echo "Refusing to overwrite $branch: latest commit by $tip_author was not pushed by this workflow."
               exit 1
             fi
