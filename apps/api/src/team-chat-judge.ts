@@ -16,9 +16,9 @@ import {
 import {
   findDefaultModelCredential,
   findModelCredential,
-  type PrismaClient,
   retireModelCredential,
 } from "@rakazo/db";
+import type { PrismaClient } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 
 const MAX_RULES_CHARS = 4_000;
