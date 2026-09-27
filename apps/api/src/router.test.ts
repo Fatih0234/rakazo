@@ -1336,6 +1336,192 @@ describe("codex catalog auth", () => {
   });
 });
 
+describe("codex live catalog", () => {
+  const actor = {
+    spaceId: "workspace-1",
+    userId: "user-1",
+    email: "user@rakazo.test",
+    isDeploymentOwner: true,
+  } satisfies Actor;
+  const spark = "gpt-5.3-codex-spark";
+  const luna = "gpt-6-luna";
+  const sol = "gpt-6-sol";
+  const oauth = (accountId?: string) =>
+    JSON.stringify({
+      type: "oauth",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      ...(accountId ? { accountId } : {}),
+    });
+  const apiKey = "sk-test-api-key-12345678";
+
+  function liveModel(slug: string) {
+    return {
+      slug,
+      reasoningEfforts: ["low", "medium", "high"],
+      contextWindow: 272_000,
+      supportsImages: false,
+      supportsFastTier: true,
+    };
+  }
+
+  async function call(handler: RPCHandler<never>, path: string, body: unknown) {
+    const { response } = await handler.handle(
+      new Request(`http://127.0.0.1/rpc/${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ json: body }),
+      }),
+      { prefix: "/rpc", context: { actor } },
+    );
+    return response;
+  }
+
+  async function listIds(handler: RPCHandler<never>): Promise<string[]> {
+    const response = await call(handler, "models/list", null);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      json: Array<{ provider: string; id: string }>;
+    };
+    return body.json.filter((entry) => entry.provider === "openai-codex").map((entry) => entry.id);
+  }
+
+  function catalogDeps(opts: {
+    read: ReturnType<typeof vi.fn>;
+    oauthAccountId?: string | null;
+    apiKeyOnly?: boolean;
+    disconnected?: boolean;
+  }) {
+    const oauthPlaintext = oauth(
+      opts.oauthAccountId === null ? undefined : (opts.oauthAccountId ?? "acct-live-test"),
+    );
+    const load = vi.fn((ciphertext: string) =>
+      ciphertext === "cipher-oauth" ? oauthPlaintext : apiKey,
+    );
+    const prisma = opts.disconnected
+      ? {
+          userModelCredential: { findMany: vi.fn().mockResolvedValue([]) },
+          spaceModelPreference: { findMany: vi.fn().mockResolvedValue([]) },
+          secret: { findMany: vi.fn().mockResolvedValue([]) },
+        }
+      : opts.apiKeyOnly
+        ? {
+            userModelCredential: {
+              findMany: vi
+                .fn()
+                .mockResolvedValue([{ provider: "openai-codex", secretId: "secret-api" }]),
+            },
+            spaceModelPreference: { findMany: vi.fn().mockResolvedValue([]) },
+            secret: {
+              findMany: vi.fn().mockResolvedValue([{ id: "secret-api", ciphertext: "cipher-api" }]),
+            },
+          }
+        : {
+            userModelCredential: {
+              findMany: vi.fn().mockResolvedValue([
+                { provider: "openai-codex", secretId: "secret-api" },
+                { provider: "openai-codex", secretId: "secret-oauth" },
+              ]),
+            },
+            spaceModelPreference: {
+              findMany: vi
+                .fn()
+                .mockResolvedValue([
+                  { credential: { provider: "openai-codex", secretId: "secret-oauth" } },
+                ]),
+            },
+            secret: {
+              findMany: vi
+                .fn()
+                .mockResolvedValue([{ id: "secret-oauth", ciphertext: "cipher-oauth" }]),
+            },
+          };
+    const deps = {
+      prisma,
+      secrets: { load },
+      env: {
+        defaultProvider: "fake",
+        defaultModel: "fake-model",
+        webOrigin: "http://127.0.0.1:5173",
+        screenProxySecret: "fake-test-secret",
+        sandboxProvider: "fake",
+      },
+      codexCatalog: { read: opts.read },
+    } as unknown as RouterDeps;
+    return { handler: new RPCHandler(createRouter(deps)) };
+  }
+
+  it("unlocks Spark and bounds the codex list to the live account catalog", async () => {
+    const read = vi.fn().mockResolvedValue([liveModel(spark), liveModel(luna)]);
+    const { handler } = catalogDeps({ read });
+
+    const ids = await listIds(handler);
+
+    expect(ids).toContain(spark);
+    expect(ids).toContain(luna);
+    expect(ids).not.toContain(sol);
+    expect(read).toHaveBeenCalledWith(
+      actor.userId,
+      expect.objectContaining({ accountId: "acct-live-test" }),
+    );
+  });
+
+  it("keeps the static oauth catalog when the live read fails", async () => {
+    const read = vi.fn().mockResolvedValue(undefined);
+    const { handler } = catalogDeps({ read });
+
+    const ids = await listIds(handler);
+
+    expect(ids).not.toContain(spark);
+    expect(ids).toContain(luna);
+  });
+
+  it("ignores a live catalog that shares no known codex slug", async () => {
+    const read = vi.fn().mockResolvedValue([liveModel("gpt-unknown-from-backend")]);
+    const { handler } = catalogDeps({ read });
+
+    const ids = await listIds(handler);
+
+    expect(ids).not.toContain(spark);
+    expect(ids).toContain(luna);
+    expect(ids).not.toContain("gpt-unknown-from-backend");
+  });
+
+  it("never reads the catalog for an API-key credential and still lists Spark", async () => {
+    const read = vi.fn().mockResolvedValue([liveModel(spark)]);
+    const { handler } = catalogDeps({ read, apiKeyOnly: true });
+
+    const ids = await listIds(handler);
+
+    expect(ids).toContain(spark);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("never reads the catalog when no credential exists", async () => {
+    const read = vi.fn().mockResolvedValue([liveModel(spark)]);
+    const { handler } = catalogDeps({ read, disconnected: true });
+
+    const ids = await listIds(handler);
+
+    // Disconnected browsing still lists Codex models but keeps the Spark exclusion.
+    expect(ids).not.toContain(spark);
+    expect(ids).toContain(luna);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the static catalog when the oauth credential has no account id", async () => {
+    const read = vi.fn().mockResolvedValue([liveModel(spark)]);
+    const { handler } = catalogDeps({ read, oauthAccountId: null });
+
+    const ids = await listIds(handler);
+
+    expect(ids).not.toContain(spark);
+    expect(ids).toContain(luna);
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
 describe("model set default auth", () => {
   const actor = {
     spaceId: "workspace-1",

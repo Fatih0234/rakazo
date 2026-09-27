@@ -19,6 +19,7 @@ import {
 } from "@rakazo/adapter-kit";
 import type {
   CloudAgentConnection,
+  CodexLiveCatalog,
   ComposioProvider,
   ComputerExecutionLease,
   ConnectorRegistry,
@@ -30,15 +31,18 @@ import type {
 } from "@rakazo/adapters";
 import {
   acquireComputerExecutionLease,
+  applyCodexLiveCatalog,
   applyTeachingDesktopInput,
   archiveBot,
   assertSafeRemoteUrl,
   buildMcpCredentialBlob,
   buildModelConnectPlaintext,
+  CodexCatalogCache,
   ComputerBusyError,
   cancelComputerRunWork,
   checkpointAndRecordComputerWorkspace,
   clearInactiveUserComputerControl,
+  codexLiveCatalogForSpace,
   computerSupportsUpdate,
   computerUpdateView,
   createVoiceProvider,
@@ -467,6 +471,8 @@ export interface RouterDeps {
   home: AgentHomeStore;
   secrets: EncryptedSecretStore;
   oauthLogins: PiOAuthLogins;
+  /** Live Codex catalog seam; defaults to the shared per-process cache. */
+  codexCatalog?: CodexLiveCatalog;
   integrationSettings?: IntegrationProviderSettings;
   composio?: ComposioProvider;
   mcpOAuth?: McpOAuthBroker;
@@ -567,6 +573,7 @@ export function createRouter(deps: RouterDeps) {
   const repos = createRepos(deps.prisma);
   const onboardingDeps = { prisma: deps.prisma, events: deps.events, connectors: deps.connectors };
   const mcpOAuth = deps.mcpOAuth ?? new McpOAuthBroker(deps.prisma, deps.secrets);
+  const codexCatalog = deps.codexCatalog ?? new CodexCatalogCache();
   const groupRepos = createGroupRepos(deps.prisma);
   const taughtSkills = createTaughtSkillsService({
     prisma: deps.prisma,
@@ -862,7 +869,18 @@ export function createRouter(deps: RouterDeps) {
           deps.secrets,
           context.actor,
         );
-        return [...listAvailablePiCatalog(auth.byProvider, auth.byModel), scriptedCatalogEntry];
+        const available = listAvailablePiCatalog(auth.byProvider, auth.byModel);
+        const live = await codexLiveCatalogForSpace(
+          deps.prisma,
+          deps.secrets,
+          context.actor,
+          auth,
+          codexCatalog,
+        );
+        return [
+          ...(live ? applyCodexLiveCatalog(available, auth, live) : available),
+          scriptedCatalogEntry,
+        ];
       }),
       credentials: authed.models.credentials.handler(async ({ context }) => {
         const rows = await deps.prisma.userModelCredential.findMany({
