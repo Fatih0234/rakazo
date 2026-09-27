@@ -1127,28 +1127,16 @@ export function createRouter(deps: RouterDeps) {
               });
               if (existing.length === 0) return;
               const ids = existing.map((row) => row.id);
+              // Credentials belong to the account, not the space — disconnecting
+              // removes them everywhere, matching voice.disconnect. Linked
+              // preferences in other spaces go with their credential.
               await tx.spaceModelPreference.deleteMany({
-                where: {
-                  spaceId: context.actor.spaceId,
-                  userId: context.actor.userId,
-                  credentialId: { in: ids },
-                },
+                where: { userId: context.actor.userId, credentialId: { in: ids } },
               });
-              // Credentials live on the account, not the space — keep the ones
-              // another space's preferences still select.
-              const referenced = await tx.spaceModelPreference.findMany({
-                where: { credentialId: { in: ids } },
-                select: { credentialId: true },
-              });
-              const kept = new Set(referenced.map((row) => row.credentialId));
-              const removable = existing.filter((row) => !kept.has(row.id));
               await tx.userModelCredential.deleteMany({
-                where: {
-                  userId: context.actor.userId,
-                  id: { in: removable.map((row) => row.id) },
-                },
+                where: { userId: context.actor.userId, id: { in: ids } },
               });
-              for (const row of removable) {
+              for (const row of existing) {
                 await deleteUnreferencedCredentialSecret(tx, {
                   credentialKind: "model",
                   credentialId: row.id,
@@ -5435,6 +5423,18 @@ async function persistModelCredential(
     ? validateModelAuthAvailability(input.provider, requestedModelId, input.plaintext)
     : undefined;
   if (authError) throw new ORPCError("BAD_REQUEST", { message: authError });
+  const defaultModel =
+    requestedModelId ??
+    defaultCatalogModelId(input.provider, input.plaintext) ??
+    usableModelId(deps.env.defaultModel);
+  if (input.thinkingLevel && defaultModel) {
+    const allowed = await allowedThinkingLevels(deps, actor, input.provider, defaultModel);
+    if (allowed && !allowed.includes(input.thinkingLevel)) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: `Thinking level must be one of: ${allowed.join(", ")}`,
+      });
+    }
+  }
   const stored = await deps.secrets.put(input.plaintext, {
     operationId: "cred",
     traceId: "cred",
@@ -5483,10 +5483,6 @@ async function persistModelCredential(
               },
             });
         throwIfAborted(input.signal);
-        const defaultModel =
-          requestedModelId ??
-          defaultCatalogModelId(input.provider, input.plaintext) ??
-          usableModelId(deps.env.defaultModel);
         let thinkingLevel = input.thinkingLevel;
         if (thinkingLevel === undefined) {
           // A stored effort only carries over while it still names this model.

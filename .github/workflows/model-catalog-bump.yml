@@ -114,8 +114,9 @@ jobs:
             echo "PR already open for $branch; leaving it in place."
             exit 0
           fi
-          # A branch from a closed or superseded run may still exist; replace it.
-          git push --force-with-lease -u origin "$branch"
+          # A branch from a closed or superseded run may still exist; this
+          # workflow owns deps/pi-catalog-* so replacing it is safe.
+          git push --force -u origin "$branch"
           while read -r pr head; do
             [ "$head" = "$branch" ] && continue
             gh pr close "$pr" --comment "Superseded by the pi-ai ${NEW_AI} / pi-agent-core ${NEW_CORE} catalog bump." || true
