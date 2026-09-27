@@ -24,7 +24,9 @@ import {
   COMPUTER_IMAGE,
   COMPUTER_UID,
   COMPUTER_USER,
+  computerBridgeNameFor,
   computerHomeStorage,
+  computerNetworkCreateOptions,
   computerNetworkNameFor,
   computerNetworkNamesForCleanup,
   computerResourceLimits,
@@ -36,6 +38,7 @@ import {
   legacyNetworkOwnedSolelyBy,
   publishedLoopbackControlHostPort,
   resolveComputerControlEndpoint,
+  resolveComputerEgressMode,
   resolveScreenNetworkMode,
   resolveScreenPublishTarget,
   resolveSpaceComputerLimit,
@@ -94,6 +97,7 @@ let imageReady: Promise<void> | undefined;
 let supervisorInfo: Docker.ContainerInspectInfo | undefined;
 const supervisorToken = resolveSupervisorToken(process.env);
 const screenNetworkMode = resolveScreenNetworkMode(process.env.SANDBOX_SCREEN_NETWORK);
+const computerEgressMode = resolveComputerEgressMode();
 const teamScreenLimit = resolveTeamScreenLimit();
 // Host-run supervisors on Docker Desktop (macOS/Windows) cannot reach container
 // IPs, so computer control must use a published loopback port instead.
@@ -188,9 +192,40 @@ app.post("/computers", async (c) => {
           info.HostConfig.PortBindings,
           controlViaLoopback,
         );
+        // A network created while egress was open keeps a generic br-* bridge
+        // the host ruleset does not match, so restricted mode must not resume a
+        // computer on it — the replace path rekeys the network instead.
+        const restrictedBridgeOk =
+          !networkMode ||
+          computerEgressMode !== "restricted" ||
+          networkMode !== computerNetworkNameFor(body.botId) ||
+          (await docker
+            .getNetwork(networkMode)
+            .inspect()
+            .then(
+              (net) =>
+                net.Options?.["com.docker.network.bridge.name"] ===
+                computerBridgeNameFor(body.botId),
+              (error) => {
+                // A missing network is incompatible; transient inspect
+                // failures must surface instead of force-replacing a
+                // healthy computer.
+                const status = (error as { statusCode?: number })?.statusCode;
+                if (status === 404 || /no such network|not found/i.test(String(error))) {
+                  return false;
+                }
+                throw error;
+              },
+            ));
         if (
           info.Image === desired.Id &&
-          (!networkMode || info.HostConfig.NetworkMode === networkMode) &&
+          // A named-network container must also still be attached: a network
+          // deleted mid-recreate leaves HostConfig.NetworkMode set while
+          // NetworkSettings is empty, and resuming that yields no connectivity.
+          (!networkMode ||
+            (info.HostConfig.NetworkMode === networkMode &&
+              Boolean(info.NetworkSettings?.Networks?.[networkMode]))) &&
+          restrictedBridgeOk &&
           info.Config.User === computerUser &&
           controlPublishOk &&
           (!storage.homeVolume || homeVolumeMatches(info.HostConfig.Mounts, storage.homeVolume))
@@ -807,6 +842,13 @@ function startSupervisor() {
   // and pass its healthcheck, then fail the first POST /computers with a 500 that reads like a
   // Docker problem. Failing here names the variable while the deployment is still coming up.
   computerResourceLimits();
+  if (computerEgressMode === "restricted") {
+    // Enforcement is host-side (DOCKER-USER/INPUT on rakazo-c* bridges); the flag
+    // only names the interfaces. Without the host script, egress stays open.
+    logger.warn(
+      "SANDBOX_COMPUTER_EGRESS=restricted requires the host firewall rules from infra/compose/restrict-computer-egress.sh (see docs/self-host.md)",
+    );
+  }
   const port = Number(process.env.SUPERVISOR_PORT ?? 7091);
   const hostname = process.env.SUPERVISOR_HOST ?? "127.0.0.1";
   const server = serve({ fetch: app.fetch, hostname, port }, () => {
@@ -1223,13 +1265,64 @@ async function connectComposeScreenPeers(networkName: string, info: Docker.Conta
 }
 
 async function ensureBotNetwork(botId: string) {
-  const name = computerNetworkNameFor(botId);
   return docker
-    .createNetwork({ Name: name, Driver: "bridge", CheckDuplicate: true })
-    .catch((error) => {
+    .createNetwork(computerNetworkCreateOptions(botId, computerEgressMode))
+    .catch(async (error) => {
       // Existing networks and concurrent provision requests are both safe.
       if (!/already exists/i.test(String(error))) throw error;
+      if (computerEgressMode === "restricted") {
+        await rekeyRestrictedBotNetwork(computerNetworkNameFor(botId), botId);
+      }
     });
+}
+
+// A network created before SANDBOX_COMPUTER_EGRESS=restricted has a generic br-*
+// bridge the host ruleset does not match. Recreate it with the named bridge: the
+// only caller is the create path, which replaces the computer container anyway,
+// and supervisor/web screen peers rejoin lazily via connectComposeScreenPeers.
+async function rekeyRestrictedBotNetwork(name: string, botId: string) {
+  const expectedBridge = computerBridgeNameFor(botId);
+  const inspect = () =>
+    docker
+      .getNetwork(name)
+      .inspect()
+      .catch(() => undefined);
+  const hasNamedBridge = (info: Docker.NetworkInspectInfo | undefined) =>
+    info?.Options?.["com.docker.network.bridge.name"] === expectedBridge;
+  const info = await inspect();
+  if (info && !hasNamedBridge(info)) {
+    const network = docker.getNetwork(name);
+    const containerIds = Object.keys(info.Containers ?? {});
+    for (const containerId of containerIds) {
+      await network.disconnect({ Container: containerId, Force: true }).catch(() => undefined);
+    }
+    const removed = await network.remove().then(
+      () => true,
+      () => false,
+    );
+    // Fail closed: attaching the computer to a network the host ruleset does
+    // not match would silently grant unrestricted egress under restricted mode.
+    // Reattach first so a failed rekey does not strand a running computer
+    // without connectivity.
+    if (!removed) {
+      await Promise.all(
+        containerIds.map((containerId) =>
+          network.connect({ Container: containerId }).catch((error) => {
+            if (!/already exists|already connected/i.test(String(error))) throw error;
+          }),
+        ),
+      );
+      throw new Error(`cannot restrict egress: failed to replace unrestricted network ${name}`);
+    }
+  }
+  if (!info || !hasNamedBridge(info)) {
+    await docker.createNetwork(computerNetworkCreateOptions(botId, "restricted")).catch((error) => {
+      if (!/already exists/i.test(String(error))) throw error;
+    });
+  }
+  if (!hasNamedBridge(await inspect())) {
+    throw new Error(`cannot restrict egress: network ${name} is missing the named bridge`);
+  }
 }
 
 async function removeBotNetwork(botId: string) {
