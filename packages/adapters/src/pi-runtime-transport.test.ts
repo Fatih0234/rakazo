@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, ModelsSimpleStreamOptions, ProviderHeaders } from "@earendil-works/pi-ai";
 import { DEFAULT_MODEL_MAX_TOKENS } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -21,18 +21,29 @@ const fakeJwt = (payload: unknown) =>
 
 const codexModel = { provider: "openai-codex", api: "openai-codex-responses" } as Model<Api>;
 
+// Mirrors Models.applyAuth: provider auth headers merge with options.headers,
+// then transformHeaders runs on the result just before the request is sent.
+const residencyFor = async (options: ModelsSimpleStreamOptions, headers: ProviderHeaders = {}) =>
+  (await options.transformHeaders?.(headers))?.["x-openai-internal-codex-residency"];
+
 describe("Pi runtime transport", () => {
   it.each([
     { source: "provider", provider: "openai-codex", api: "openai-completions" },
     { source: "API", provider: "custom-provider", api: "openai-codex-responses" },
   ])("forces SSE when Codex is identified by $source", ({ provider, api }) => {
     const model = { provider, api } as Model<Api>;
+    const { transformHeaders, ...rest } = reliableStreamOptions(model, {
+      transport: "auto",
+      maxRetries: 4,
+    });
 
-    expect(reliableStreamOptions(model, { transport: "auto", maxRetries: 4 })).toEqual({
+    expect(rest).toEqual({
       ...streamDefaults,
       transport: "sse",
       maxRetries: 4,
     });
+    // Codex requests also get the residency transformHeaders hook.
+    expect(transformHeaders).toBeTypeOf("function");
   });
 
   it("applies a stream timeout and output cap without changing other transports", () => {
@@ -106,51 +117,53 @@ describe("Pi runtime transport", () => {
       source: "API",
       model: { provider: "custom-provider", api: "openai-codex-responses" } as Model<Api>,
     },
-  ])("forwards the compute residency claim when Codex is identified by $source", ({ model }) => {
-    const token = fakeJwt({
-      "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
-    });
+  ])(
+    "forwards the compute residency claim when Codex is identified by $source",
+    async ({ model }) => {
+      const token = fakeJwt({
+        "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
+      });
 
-    expect(reliableStreamOptions(model, { transport: "auto" }, undefined, token)).toEqual({
-      ...streamDefaults,
-      transport: "sse",
-      headers: { "x-openai-internal-codex-residency": "us-east" },
-    });
-  });
+      const { transformHeaders, ...rest } = reliableStreamOptions(
+        model,
+        { transport: "auto" },
+        undefined,
+        token,
+      );
+      expect(rest).toEqual({ ...streamDefaults, transport: "sse" });
+      expect(await transformHeaders?.({})).toEqual({
+        "x-openai-internal-codex-residency": "us-east",
+      });
+    },
+  );
 
-  it("forwards a root-level residency claim when the namespaced one is absent", () => {
+  it("forwards a root-level residency claim when the namespaced one is absent", async () => {
     const token = fakeJwt({ chatgpt_compute_residency: "eu-west" });
 
-    expect(
-      reliableStreamOptions(codexModel, undefined, undefined, token).headers?.[
-        "x-openai-internal-codex-residency"
-      ],
-    ).toBe("eu-west");
+    expect(await residencyFor(reliableStreamOptions(codexModel, undefined, undefined, token))).toBe(
+      "eu-west",
+    );
   });
 
-  it("prefers the namespaced residency claim over the root-level one", () => {
+  it("prefers the namespaced residency claim over the root-level one", async () => {
     const token = fakeJwt({
       "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
       chatgpt_compute_residency: "eu-west",
     });
 
-    expect(
-      reliableStreamOptions(codexModel, undefined, undefined, token).headers?.[
-        "x-openai-internal-codex-residency"
-      ],
-    ).toBe("us-east");
+    expect(await residencyFor(reliableStreamOptions(codexModel, undefined, undefined, token))).toBe(
+      "us-east",
+    );
   });
 
-  it("forwards unknown residency values unvalidated", () => {
+  it("forwards unknown residency values unvalidated", async () => {
     const token = fakeJwt({
       "https://api.openai.com/auth": { chatgpt_compute_residency: "future-region_1" },
     });
 
-    expect(
-      reliableStreamOptions(codexModel, undefined, undefined, token).headers?.[
-        "x-openai-internal-codex-residency"
-      ],
-    ).toBe("future-region_1");
+    expect(await residencyFor(reliableStreamOptions(codexModel, undefined, undefined, token))).toBe(
+      "future-region_1",
+    );
   });
 
   it.each([
@@ -162,30 +175,30 @@ describe("Pi runtime transport", () => {
     ["empty", { chatgpt_compute_residency: "" }],
     ["non-string", { "https://api.openai.com/auth": { chatgpt_compute_residency: 42 } }],
     ["non-object namespace", { "https://api.openai.com/auth": "us-east" }],
-  ])("sends no residency header when the claim is %s", (_case, payload) => {
+  ])("sends no residency header when the claim is %s", async (_case, payload) => {
     const result = reliableStreamOptions(codexModel, undefined, undefined, fakeJwt(payload));
 
-    expect(result.headers?.["x-openai-internal-codex-residency"]).toBeUndefined();
+    expect(await residencyFor(result)).toBeUndefined();
   });
 
   it.each(["not-a-jwt", "only.two", "a.b.c.d", undefined])(
     "sends no residency header for malformed or absent token %s",
-    (token) => {
+    async (token) => {
       const result = reliableStreamOptions(codexModel, undefined, undefined, token);
 
-      expect(result.headers?.["x-openai-internal-codex-residency"]).toBeUndefined();
+      expect(await residencyFor(result)).toBeUndefined();
     },
   );
 
-  it("sends no residency header for a malformed payload", () => {
+  it("sends no residency header for a malformed payload", async () => {
     const token = `fake.${Buffer.from("not json").toString("base64url")}.fake`;
 
     const result = reliableStreamOptions(codexModel, undefined, undefined, token);
 
-    expect(result.headers?.["x-openai-internal-codex-residency"]).toBeUndefined();
+    expect(await residencyFor(result)).toBeUndefined();
   });
 
-  it("keeps an explicitly-passed residency header over the token claim", () => {
+  it("keeps an explicitly-passed residency header over the token claim", async () => {
     const token = fakeJwt({
       "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
     });
@@ -194,12 +207,15 @@ describe("Pi runtime transport", () => {
       headers: { "x-openai-internal-codex-residency": "manual" },
     };
 
-    expect(reliableStreamOptions(codexModel, options, undefined, token).headers).toEqual({
+    const result = reliableStreamOptions(codexModel, options, undefined, token);
+    expect(result.headers).toEqual({ "x-openai-internal-codex-residency": "manual" });
+    // applyAuth merges options.headers before transformHeaders runs.
+    expect(await result.transformHeaders?.(result.headers ?? {})).toEqual({
       "x-openai-internal-codex-residency": "manual",
     });
   });
 
-  it("keeps an explicitly-passed residency header under a different casing", () => {
+  it("keeps an explicitly-passed residency header under a different casing", async () => {
     const token = fakeJwt({
       "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
     });
@@ -208,9 +224,56 @@ describe("Pi runtime transport", () => {
       headers: { "X-OPENAI-INTERNAL-CODEX-RESIDENCY": "manual" },
     };
 
-    expect(reliableStreamOptions(codexModel, options, undefined, token).headers).toEqual({
+    const result = reliableStreamOptions(codexModel, options, undefined, token);
+    expect(result.headers).toEqual({ "X-OPENAI-INTERNAL-CODEX-RESIDENCY": "manual" });
+    // The caller's casing suppresses injection: no duplicate lowercase key.
+    expect(await result.transformHeaders?.(result.headers ?? {})).toEqual({
       "X-OPENAI-INTERNAL-CODEX-RESIDENCY": "manual",
     });
+  });
+
+  it("composes a caller-supplied transformHeaders after injecting residency", async () => {
+    const token = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
+    });
+    let seen: string | null | undefined;
+    const result = reliableStreamOptions(
+      codexModel,
+      {
+        transformHeaders: (headers) => {
+          seen = headers["x-openai-internal-codex-residency"];
+          return { ...headers, "x-caller-test": "1" };
+        },
+      },
+      undefined,
+      token,
+    );
+
+    expect(await result.transformHeaders?.({})).toEqual({
+      "x-openai-internal-codex-residency": "us-east",
+      "x-caller-test": "1",
+    });
+    // The caller transform runs last and sees the injected header.
+    expect(seen).toBe("us-east");
+  });
+
+  it("lets a caller-supplied transformHeaders override residency", async () => {
+    const token = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
+    });
+    const result = reliableStreamOptions(
+      codexModel,
+      {
+        transformHeaders: async (headers) => ({
+          ...headers,
+          "x-openai-internal-codex-residency": "manual",
+        }),
+      },
+      undefined,
+      token,
+    );
+
+    expect(await residencyFor(result)).toBe("manual");
   });
 
   it("derives residency from the live credential after a mid-run OAuth refresh", async () => {
@@ -227,14 +290,13 @@ describe("Pi runtime transport", () => {
         credential: { type: "oauth", access: initial, refresh: "refresh-1", expires: 0 },
       },
     });
-    // The getter the stream functions hand to reliableStreamOptions.
+    // The getter the stream functions hand to reliableStreamOptions, and the
+    // options built once up front — transformHeaders resolves residency when
+    // each request is dispatched, after applyAuth may have refreshed the token.
     const accessToken = () => resolved.credentials?.accessToken ?? resolved.apiKey;
-    const residencyOf = () =>
-      reliableStreamOptions(codexModel, undefined, undefined, accessToken).headers?.[
-        "x-openai-internal-codex-residency"
-      ];
+    const options = reliableStreamOptions(codexModel, undefined, undefined, accessToken);
 
-    expect(residencyOf()).toBe("us-east");
+    expect(await residencyFor(options)).toBe("us-east");
 
     // Pi swaps the stored credential when the OAuth token refreshes mid-run.
     await resolved.credentials?.modify("openai-codex", async () => ({
@@ -244,7 +306,7 @@ describe("Pi runtime transport", () => {
       expires: Date.now() + 3_600_000,
     }));
 
-    expect(residencyOf()).toBe("eu-west");
+    expect(await residencyFor(options)).toBe("eu-west");
   });
 
   it("never attaches the residency header for non-Codex providers", () => {
@@ -256,6 +318,7 @@ describe("Pi runtime transport", () => {
     const result = reliableStreamOptions(model, undefined, undefined, token);
 
     expect(result.headers).toBeUndefined();
+    expect(result.transformHeaders).toBeUndefined();
   });
 
   it("keeps a stable conversation session id per bot thread", () => {

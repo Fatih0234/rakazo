@@ -13,9 +13,9 @@ import {
   clampThinkingLevel,
   type Model,
   type Models,
+  type ModelsSimpleStreamOptions,
   type ModelThinkingLevel,
   type ProviderHeaders,
-  type SimpleStreamOptions,
   Type,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
@@ -1939,7 +1939,7 @@ export function reliableModelStream(
   models: Models,
   model: Model<Api>,
   context: Context,
-  options: SimpleStreamOptions | undefined,
+  options: ModelsSimpleStreamOptions | undefined,
   configuredMaxTokens: number | undefined,
   accessToken?: string | (() => string | undefined),
 ): AssistantMessageEventStream {
@@ -1971,11 +1971,11 @@ function hasHeader(headers: ProviderHeaders | undefined, name: string): boolean 
 
 export function reliableStreamOptions(
   model: Pick<Model<Api>, "api" | "provider" | "maxTokens" | "reasoning">,
-  options?: SimpleStreamOptions,
+  options?: ModelsSimpleStreamOptions,
   configuredMaxTokens?: number,
   accessToken?: string | (() => string | undefined),
-): SimpleStreamOptions {
-  let next: SimpleStreamOptions = {
+): ModelsSimpleStreamOptions {
+  let next: ModelsSimpleStreamOptions = {
     ...options,
     timeoutMs: options?.timeoutMs ?? MODEL_STREAM_TIMEOUT_MS,
     maxRetries: options?.maxRetries ?? MODEL_STREAM_MAX_RETRIES,
@@ -1993,14 +1993,26 @@ export function reliableStreamOptions(
     // bounded network retries and no long-lived connection between tool turns.
     next = { ...next, transport: "sse" };
     // Forward the account's compute residency so the Codex backend routes to the
-    // right region. A getter reads the credential store live so a mid-run OAuth
-    // refresh is seen; an explicit caller header wins under any casing.
-    const residency = codexComputeResidency(
-      typeof accessToken === "function" ? accessToken() : accessToken,
-    );
-    if (residency && !hasHeader(next.headers, CODEX_RESIDENCY_HEADER)) {
-      next = { ...next, headers: { ...next.headers, [CODEX_RESIDENCY_HEADER]: residency } };
-    }
+    // right region. Models.applyAuth resolves auth — including an OAuth refresh
+    // that swaps the stored credential — after these options are built, so the
+    // claim is derived in transformHeaders at request time from the credential
+    // the store holds then. Injection acts like a default header: an explicit
+    // value under any casing wins, and a caller-supplied transformHeaders keeps
+    // the final say.
+    const callerTransform = next.transformHeaders;
+    next = {
+      ...next,
+      transformHeaders: (headers) => {
+        const residency = codexComputeResidency(
+          typeof accessToken === "function" ? accessToken() : accessToken,
+        );
+        const merged =
+          residency && !hasHeader(headers, CODEX_RESIDENCY_HEADER)
+            ? { ...headers, [CODEX_RESIDENCY_HEADER]: residency }
+            : headers;
+        return callerTransform ? callerTransform(merged) : merged;
+      },
+    };
   }
 
   // OpenCode Go/Zen require a sticky x-opencode-session header (affinity + some
