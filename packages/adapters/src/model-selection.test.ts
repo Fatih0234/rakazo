@@ -651,6 +651,127 @@ describe("stored model auth", () => {
       message: expect.stringMatching(/not available with your current sign-in/i),
     });
   });
+
+  it("fires the expired-token hook so the caller can kick a detached refresh", async () => {
+    const prisma = {
+      secret: {
+        findFirst: vi.fn(async () => ({
+          id: "secret-oauth",
+          ciphertext: "cipher-oauth",
+        })),
+      },
+    } as unknown as PrismaClient;
+    let plaintext = JSON.stringify({
+      type: "oauth",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() - 1_000,
+      accountId: "acct-live",
+    });
+    const load = vi.fn(() => plaintext);
+    const read = vi.fn(
+      async (
+        _userId: string,
+        account: { accountId: string; accessToken: () => Promise<string | null> },
+      ) =>
+        (await account.accessToken()) === null
+          ? undefined
+          : [
+              {
+                slug: "gpt-5.3-codex-spark",
+                reasoningEfforts: [],
+                supportsImages: false,
+                supportsFastTier: true,
+              },
+            ],
+    );
+    const onExpiredToken = vi.fn();
+
+    await expect(
+      readStoredModelAuth(
+        prisma,
+        { load },
+        userId,
+        "secret-oauth",
+        "openai-codex",
+        "gpt-5.3-codex-spark",
+        { read },
+        { onExpiredToken },
+      ),
+    ).resolves.toEqual({
+      status: "rejected",
+      message: expect.stringMatching(/not available with your current sign-in/i),
+    });
+    expect(onExpiredToken).toHaveBeenCalledTimes(1);
+
+    // A valid bearer never fires the hook — and the live answer flows through.
+    plaintext = JSON.stringify({
+      type: "oauth",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "acct-live",
+    });
+    await expect(
+      readStoredModelAuth(
+        prisma,
+        { load },
+        userId,
+        "secret-oauth",
+        "openai-codex",
+        "gpt-5.3-codex-spark",
+        { read },
+        { onExpiredToken },
+      ),
+    ).resolves.toEqual({ status: "ready" });
+    expect(onExpiredToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes a zero wait bound through to the catalog read", async () => {
+    const prisma = {
+      secret: {
+        findFirst: vi.fn(async () => ({
+          id: "secret-oauth",
+          ciphertext: "cipher-oauth",
+        })),
+      },
+    } as unknown as PrismaClient;
+    const load = vi.fn(() =>
+      JSON.stringify({
+        type: "oauth",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
+        accountId: "acct-live",
+      }),
+    );
+    const read = vi.fn(async () => [
+      {
+        slug: "gpt-5.3-codex-spark",
+        reasoningEfforts: [],
+        supportsImages: false,
+        supportsFastTier: true,
+      },
+    ]);
+
+    await expect(
+      readStoredModelAuth(
+        prisma,
+        { load },
+        userId,
+        "secret-oauth",
+        "openai-codex",
+        "gpt-5.3-codex-spark",
+        { read },
+        { waitMs: 0 },
+      ),
+    ).resolves.toEqual({ status: "ready" });
+    expect(read).toHaveBeenCalledWith(
+      userId,
+      expect.objectContaining({ accountId: "acct-live" }),
+      expect.objectContaining({ waitMs: 0 }),
+    );
+  });
 });
 
 describe("model auth availability", () => {

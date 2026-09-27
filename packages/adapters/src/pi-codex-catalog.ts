@@ -28,6 +28,13 @@ const MAX_CATALOG_CACHE_ENTRIES = 256;
 const CATALOG_TTL_MS = 15 * 60_000;
 const CATALOG_FAILURE_TTL_MS = 60_000;
 const CATALOG_READ_WAIT_MS = 1_500;
+/**
+ * How long a last-good catalog may keep answering after its TTL while refreshes
+ * keep failing. Beyond this window the account's list is distrusted entirely —
+ * a model the backend removed must not stay selectable forever — and reads fall
+ * back to the static catalog until a refresh finally succeeds.
+ */
+const CATALOG_STALE_MAX_AGE_MS = 4 * 60 * 60_000;
 
 export type CodexCatalogModel = {
   slug: string;
@@ -47,8 +54,9 @@ export type CodexCatalogResult =
  * Account-scoped handle for one catalog read. `accessToken` returns the bearer
  * the credential already holds, or null once it expires — the catalog path
  * never refreshes or writes credentials; the runtime's locked refresh owns all
- * token writes. A credential that needs a refresh therefore simply yields no
- * catalog until a run refreshes it.
+ * token writes. When the caller supplies `onExpiredToken` (see
+ * `CodexLiveReadOptions`) an expired bearer fires it so a detached refresh can
+ * warm the next read; this read still gets null.
  */
 export type CodexCatalogAccount = {
   accountId: string;
@@ -62,6 +70,18 @@ export interface CodexLiveCatalog {
     opts?: { waitMs?: number },
   ): Promise<CodexCatalogModel[] | undefined>;
 }
+
+/**
+ * Options for a live catalog check. `waitMs` bounds how long a cold read waits
+ * for an in-flight fetch (`0` consults only settled cache state while still
+ * kicking a background revalidation on a miss — safe inside a transaction).
+ * `onExpiredToken` fires when the stored bearer is expired so the caller can
+ * kick a detached refresh through the runtime's credential lock.
+ */
+export type CodexLiveReadOptions = {
+  waitMs?: number;
+  onExpiredToken?: () => void;
+};
 
 /** GET the backend's per-account model list. Failure modes are typed, never thrown. */
 export async function fetchCodexCatalog(
@@ -215,7 +235,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 type CodexCatalogCacheEntry =
-  | { ok: true; models: CodexCatalogModel[]; expiresAt: number }
+  | { ok: true; models: CodexCatalogModel[]; expiresAt: number; fetchedAt: number }
   | { ok: false; expiresAt: number };
 
 /**
@@ -224,8 +244,10 @@ type CodexCatalogCacheEntry =
  * the last good list while a background refresh runs, and a cold miss waits a short
  * bounded time before giving up. A failed refresh keeps the last good catalog — the
  * stale entry stays servable and only re-arms a retry after the failure TTL, so a
- * transient outage cannot hide live-listed models. Process-lifetime only — restart
- * loses the catalog until the next fetch.
+ * transient outage cannot hide live-listed models — but only within
+ * `staleMaxAgeMs` of the last successful fetch, so an account that lost access
+ * eventually falls back to the static catalog instead of pinning removed models
+ * forever. Process-lifetime only — restart loses the catalog until the next fetch.
  */
 export class CodexCatalogCache implements CodexLiveCatalog {
   private readonly entries = new Map<string, CodexCatalogCacheEntry>();
@@ -236,6 +258,7 @@ export class CodexCatalogCache implements CodexLiveCatalog {
   private readonly failureTtlMs: number;
   private readonly waitMs: number;
   private readonly deadlineMs: number;
+  private readonly staleMaxAgeMs: number;
 
   constructor(
     opts: {
@@ -246,6 +269,8 @@ export class CodexCatalogCache implements CodexLiveCatalog {
       waitMs?: number;
       /** Bound on the shared refresh itself, so a signal-ignoring fetch cannot pin a key. */
       deadlineMs?: number;
+      /** Max age of a last-good catalog that failures may keep serving. */
+      staleMaxAgeMs?: number;
     } = {},
   ) {
     this.fetchImpl = opts.fetch ?? fetch;
@@ -254,6 +279,7 @@ export class CodexCatalogCache implements CodexLiveCatalog {
     this.failureTtlMs = opts.failureTtlMs ?? CATALOG_FAILURE_TTL_MS;
     this.waitMs = opts.waitMs ?? CATALOG_READ_WAIT_MS;
     this.deadlineMs = opts.deadlineMs ?? CODEX_CATALOG_HARD_DEADLINE_MS;
+    this.staleMaxAgeMs = opts.staleMaxAgeMs ?? CATALOG_STALE_MAX_AGE_MS;
   }
 
   async read(
@@ -263,13 +289,20 @@ export class CodexCatalogCache implements CodexLiveCatalog {
   ): Promise<CodexCatalogModel[] | undefined> {
     const key = `${userId}:${account.accountId}`;
     const entry = this.entries.get(key);
-    if (entry && entry.expiresAt > this.now()) return entry.ok ? entry.models : undefined;
+    if (entry && entry.expiresAt > this.now()) {
+      return entry.ok ? this.trusted(entry) : undefined;
+    }
     if (entry) {
       if (!this.inflight.has(key)) void this.revalidate(key, account);
-      return entry.ok ? entry.models : undefined;
+      return entry.ok ? this.trusted(entry) : undefined;
     }
     const pending = this.inflight.get(key) ?? this.revalidate(key, account);
     return Promise.race([pending, sleep(opts?.waitMs ?? this.waitMs).then(() => undefined)]);
+  }
+
+  /** A last-good catalog is servable only within the staleness bound. */
+  private trusted(entry: { models: CodexCatalogModel[]; fetchedAt: number }) {
+    return entry.fetchedAt + this.staleMaxAgeMs > this.now() ? entry.models : undefined;
   }
 
   private revalidate(
@@ -293,12 +326,14 @@ export class CodexCatalogCache implements CodexLiveCatalog {
 
   private nextEntry(key: string, models: CodexCatalogModel[] | undefined): CodexCatalogCacheEntry {
     if (models && models.length > 0) {
-      return { ok: true, models, expiresAt: this.now() + this.ttlMs };
+      return { ok: true, models, expiresAt: this.now() + this.ttlMs, fetchedAt: this.now() };
     }
     const prior = this.entries.get(key);
-    if (prior?.ok) {
-      // Keep serving the last good catalog; the failure TTL only paces the retry.
-      return { ok: true, models: prior.models, expiresAt: this.now() + this.failureTtlMs };
+    // Keep serving the last good catalog only within the staleness bound — the
+    // failure TTL paces the retry, but a list too old to trust drops to the
+    // static catalog so removed models stop being selectable.
+    if (prior?.ok && prior.fetchedAt + this.staleMaxAgeMs > this.now()) {
+      return { ...prior, expiresAt: this.now() + this.failureTtlMs };
     }
     return { ok: false, expiresAt: this.now() + this.failureTtlMs };
   }
@@ -339,13 +374,25 @@ export type CodexCatalogSpaceAuth = {
   secretIdByModel?: Partial<Record<string, Partial<Record<string, string>>>>;
 };
 
-/** Account handle over a stored ChatGPT OAuth credential; null without an account id. */
-function codexAccountHandle(credential: OAuthCredential): CodexCatalogAccount | null {
+/**
+ * Account handle over a stored ChatGPT OAuth credential; null without an
+ * account id. An expired bearer yields null — and fires `onExpiredToken` when
+ * given so the caller can kick a detached refresh through the runtime's locked
+ * credential path; this read still gets no catalog.
+ */
+function codexAccountHandle(
+  credential: OAuthCredential,
+  onExpiredToken?: () => void,
+): CodexCatalogAccount | null {
   const accountId = codexAccountId(credential);
   if (!accountId) return null;
   return {
     accountId,
-    accessToken: async () => (credential.expires > Date.now() ? credential.access : null),
+    accessToken: async () => {
+      if (credential.expires > Date.now()) return credential.access;
+      onExpiredToken?.();
+      return null;
+    },
   };
 }
 
@@ -359,10 +406,10 @@ export async function codexLiveListsModel(
   userId: string,
   secret: StoredModelSecret,
   modelId: string,
-  opts?: { waitMs?: number },
+  opts?: CodexLiveReadOptions,
 ): Promise<boolean> {
   if (!catalog || secret.kind !== "oauth") return false;
-  const account = codexAccountHandle(secret.credential);
+  const account = codexAccountHandle(secret.credential, opts?.onExpiredToken);
   if (!account) return false;
   const models = await catalog.read(userId, account, opts).catch(() => undefined);
   return Boolean(models?.some((model) => model.slug === modelId));
@@ -373,7 +420,9 @@ export async function codexLiveListsModel(
  * codex slot in this space, keyed by credential secret id. Credentials that are
  * unreadable, non-OAuth, or lack an account id — and reads that fail — map to no
  * entry, so their models keep the static availability (which hides Codex Spark).
- * No token refresh or credential write happens here.
+ * No token refresh or credential write happens here: an expired bearer only
+ * fires `opts.onExpiredToken` so the caller can kick the runtime's locked
+ * refresh path, and this read still gets no catalog.
  */
 export async function codexLiveCatalogsForSpace(
   prisma: PrismaClient,
@@ -381,6 +430,7 @@ export async function codexLiveCatalogsForSpace(
   scope: { userId: string; spaceId: string },
   auth: CodexCatalogSpaceAuth,
   catalog: CodexLiveCatalog,
+  opts?: { onExpiredToken?: (secretId: string) => void },
 ): Promise<Map<string, CodexCatalogModel[]>> {
   const live = new Map<string, CodexCatalogModel[]>();
   const secretIds = oauthCodexSecretIds(auth);
@@ -398,7 +448,9 @@ export async function codexLiveCatalogsForSpace(
     } catch {
       // Unreadable secrets keep static behavior.
     }
-    const account = credential ? codexAccountHandle(credential) : null;
+    const account = credential
+      ? codexAccountHandle(credential, () => opts?.onExpiredToken?.(secret.id))
+      : null;
     if (account) accounts.set(secret.id, account);
   }
   await Promise.all(

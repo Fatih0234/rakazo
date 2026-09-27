@@ -474,6 +474,76 @@ describe("CodexCatalogCache", () => {
     expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
   });
 
+  it("stops serving the last good catalog past the staleness bound, until a refresh succeeds", async () => {
+    let now = 1_000_000;
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () =>
+        okResponse(catalogPayload([{ slug: SPARK, visibility: "list", supported_in_api: true }])),
+      )
+      .mockImplementation(async () => new Response("x", { status: 503 }));
+    const cache = new CodexCatalogCache({
+      fetch: fetchImpl,
+      now: () => now,
+      waitMs: 50,
+      ttlMs: 60_000,
+      failureTtlMs: 10_000,
+      staleMaxAgeMs: 120_000,
+    });
+
+    expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
+
+    // Expired but within the bound: failed refreshes keep the last good list.
+    now += 70_000;
+    expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    now += 11_000;
+    expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Past the bound the account's old list is distrusted: reads fall back to
+    // static even though a refresh is still running and failing behind them.
+    now += 50_000;
+    expect(await cache.read("user-1", account())).toBeUndefined();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(await cache.read("user-1", account())).toBeUndefined();
+
+    // A refresh that finally succeeds repopulates the list as fresh data.
+    fetchImpl.mockImplementation(async () =>
+      okResponse(catalogPayload([{ slug: LUNA, visibility: "list", supported_in_api: true }])),
+    );
+    now += 11_000;
+    expect(await cache.read("user-1", account())).toBeUndefined();
+    await vi.waitFor(async () => {
+      expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(LUNA);
+    });
+  });
+
+  it("waitMs 0 consults only settled cache state while still warming a miss", async () => {
+    let resolveFetch: ((response: Response) => void) | undefined;
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new Promise<Response>((resolve) => (resolveFetch = resolve)),
+    );
+    const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => 0, waitMs: 30_000 });
+
+    // A cold miss returns immediately instead of waiting on the network.
+    expect(await cache.read("user-1", account(), { waitMs: 0 })).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    // The kicked revalidation keeps running; a later zero-wait read sees it.
+    resolveFetch?.(
+      okResponse(catalogPayload([{ slug: SPARK, visibility: "list", supported_in_api: true }])),
+    );
+    await vi.waitFor(async () => {
+      expect((await cache.read("user-1", account(), { waitMs: 0 }))?.[0]?.slug).toBe(SPARK);
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps catalogs isolated per (userId, accountId)", async () => {
     const fetchImpl = listFetch();
     const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => 0, waitMs: 50 });
@@ -573,6 +643,36 @@ describe("codexLiveListsModel", () => {
 
     await expect(codexLiveListsModel(cache, "user-1", expired, SPARK)).resolves.toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fires onExpiredToken for an expired bearer but still answers statically", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      okResponse(catalogPayload([{ slug: SPARK, visibility: "list", supported_in_api: true }])),
+    );
+    const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => Date.now(), waitMs: 50 });
+    const onExpiredToken = vi.fn();
+
+    await expect(
+      codexLiveListsModel(cache, "user-1", oauthSecret(ACCESS_TOKEN, -1_000), SPARK, {
+        onExpiredToken,
+      }),
+    ).resolves.toBe(false);
+    expect(onExpiredToken).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not fire onExpiredToken while the bearer is valid", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      okResponse(catalogPayload([{ slug: SPARK, visibility: "list", supported_in_api: true }])),
+    );
+    const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => Date.now(), waitMs: 50 });
+    const onExpiredToken = vi.fn();
+
+    await expect(
+      codexLiveListsModel(cache, "user-1", oauthSecret(), SPARK, { onExpiredToken }),
+    ).resolves.toBe(true);
+    expect(onExpiredToken).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -694,6 +794,41 @@ describe("codexLiveCatalogsForSpace", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(secrets.put).not.toHaveBeenCalled();
     expect(prisma.secret.update).not.toHaveBeenCalled();
+  });
+
+  it("fires onExpiredToken per expired credential so the caller can kick a refresh", async () => {
+    const prisma = authPrisma({
+      secrets: [
+        { id: "secret-a", ciphertext: "cipher-a" },
+        { id: "secret-b", ciphertext: "cipher-b" },
+      ],
+    });
+    const secrets = secretsById({
+      "cipher-a": oauthPlaintext(ACCESS_TOKEN, -1_000, "acct-a"),
+      "cipher-b": oauthPlaintext(ACCESS_TOKEN, 3_600_000, "acct-b"),
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      okResponse(catalogPayload([{ slug: SPARK, visibility: "list", supported_in_api: true }])),
+    );
+    const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => Date.now(), waitMs: 50 });
+    const onExpiredToken = vi.fn();
+    const auth: CodexCatalogSpaceAuth = {
+      byProvider: { [CHATGPT_OAUTH_PROVIDER]: "oauth" },
+      byModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "oauth" } },
+      secretIdByProvider: { [CHATGPT_OAUTH_PROVIDER]: "secret-a" },
+      secretIdByModel: { [CHATGPT_OAUTH_PROVIDER]: { [SPARK]: "secret-b" } },
+    };
+
+    const live = await codexLiveCatalogsForSpace(prisma, secrets, scope, auth, cache, {
+      onExpiredToken,
+    });
+
+    // Only the expired credential's hook fires; the valid one fetched normally.
+    expect(onExpiredToken).toHaveBeenCalledTimes(1);
+    expect(onExpiredToken).toHaveBeenCalledWith("secret-a");
+    expect(live.get("secret-b")?.[0]?.slug).toBe(SPARK);
+    expect(live.has("secret-a")).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 

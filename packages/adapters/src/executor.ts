@@ -248,9 +248,11 @@ import { codexLiveListsModel } from "./pi-codex-catalog.js";
 import { toOAuthCredential } from "./pi-credentials.js";
 import {
   parseModelSecret,
+  persistStoredModelSecret,
   resolveModelAuth,
   secretValuesToRedact,
   serializeModelSecret,
+  withModelCredentialLock,
 } from "./pi-oauth.js";
 import {
   assertPlotDataWithinLimits,
@@ -331,7 +333,6 @@ import {
 import { createWebProvider } from "./web-provider-factory.js";
 import { webFetchFromTool, webSearchFromTool } from "./web-tools.js";
 
-const modelCredentialLocks = new Map<string, Promise<void>>();
 const READ_ONLY_AGENT_TOOLS = new Set([
   "computer_observe",
   "list_files",
@@ -5249,23 +5250,12 @@ async function resolveModelKey(
       if (!row) return { apiKey: deploymentKeyFor(deps, provider), redact: [] };
       const plaintext = deps.secretStore.load(row.ciphertext, row.id);
       registerSecrets?.(secretValuesToRedact(parseModelSecret(plaintext)));
-      const persist = async (next: string) => {
-        const stored = await deps.secretStore.put(
-          next,
-          {
-            operationId: "cred",
-            traceId: "cred-refresh",
-            spaceId,
-            userId,
-            signal: new AbortController().signal,
-          },
-          row.id,
-        );
-        await deps.prisma.secret.update({
-          where: { id: row.id },
-          data: { ciphertext: stored.ciphertext },
-        });
-      };
+      const persist = persistStoredModelSecret(
+        deps.prisma,
+        deps.secretStore,
+        { userId, spaceId },
+        row.id,
+      );
       const resolveAuth = () => resolveModelAuth(plaintext, credential.provider, { persist });
       let resolved: Awaited<ReturnType<typeof resolveAuth>> | undefined;
       const authError = validateModelAuthAvailability(provider, modelId, plaintext);
@@ -5354,25 +5344,6 @@ async function resolveModelKey(
     });
   }
   return { apiKey: deploymentKeyFor(deps, provider), redact: [] };
-}
-
-async function withModelCredentialLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const previous = modelCredentialLocks.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const current = previous.then(
-    () =>
-      new Promise<void>((resolve) => {
-        release = resolve;
-      }),
-  );
-  modelCredentialLocks.set(key, current);
-  await previous;
-  try {
-    return await fn();
-  } finally {
-    release();
-    if (modelCredentialLocks.get(key) === current) modelCredentialLocks.delete(key);
-  }
 }
 
 export function selectRunConnections<

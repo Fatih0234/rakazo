@@ -1595,7 +1595,7 @@ describe("codex live catalog", () => {
     expect(second).toContain(luna);
   });
 
-  it("never fetches the catalog for an expired token and keeps the static exclusion", async () => {
+  it("never fetches the catalog for an expired token and kicks a detached refresh", async () => {
     const expiredOauth = JSON.stringify({
       type: "oauth",
       access: "access-token",
@@ -1621,9 +1621,10 @@ describe("codex live catalog", () => {
           { status: 200 },
         ),
     );
+    const refreshExpiredModelCredential = vi.fn();
     const deps = {
       prisma,
-      secrets: { load: vi.fn(() => expiredOauth) },
+      secrets: { load: vi.fn(() => expiredOauth), put: vi.fn() },
       env: {
         defaultProvider: "fake",
         defaultModel: "fake-model",
@@ -1632,13 +1633,21 @@ describe("codex live catalog", () => {
         sandboxProvider: "fake",
       },
       codexCatalog: new CodexCatalogCache({ fetch: fetchImpl }),
+      refreshExpiredModelCredential,
     } as unknown as RouterDeps;
 
     const ids = await listIds(new RPCHandler(createRouter(deps)));
 
+    // Static exclusion stands this round; the credential's refresh is kicked so
+    // the next read can see the account's real catalog.
     expect(ids).not.toContain(spark);
     expect(ids).toContain(luna);
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(refreshExpiredModelCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: actor.userId }),
+      "secret-oauth",
+      "openai-codex",
+    );
   });
 
   it("lets models.setDefault pick Spark when the account's live catalog lists it", async () => {
@@ -1746,6 +1755,76 @@ describe("codex live catalog", () => {
         message: expect.stringMatching(/not available with your current sign-in/i),
       }),
     });
+  });
+
+  it("warms the live catalog before setDefault's transaction and reads zero-wait inside it", async () => {
+    const stamp = new Date("2026-01-01T00:00:00.000Z");
+    const oauthCredential = {
+      id: "cred-oauth",
+      userId: actor.userId,
+      provider: "openai-codex",
+      label: "ChatGPT",
+      secretId: "secret-oauth",
+      createdAt: stamp,
+      updatedAt: stamp,
+    };
+    const upsert = vi.fn(async () => ({ id: "pref-spark" }));
+    const tx = {
+      userModelCredential: { findMany: vi.fn().mockResolvedValue([oauthCredential]) },
+      spaceModelPreference: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        upsert,
+      },
+      secret: {
+        findFirst: vi.fn(async () => ({ id: "secret-oauth", ciphertext: "cipher-oauth" })),
+      },
+    };
+    const transaction = vi.fn(async (fn: (client: typeof tx) => unknown) => fn(tx));
+    // The same delegates serve the pre-transaction warm read on deps.prisma.
+    const prisma = {
+      $transaction: transaction,
+      userModelCredential: tx.userModelCredential,
+      spaceModelPreference: { findMany: tx.spaceModelPreference.findMany },
+      secret: tx.secret,
+    };
+    const read = vi.fn(
+      async (_userId: string, _account: { accountId: string }, _opts?: { waitMs?: number }) => [
+        liveModel(spark),
+      ],
+    );
+    const refreshExpiredModelCredential = vi.fn();
+    const deps = {
+      prisma,
+      secrets: { load: vi.fn(() => oauth("acct-live-test")), put: vi.fn() },
+      env: {
+        defaultProvider: "fake",
+        defaultModel: "fake-model",
+        webOrigin: "http://127.0.0.1:5173",
+        screenProxySecret: "fake-test-secret",
+        sandboxProvider: "fake",
+      },
+      codexCatalog: { read },
+      refreshExpiredModelCredential,
+    } as unknown as RouterDeps;
+    const handler = new RPCHandler(createRouter(deps));
+
+    const response = await call(handler, "models/setDefault", {
+      provider: "openai-codex",
+      modelId: spark,
+    });
+
+    expect(response.status).toBe(200);
+    const warmCall = read.mock.calls.find((call) => call[2]?.waitMs !== 0);
+    const txCall = read.mock.calls.find((call) => call[2]?.waitMs === 0);
+    expect(warmCall).toBeDefined();
+    expect(txCall).toBeDefined();
+    // The unbounded-wait read happens before the transaction opens; inside it
+    // the catalog is only consulted from settled cache state.
+    expect(read.mock.invocationCallOrder[read.mock.calls.indexOf(warmCall!)]!).toBeLessThan(
+      transaction.mock.invocationCallOrder[0]!,
+    );
+    expect(upsert).toHaveBeenCalled();
   });
 });
 

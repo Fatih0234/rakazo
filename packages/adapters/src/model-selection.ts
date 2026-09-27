@@ -14,7 +14,7 @@ import {
   modelCredentialAuthKindFromPlaintext,
   UNAVAILABLE_MODEL_FOR_AUTH_MESSAGE,
 } from "./pi-catalog-availability.js";
-import type { CodexLiveCatalog } from "./pi-codex-catalog.js";
+import type { CodexLiveCatalog, CodexLiveReadOptions } from "./pi-codex-catalog.js";
 import { codexLiveListsModel } from "./pi-codex-catalog.js";
 import { listPiCatalog, scriptedCatalogEntry } from "./pi-models.js";
 import { parseModelSecret } from "./pi-oauth.js";
@@ -244,7 +244,10 @@ export type StoredModelAuthRead =
 /**
  * Load a stored credential and check whether it can call this catalog model.
  * When `live` is given, the backend's per-account catalog can lift a static
- * OAuth exclusion for the credential's own account (e.g. Codex Spark).
+ * OAuth exclusion for the credential's own account (e.g. Codex Spark). Pass
+ * `liveOpts.waitMs: 0` where a catalog fetch must not block (inside a
+ * transaction) and `liveOpts.onExpiredToken` to kick a detached refresh when
+ * the stored bearer has expired.
  */
 export async function readStoredModelAuth(
   prisma: Pick<PrismaClient, "secret">,
@@ -254,6 +257,7 @@ export async function readStoredModelAuth(
   provider: string,
   modelId: string,
   live?: CodexLiveCatalog,
+  liveOpts?: CodexLiveReadOptions,
 ): Promise<StoredModelAuthRead> {
   const secret = await prisma.secret.findFirst({
     where: { id: secretId, userId, spaceId: null },
@@ -274,7 +278,10 @@ export async function readStoredModelAuth(
     return { status: "unreadable" };
   }
   // validateModelAuthAvailability already parsed the secret without throwing.
-  if (message && (await codexLiveListsModel(live, userId, parseModelSecret(plaintext), modelId))) {
+  if (
+    message &&
+    (await codexLiveListsModel(live, userId, parseModelSecret(plaintext), modelId, liveOpts))
+  ) {
     return { status: "ready" };
   }
   return message ? { status: "rejected", message } : { status: "ready" };
@@ -289,6 +296,7 @@ export async function validateStoredModelAuth(
   provider: string,
   modelId: string,
   live?: CodexLiveCatalog,
+  liveOpts?: CodexLiveReadOptions,
 ): Promise<string | undefined> {
   const auth = await readStoredModelAuth(
     prisma,
@@ -298,6 +306,7 @@ export async function validateStoredModelAuth(
     provider,
     modelId,
     live,
+    liveOpts,
   );
   // Unreadable credentials fail when the run loads them, not as an auth mismatch.
   return auth.status === "rejected" ? auth.message : undefined;
