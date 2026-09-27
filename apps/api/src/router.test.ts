@@ -1460,7 +1460,7 @@ describe("model set default auth", () => {
             credentialId: "cred-api",
           },
         },
-        update: { modelId: spark, isDefault: true },
+        update: { modelId: spark, isDefault: true, thinkingLevel: null },
       }),
     );
   });
@@ -1550,7 +1550,7 @@ describe("model set default auth", () => {
           },
         },
         create: expect.objectContaining({ modelId: luna, isDefault: true }),
-        update: { modelId: luna, isDefault: true },
+        update: { modelId: luna, isDefault: true, thinkingLevel: null },
       }),
     );
     expect(updateMany).toHaveBeenCalledWith({
@@ -1648,7 +1648,7 @@ describe("model set default auth", () => {
             credentialId: "cred-api",
           },
         },
-        update: { modelId: luna, isDefault: true },
+        update: { modelId: luna, isDefault: true, thinkingLevel: null },
       }),
     );
   });

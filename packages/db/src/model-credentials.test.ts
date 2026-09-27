@@ -367,7 +367,7 @@ describe("selectSpaceModelPreference", () => {
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: expect.objectContaining({ isDefault: true, modelId: "model" }),
-        update: { isDefault: true, modelId: "model" },
+        update: { isDefault: true, modelId: "model", thinkingLevel: null },
       }),
     );
   });
@@ -389,7 +389,7 @@ describe("selectSpaceModelPreference", () => {
       expect(upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           create: expect.objectContaining({ modelId: null }),
-          update: { isDefault: true, modelId: null },
+          update: { isDefault: true, modelId: null, thinkingLevel: null },
         }),
       );
     },

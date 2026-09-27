@@ -44,12 +44,13 @@ export async function selectSpaceModelPreference(
       thinkingLevel: thinkingLevel ?? null,
       isDefault: true,
     },
-    // Callers that don't manage thinking (connect, OAuth finish) leave a stored
-    // level untouched on update; an explicit null clears it.
+    // The level belongs to the stored modelId, so callers resolve it
+    // themselves: pass the existing level to keep it, null to clear it. An
+    // omitted level never survives a model change on this write.
     update: {
       modelId: persistedModelId,
       isDefault: true,
-      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+      thinkingLevel: thinkingLevel ?? null,
     },
   });
 }

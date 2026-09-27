@@ -128,7 +128,12 @@ export function ModelSettingsOverlay({
           (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID ? nextMe.defaultModel : "") ??
           "")
         : (nextCatalog.find((entry) => entry.provider === nextProvider && entry.id === modelId)
-            ?.id ?? pickCatalogModelId(nextCatalog, nextProvider, nextMe.defaultModel));
+            ?.id ??
+          pickCatalogModelId(
+            nextCatalog,
+            nextProvider,
+            nextCredential?.modelId ?? nextMe.defaultModel,
+          ));
     setCatalog(nextCatalog);
     setCredentials(nextCredentials);
     setMe(nextMe);
@@ -287,7 +292,7 @@ export function ModelSettingsOverlay({
     const nextModelId =
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
         ? (nextCredential?.modelId ?? "")
-        : pickCatalogModelId(catalog, nextProvider, me?.defaultModel);
+        : pickCatalogModelId(catalog, nextProvider, nextCredential?.modelId ?? me?.defaultModel);
     setProvider(nextProvider);
     setReasoning(nextCredential?.reasoning ?? false);
     setThinkingLevel(
@@ -415,6 +420,9 @@ export function ModelSettingsOverlay({
               provider: selected.provider,
               ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
               modelId: selected.id,
+              // A limits-only save leaves the stored effort alone; a real
+              // connect persists the staged one.
+              ...(!savingLimitOnly ? { thinkingLevel } : {}),
               maxTokens: parsedMaxTokens ?? null,
               label: selected.providerName ?? selected.provider,
             },
@@ -465,6 +473,7 @@ export function ModelSettingsOverlay({
     void startSubscriptionSignIn({
       provider: selected.provider,
       modelId: selected.id,
+      thinkingLevel,
       label: selected.providerName ?? selected.provider,
     });
   }

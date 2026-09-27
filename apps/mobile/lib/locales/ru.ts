@@ -608,4 +608,20 @@ export const RU_MESSAGES: Record<string, string> = {
     "Встроенный голос телефона. Бесплатно, без аккаунта",
   "Could not save that preference": "Не удалось сохранить эту настройку",
   Username: "Имя пользователя",
+
+  // app/models.tsx
+  "A sign-in page opened — enter this code there:":
+    "Открылась страница входа — введите там этот код:",
+  "All providers": "Все провайдеры",
+  Copied: "Скопировано",
+  "Could not disconnect this provider": "Не удалось отключить этого провайдера",
+  "Default ({level})": "По умолчанию ({level})",
+  "Disconnected {provider}.": "{provider} отключён.",
+  "Save limits": "Сохранить лимиты",
+  "Sign in again": "Войти снова",
+  "Thinking: {level}": "Рассуждение: {level}",
+  "Waiting for sign-in — the code expires in about {minutes} minutes.":
+    "Ожидание входа — срок действия кода истекает примерно через {minutes} мин.",
+  "Waiting for sign-in — the link expires in about {minutes} minutes.":
+    "Ожидание входа — срок действия ссылки истекает примерно через {minutes} мин.",
 };

@@ -217,6 +217,7 @@ export const appContract = {
           provider: z.string(),
           label: z.string().optional(),
           modelId: z.string().optional(),
+          thinkingLevel: ThinkingLevelSchema.nullable().optional(),
         }),
       )
       .output(ModelOAuthBeginSchema),

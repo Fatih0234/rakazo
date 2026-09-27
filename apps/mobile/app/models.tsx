@@ -151,7 +151,11 @@ export default function Models() {
           nextCredential?.modelId ||
           (nextMe.defaultProvider === OPENAI_COMPATIBLE_PROVIDER_ID ? nextMe.defaultModel : "") ||
           ""
-        : pickCatalogModelId(nextCatalog, nextProvider, preferred.modelId || nextMe.defaultModel);
+        : pickCatalogModelId(
+            nextCatalog,
+            nextProvider,
+            preferred.modelId || nextCredential?.modelId || nextMe.defaultModel,
+          );
     setMe(nextMe);
     setCatalog(nextCatalog);
     setCredentials(nextCredentials);
@@ -293,7 +297,7 @@ export default function Models() {
     const nextModelId =
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
         ? (nextCredential?.modelId ?? "")
-        : pickCatalogModelId(catalog, nextProvider, me?.defaultModel);
+        : pickCatalogModelId(catalog, nextProvider, nextCredential?.modelId ?? me?.defaultModel);
     setProvider(nextProvider);
     setReasoning(nextCredential?.reasoning ?? false);
     setThinkingLevel(
@@ -456,6 +460,9 @@ export default function Models() {
               provider: selected.provider,
               ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
               modelId: selected.id,
+              // A limits-only save leaves the stored effort alone; a real
+              // connect persists the staged one.
+              ...(!savingLimitOnly ? { thinkingLevel } : {}),
               maxTokens: parsedMaxTokens ?? null,
               label: selected.providerName ?? selected.provider,
             },
@@ -500,6 +507,7 @@ export default function Models() {
         {
           provider: selected.provider,
           modelId: selected.id,
+          thinkingLevel,
           label: selected.providerName ?? selected.provider,
         },
         { signal: controller.signal },

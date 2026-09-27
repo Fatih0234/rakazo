@@ -32,7 +32,7 @@ export const CANCEL_COMPUTER_RUN_WORK = [
   `prefix="${BACKGROUND_WORK_MARKER_PREFIX}$computerId-$runId-"`,
   // Match the timeout wrapper cmdline (still contains the launch tag after exec into the user command).
   `pkill -TERM -f "rakazo-background-launch $computerId $runId " 2>/dev/null || true`,
-  "if [ -d /proc ]; then",
+  "if [ -d /proc ] && command -v find >/dev/null 2>&1; then",
   // One find pass reads every fd symlink itself; spawning readlink per fd is too slow on busy boxes.
   '  for pid in $(find /proc/[0-9]*/fd -lname "${prefix}*" -print 2>/dev/null | cut -d/ -f3 | sort -u); do',
   // Never kill -PID (process group): sandbox work often shares the caller's PGID.
@@ -48,7 +48,7 @@ export const CANCEL_COMPUTER_RUN_WORK = [
   "fi",
   "sleep 0.2",
   `pkill -KILL -f "rakazo-background-launch $computerId $runId " 2>/dev/null || true`,
-  "if [ -d /proc ]; then",
+  "if [ -d /proc ] && command -v find >/dev/null 2>&1; then",
   '  for pid in $(find /proc/[0-9]*/fd -lname "${prefix}*" -print 2>/dev/null | cut -d/ -f3 | sort -u); do',
   '    kill -KILL "$pid" 2>/dev/null || true',
   "  done",

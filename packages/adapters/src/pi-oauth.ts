@@ -78,6 +78,7 @@ export type PiOAuthConnected = {
   credential: OAuthCredential;
   provider: string;
   modelId?: string;
+  thinkingLevel?: string | null;
   label?: string;
   signal: AbortSignal;
 };
@@ -112,6 +113,7 @@ type Session = {
   spaceId: string;
   provider: string;
   modelId?: string;
+  thinkingLevel?: string | null;
   label?: string;
   abort: AbortController;
   state: SessionState;
@@ -344,6 +346,7 @@ export class PiOAuthLogins {
     spaceId: string;
     provider: string;
     modelId?: string;
+    thinkingLevel?: string | null;
     label?: string;
     signal?: AbortSignal;
   }): Promise<PiOAuthBegin> {
@@ -371,6 +374,7 @@ export class PiOAuthLogins {
         spaceId: input.spaceId,
         provider: input.provider,
         modelId: input.modelId,
+        thinkingLevel: input.thinkingLevel,
         label: input.label,
         abort,
         state: "pending",
@@ -526,6 +530,7 @@ export class PiOAuthLogins {
         credential: session.credential,
         provider: session.provider,
         modelId: session.modelId,
+        thinkingLevel: session.thinkingLevel,
         label: session.label,
         signal: session.abort.signal,
       };

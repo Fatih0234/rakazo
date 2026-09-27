@@ -945,6 +945,10 @@ export function createRouter(deps: RouterDeps) {
           plaintext,
           label: input.label,
           modelId: input.modelId,
+          // openai-compatible keeps its effort inside the stored endpoint
+          // secret; catalog providers store it on the space preference.
+          thinkingLevel:
+            input.provider === OPENAI_COMPATIBLE_PROVIDER_ID ? undefined : input.thinkingLevel,
           supportsImages: input.supportsImages,
           signal: context.signal,
         });
@@ -967,6 +971,7 @@ export function createRouter(deps: RouterDeps) {
           spaceId: context.actor.spaceId,
           provider: input.provider,
           modelId: input.modelId,
+          thinkingLevel: input.thinkingLevel,
           label: input.label,
           signal: context.signal,
         });
@@ -994,6 +999,7 @@ export function createRouter(deps: RouterDeps) {
                 login.label ??
                 listPiCatalog().find((entry) => entry.provider === login.provider)?.providerName,
               modelId: login.modelId,
+              thinkingLevel: login.thinkingLevel,
               signal: login.signal,
             });
           },
@@ -1091,16 +1097,9 @@ export function createRouter(deps: RouterDeps) {
               } else if (thinkingLevel === undefined) {
                 // The level belongs to the preference's modelId — keep it only when the
                 // stored choice already names this model.
-                const existing = await tx.spaceModelPreference.findUnique({
-                  where: {
-                    spaceId_userId_credentialId: {
-                      spaceId: context.actor.spaceId,
-                      userId: context.actor.userId,
-                      credentialId,
-                    },
-                  },
-                  select: { modelId: true, thinkingLevel: true },
-                });
+                const existing = preferences.find(
+                  (preference) => preference.credential.id === credentialId,
+                );
                 thinkingLevel =
                   existing?.modelId === usableModelId(input.modelId)
                     ? (existing.thinkingLevel as typeof input.thinkingLevel)
@@ -1129,12 +1128,27 @@ export function createRouter(deps: RouterDeps) {
               if (existing.length === 0) return;
               const ids = existing.map((row) => row.id);
               await tx.spaceModelPreference.deleteMany({
-                where: { userId: context.actor.userId, credentialId: { in: ids } },
+                where: {
+                  spaceId: context.actor.spaceId,
+                  userId: context.actor.userId,
+                  credentialId: { in: ids },
+                },
               });
+              // Credentials live on the account, not the space — keep the ones
+              // another space's preferences still select.
+              const referenced = await tx.spaceModelPreference.findMany({
+                where: { credentialId: { in: ids } },
+                select: { credentialId: true },
+              });
+              const kept = new Set(referenced.map((row) => row.credentialId));
+              const removable = existing.filter((row) => !kept.has(row.id));
               await tx.userModelCredential.deleteMany({
-                where: { userId: context.actor.userId, id: { in: ids } },
+                where: {
+                  userId: context.actor.userId,
+                  id: { in: removable.map((row) => row.id) },
+                },
               });
-              for (const row of existing) {
+              for (const row of removable) {
                 await deleteUnreferencedCredentialSecret(tx, {
                   credentialKind: "model",
                   credentialId: row.id,
@@ -5410,6 +5424,7 @@ async function persistModelCredential(
     plaintext: string;
     label?: string;
     modelId?: string;
+    thinkingLevel?: string | null;
     supportsImages?: boolean;
     signal?: AbortSignal;
   },
@@ -5472,7 +5487,21 @@ async function persistModelCredential(
           requestedModelId ??
           defaultCatalogModelId(input.provider, input.plaintext) ??
           usableModelId(deps.env.defaultModel);
-        await selectSpaceModelPreference(tx, actor, credential.id, defaultModel);
+        let thinkingLevel = input.thinkingLevel;
+        if (thinkingLevel === undefined) {
+          // A stored effort only carries over while it still names this model.
+          const previous = await tx.spaceModelPreference.findFirst({
+            where: {
+              spaceId: actor.spaceId,
+              userId: actor.userId,
+              credentialId: credential.id,
+            },
+            select: { modelId: true, thinkingLevel: true },
+          });
+          thinkingLevel =
+            previous?.modelId === usableModelId(defaultModel) ? previous.thinkingLevel : null;
+        }
+        await selectSpaceModelPreference(tx, actor, credential.id, defaultModel, thinkingLevel);
         throwIfAborted(input.signal);
         if (existing) {
           await deleteUnreferencedCredentialSecret(tx, {

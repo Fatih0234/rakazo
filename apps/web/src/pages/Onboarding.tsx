@@ -355,6 +355,7 @@ export function OnboardingPage() {
           provider,
           apiKey,
           modelId,
+          thinkingLevel,
           label: selected?.providerName ?? provider,
         });
       }
@@ -374,6 +375,7 @@ export function OnboardingPage() {
     void startSubscriptionSignIn({
       provider: selected.provider,
       modelId: selected.id,
+      thinkingLevel,
       label: selected.providerName ?? selected.provider,
     });
   }

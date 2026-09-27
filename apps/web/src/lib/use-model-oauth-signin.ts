@@ -1,4 +1,4 @@
-import type { ModelOAuthBegin } from "@rakazo/contracts";
+import type { ModelOAuthBegin, ThinkingLevel } from "@rakazo/contracts";
 import { cancelModelOAuthAttempt, finishModelOAuthAttempt } from "@rakazo/core";
 import { useEffect, useRef, useState } from "react";
 import { desktopBridge, oauthStateOf, onDesktopOAuthCallback } from "./desktop";
@@ -8,6 +8,7 @@ import { rpc } from "./rpc";
 export type ModelOAuthSignInBegin = {
   provider: string;
   modelId?: string;
+  thinkingLevel?: ThinkingLevel | null;
   label?: string;
 };
 
@@ -131,6 +132,7 @@ export function useModelOAuthSignIn(options: {
         {
           provider: begin.provider,
           modelId: begin.modelId,
+          thinkingLevel: begin.thinkingLevel,
           label: begin.label,
         },
         { signal: controller.signal },
