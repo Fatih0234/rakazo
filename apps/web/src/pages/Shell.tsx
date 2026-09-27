@@ -4831,8 +4831,8 @@ const Transcript = memo(function Transcript({
                       ? undefined
                       : `relative w-fit min-w-0 ${
                           message.role === "user"
-                            ? "max-w-[min(84%,calc(100%_-_6rem))]"
-                            : "max-w-[min(88%,calc(100%_-_6rem))]"
+                            ? "max-w-[min(84%,calc(100%_-_6rem))] [@media(hover:none)]:max-w-[min(84%,calc(100%_-_3rem))]"
+                            : "max-w-[min(88%,calc(100%_-_6rem))] [@media(hover:none)]:max-w-[min(88%,calc(100%_-_3rem))]"
                         }`
                   }
                 >
@@ -5882,7 +5882,7 @@ function MessageHoverActions({
               aria-label={t`React`}
               className={cn(
                 iconButtonClass,
-                "h-11 w-11 [@media(hover:hover)_and_(pointer:fine)]:h-7 [@media(hover:hover)_and_(pointer:fine)]:w-7",
+                "hidden h-7 w-7 [@media(hover:hover)_and_(pointer:fine)]:grid",
               )}
             >
               <Smile size={15} strokeWidth={1.7} />
@@ -5928,6 +5928,24 @@ function MessageHoverActions({
             <MoreHorizontal size={15} strokeWidth={1.7} />
           </DropdownMenuTrigger>
           <DropdownMenuContent align={side === "end" ? "start" : "end"}>
+            {canReactToThreadMessage(message) ? (
+              <div className="flex gap-0 px-1.5 py-1 [@media(hover:hover)_and_(pointer:fine)]:hidden">
+                {MESSAGE_REACTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    aria-label={emoji}
+                    className="grid h-11 w-11 place-items-center rounded-xl text-2xl hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+                    onClick={() => {
+                      setMoreOpen(false);
+                      void onReact(message, emoji);
+                    }}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <DropdownMenuItem
               className="[@media(hover:hover)_and_(pointer:fine)]:hidden"
               onClick={() => onReply(message)}
