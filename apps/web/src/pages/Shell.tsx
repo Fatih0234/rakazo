@@ -5913,7 +5913,10 @@ function MessageHoverActions({
           type="button"
           aria-label={t`Reply`}
           onClick={() => onReply(message)}
-          className={`${iconButtonClass} h-11 w-11 [@media(hover:hover)_and_(pointer:fine)]:h-7 [@media(hover:hover)_and_(pointer:fine)]:w-7`}
+          className={cn(
+            iconButtonClass,
+            "h-11 w-11 [@media(hover:hover)_and_(pointer:fine)]:h-7 [@media(hover:hover)_and_(pointer:fine)]:w-7",
+          )}
         >
           <Reply size={15} strokeWidth={1.7} />
         </button>
@@ -6095,7 +6098,7 @@ const MessageView = memo(function MessageView({
     return (
       <>
         {messageContext}
-        <div className="flex w-fit max-w-full justify-start">
+        <div className="flex w-fit max-w-full justify-start [@media(hover:none)]:w-full">
           <div
             data-testid="message-bot-bubble"
             className="max-w-full space-y-2.5 rounded-[20px] bg-muted px-[18px] py-3 text-[15.5px] leading-[1.5] text-foreground/90"
@@ -6191,7 +6194,10 @@ const MessageView = memo(function MessageView({
         }
         if (block.kind === "progress") {
           return (
-            <div key={i} className="flex w-fit max-w-full justify-start">
+            <div
+              key={i}
+              className="flex w-fit max-w-full justify-start [@media(hover:none)]:w-full"
+            >
               <div
                 data-testid="message-bot-bubble"
                 className="max-w-full rounded-[20px] bg-muted px-[18px] py-3 text-[15.5px] leading-[1.5] text-foreground/90"
@@ -6345,7 +6351,7 @@ const MessageView = memo(function MessageView({
         }
         if (block.kind === "text" && message.role === "user") {
           return (
-            <div key={i} className="flex w-fit max-w-full justify-end">
+            <div key={i} className="flex w-fit max-w-full justify-end [@media(hover:none)]:w-full">
               <div
                 data-testid="message-user-bubble"
                 data-quote-message-id={quoteMessageId}
@@ -6359,7 +6365,10 @@ const MessageView = memo(function MessageView({
         }
         if (block.kind === "text") {
           return (
-            <div key={i} className="flex w-fit max-w-full justify-start">
+            <div
+              key={i}
+              className="flex w-fit max-w-full justify-start [@media(hover:none)]:w-full"
+            >
               <div
                 data-testid="message-bot-bubble"
                 className="max-w-full rounded-[20px] bg-muted px-[18px] py-3 text-[15.5px] leading-[1.5] text-foreground/90"
