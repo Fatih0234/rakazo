@@ -1853,24 +1853,22 @@ export interface StreamIdleWatchdog {
 }
 
 /**
- * `timeoutMs` bounds each attempt's time-to-headers: once Codex SSE headers
- * arrive, pi consumes the response body until it ends or the request signal
- * aborts, so a connection that goes silent stalls a run forever. The watchdog
- * composes an AbortController into `options.signal` and re-arms the idle
- * bound at two points: `options.onResponse` — pi invokes it inside the retry
- * loop whenever an attempt's headers land, and only a 2xx status arms here
- * since error responses go straight to retry/error handling without emitting
- * stream events — and every stream event the agent consumes. `idleTimeoutMs`
- * of silence aborts the request.
+ * `timeoutMs` bounds each attempt's time-to-headers. After headers arrive, pi
+ * reads the body until it ends or the request signal aborts, so silence can
+ * stall a run. The watchdog composes an AbortController into `options.signal`
+ * and re-arms on a 2xx `onResponse` — pi invokes it inside the retry loop when
+ * an attempt's headers land — and on every stream event the agent consumes.
+ * `idleTimeoutMs` of silence aborts the request.
  *
- * Arming only on a successful response — not at stream creation, not on
+ * Arming only on a successful response — not at stream creation, and not on
  * retryable error headers — keeps each attempt's time-to-headers inside its
- * own `timeoutMs` budget and each retry backoff outside the idle bound: a
- * burnt-out or rejected attempt leaves no leftover that could abort a
- * still-valid retry, while a 2xx response that then goes silent is still
- * bounded. pi reports any signal abort as a generic "Request was aborted", so
- * when the watchdog fired the wrapper relabels the terminal error as an idle
- * timeout rather than a caller abort.
+ * own `timeoutMs` budget and each retry backoff outside the idle bound. A
+ * non-2xx body is bounded separately by `boundRetryableErrorBody`: pi reads it
+ * with `response.text()` after the header timeout is gone, and failing that
+ * read lets the attempt retry, whereas aborting this signal would also cancel
+ * the backoff. pi reports any signal abort as a generic "Request was aborted",
+ * so when the watchdog fired the wrapper relabels the terminal error as an
+ * idle timeout rather than a caller abort.
  */
 export function codexStreamIdleWatchdog(
   upstream: AbortSignal | undefined,
@@ -1949,6 +1947,69 @@ export function codexStreamIdleWatchdog(
   };
 }
 
+/**
+ * Fails a non-2xx body that stays open. The shared idle watchdog stays
+ * unarmed: aborting it would skip pi's retry backoff, and a thrown read error
+ * is retried like any other transport failure.
+ */
+function boundRetryableErrorBody(response: Response, idleTimeoutMs: number): Response {
+  if (response.ok || response.body == null) return response;
+  const reader = response.body.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clear = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const read = reader.read().then(
+        (chunk) => ({ kind: "chunk" as const, chunk }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      );
+      const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+        timer = setTimeout(() => resolve({ kind: "timeout" }), idleTimeoutMs);
+        timer.unref?.();
+      });
+      const outcome = await Promise.race([read, timeout]);
+      clear();
+      if (outcome.kind === "timeout") {
+        const error = new Error(CODEX_STREAM_IDLE_TIMEOUT_MESSAGE);
+        void reader.cancel(error).catch(() => undefined);
+        controller.error(error);
+        return;
+      }
+      if (outcome.kind === "error") {
+        controller.error(outcome.error);
+        return;
+      }
+      if (outcome.chunk.done) controller.close();
+      else controller.enqueue(outcome.chunk.value);
+    },
+    cancel(reason) {
+      clear();
+      return reader.cancel(reason);
+    },
+  });
+  const headers = new Headers(response.headers);
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function codexRequestFetch(
+  fetchImpl: ModelsSimpleStreamOptions["fetch"],
+  idleTimeoutMs: number,
+): NonNullable<ModelsSimpleStreamOptions["fetch"]> {
+  return async (input, init) => {
+    const response = fetchImpl ? await fetchImpl(input, init) : await globalThis.fetch(input, init);
+    return boundRetryableErrorBody(response, idleTimeoutMs);
+  };
+}
+
 export function reliableModelStream(
   models: Models,
   model: Model<Api>,
@@ -1968,13 +2029,9 @@ export function reliableModelStream(
           ? {
               ...options,
               signal: watchdog.signal,
-              // pi invokes onResponse inside its retry loop once an attempt's
-              // headers arrive, before the body is consumed. Only a 2xx arms the
-              // idle bound: error responses are read then retried or thrown —
-              // they emit no stream events — so arming there would let the
-              // backoff sleep burn a still-valid attempt's budget. Each attempt
-              // whose 2xx headers land re-arms a fresh full budget. A
-              // caller-supplied hook still observes every response.
+              fetch: codexRequestFetch(options?.fetch, MODEL_STREAM_IDLE_TIMEOUT_MS),
+              // Only a 2xx arms the shared watchdog. Error bodies are bounded by
+              // the fetch wrapper, and a caller-supplied hook still sees every status.
               onResponse: (response, requestModel) => {
                 if (response.status >= 200 && response.status < 300) watchdog.ping();
                 return options?.onResponse?.(response, requestModel);

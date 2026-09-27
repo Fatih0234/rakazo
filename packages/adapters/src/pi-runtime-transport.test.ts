@@ -1,9 +1,16 @@
-import type { Api, Model, ModelsSimpleStreamOptions, ProviderHeaders } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  Context,
+  Model,
+  ModelsSimpleStreamOptions,
+  ProviderHeaders,
+} from "@earendil-works/pi-ai";
 import { DEFAULT_MODEL_MAX_TOKENS } from "@rakazo/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   conversationSessionId,
   isOpenCodeProvider,
+  reliableModelStream,
   reliableStreamOptions,
   resolveRuntimeModel,
 } from "./pi-runtime.js";
@@ -307,6 +314,73 @@ describe("Pi runtime transport", () => {
     }));
 
     expect(await residencyFor(options)).toBe("eu-west");
+  });
+
+  it("sends the residency of the token streamSimple refreshed before the request", async () => {
+    const initial = fakeJwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "acct_test",
+        chatgpt_compute_residency: "us-east",
+      },
+    });
+    const refreshed = fakeJwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "acct_test",
+        chatgpt_compute_residency: "eu-west",
+      },
+    });
+    const resolved = resolveRuntimeModel({
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      oauth: {
+        credential: { type: "oauth", access: initial, refresh: "refresh-1", expires: 0 },
+      },
+    });
+    expect(resolved.model?.provider).toBe("openai-codex");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url !== "https://auth.openai.com/oauth/token") {
+          throw new Error(`unexpected fetch ${url}`);
+        }
+        return Response.json({
+          access_token: refreshed,
+          refresh_token: "refresh-2",
+          expires_in: 3600,
+        });
+      }),
+    );
+    try {
+      let residency: string | null = null;
+      const stream = reliableModelStream(
+        resolved.models,
+        resolved.model!,
+        { messages: [{ role: "user", content: "ping", timestamp: 0 }] } as Context,
+        {
+          fetch: async (input, init) => {
+            const headers = new Headers(
+              init?.headers ?? (input instanceof Request ? input.headers : undefined),
+            );
+            residency = headers.get("x-openai-internal-codex-residency");
+            return Response.json({ error: { message: "unauthorized" } }, { status: 401 });
+          },
+        },
+        undefined,
+        () => resolved.credentials?.accessToken,
+      );
+      const events = [];
+      for await (const event of stream) events.push(event.type);
+      const result = await stream.result();
+
+      expect(residency).toBe("eu-west");
+      expect(resolved.credentials?.accessToken).toBe(refreshed);
+      expect(events).toContain("error");
+      expect(result.stopReason).toBe("error");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("never attaches the residency header for non-Codex providers", () => {

@@ -251,11 +251,13 @@ describe("reliableModelStream idle gating", () => {
     );
     const models = { streamSimple } as unknown as Models;
     const other = { provider: "openrouter", api: "openai-completions" } as Model<Api>;
-    const options: SimpleStreamOptions = { signal: caller.signal };
+    const callerFetch = vi.fn<NonNullable<SimpleStreamOptions["fetch"]>>();
+    const options: SimpleStreamOptions = { signal: caller.signal, fetch: callerFetch };
 
     const guarded = reliableModelStream(models, codexModel, context, options, undefined);
     const guardedOptions = streamSimple.mock.calls[0]?.[2];
     expect(guardedOptions?.signal).not.toBe(caller.signal);
+    expect(guardedOptions?.fetch).not.toBe(callerFetch);
     expect(guardedOptions?.timeoutMs).toBe(MODEL_STREAM_TIMEOUT_MS);
     expect(guardedOptions?.transport).toBe("sse");
     expect(guarded).not.toBe(inner);
@@ -264,6 +266,7 @@ describe("reliableModelStream idle gating", () => {
     const plain = reliableModelStream(models, other, context, options, undefined);
     const plainOptions = streamSimple.mock.calls[1]?.[2];
     expect(plainOptions?.signal).toBe(caller.signal);
+    expect(plainOptions?.fetch).toBe(callerFetch);
     expect(plain).toBe(inner);
 
     // Before the first event the idle budget stays unarmed, so a headers
@@ -323,6 +326,92 @@ describe("reliableModelStream idle gating", () => {
     expect(guardedOptions?.signal?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(guardedOptions?.signal?.aborted).toBe(true);
+    expect(caller.signal.aborted).toBe(false);
+  });
+
+  it("fails a stalled retryable error body without aborting the request", async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    const inner = new AssistantMessageEventStream();
+    const callerFetch = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            pull: () => new Promise<void>(() => undefined),
+          }),
+          { status: 429, headers: { "retry-after": "30" } },
+        ),
+    );
+    const streamSimple = vi.fn(
+      (_model: Model<Api>, _context: Context, _options?: SimpleStreamOptions) => inner,
+    );
+    reliableModelStream(
+      { streamSimple } as unknown as Models,
+      codexModel,
+      context,
+      { signal: caller.signal, fetch: callerFetch },
+      undefined,
+    );
+    const guardedOptions = streamSimple.mock.calls[0]?.[2];
+    const response = await guardedOptions!.fetch!("https://example.test/codex", { method: "POST" });
+    expect(callerFetch).toHaveBeenCalledOnce();
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("30");
+
+    let settled = false;
+    const outcome = response.text().then(
+      (text) => {
+        settled = true;
+        return { text };
+      },
+      (error: unknown) => {
+        settled = true;
+        return { error };
+      },
+    );
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    expect(guardedOptions?.signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    await expect(outcome).resolves.toEqual({
+      error: expect.objectContaining({ message: CODEX_STREAM_IDLE_TIMEOUT_MESSAGE }),
+    });
+    expect(guardedOptions?.signal?.aborted).toBe(false);
+    expect(caller.signal.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("returns a finished error body and leaves successful responses unwrapped", async () => {
+    const caller = new AbortController();
+    const inner = new AssistantMessageEventStream();
+    const ok = new Response("event: done\n\n", { status: 200 });
+    const callerFetch = vi
+      .fn<NonNullable<SimpleStreamOptions["fetch"]>>()
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: { "retry-after": "2" } }),
+      )
+      .mockResolvedValueOnce(ok);
+    const streamSimple = vi.fn(
+      (_model: Model<Api>, _context: Context, _options?: SimpleStreamOptions) => inner,
+    );
+    reliableModelStream(
+      { streamSimple } as unknown as Models,
+      codexModel,
+      context,
+      { signal: caller.signal, fetch: callerFetch },
+      undefined,
+    );
+    const guardedOptions = streamSimple.mock.calls[0]?.[2];
+    const retryable = await guardedOptions!.fetch!("https://example.test/codex", {});
+    expect(retryable.status).toBe(429);
+    expect(retryable.headers.get("retry-after")).toBe("2");
+    await expect(retryable.text()).resolves.toBe("slow down");
+
+    const succeeded = await guardedOptions!.fetch!("https://example.test/codex", {});
+    expect(succeeded).toBe(ok);
+    expect(guardedOptions?.signal?.aborted).toBe(false);
     expect(caller.signal.aborted).toBe(false);
   });
 
