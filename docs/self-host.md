@@ -295,7 +295,9 @@ output directory of any failed run.
 
 `infra/compose/docker-compose.prod.yml` runs the hosted product with Postgres, the API, worker, web app,
 and automatic HTTPS through Caddy. It uses E2B for bot computers, so the VM never exposes a Docker
-supervisor or browser containers. The root-equivalent updater sidecar is an explicit opt-in profile.
+supervisor or browser containers — `infra/compose/docker-compose.prod.docker.yml` is the opt-in
+overlay that runs local Docker computers on the same stack (see below). The root-equivalent updater
+sidecar is an explicit opt-in profile.
 
 Before deploying to a new Ubuntu host, create and verify a key-only `deploy` account, then apply the
 idempotent host-hardening baseline. It disables SSH passwords and root login, rate-limits SSH, allows
@@ -393,6 +395,34 @@ checkout's `.env` and production Compose file. If the stack was started with a c
 set the same `COMPOSE_PROJECT_NAME` in that file. For a manual run, export these variables instead.
 When updating an existing backup installation, reinstall both the script and service unit,
 then run `systemctl daemon-reload`.
+
+### Docker computers on the production stack
+
+Layer `infra/compose/docker-compose.prod.docker.yml` after the base file in every Compose
+invocation to run bot computers as local Docker containers instead of a remote provider:
+
+```bash
+docker compose --env-file .env \
+  -f infra/compose/docker-compose.prod.yml \
+  -f infra/compose/docker-compose.prod.docker.yml \
+  up -d --build --wait --pull never
+```
+
+The overlay adds the supervisor (app image, `user: root`, Docker socket), the one-shot `computer`
+image build and `data-init` ownership fix, points the API and worker at `http://supervisor:7091`,
+and makes `SANDBOX_PROVIDER=docker` the default. It needs a dedicated `SANDBOX_SUPERVISOR_TOKEN`
+in `.env`; `RAKAZO_COMPUTER_*` and the `SANDBOX_*` limits apply as documented in `.env.example`.
+Like the updater, the supervisor is root-equivalent on the host: it publishes no port, joins only
+the internal `app` network, and Caddy has no route to it. Bot computers are sibling containers on
+per-bot networks that only the supervisor and the `web` screen proxy join.
+
+When the `updater` profile is enabled too, give the sidecar the same file list and recreate set so
+updates do not leave the supervisor on the previous app image:
+
+```env
+RAKAZO_COMPOSE_FILE=infra/compose/docker-compose.prod.yml:infra/compose/docker-compose.prod.docker.yml
+RAKAZO_UPDATE_SERVICES=supervisor
+```
 
 ## Restore
 
