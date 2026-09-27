@@ -203,6 +203,42 @@ describe("terminalOAuthRefreshErrorMarker", () => {
     expect(terminalOAuthRefreshErrorMarker(wrapped)).toBe("invalid_grant");
   });
 
+  it.each(['"upstream 503"', '"status 502"', '"(502)"', '"upstream status=502"'])(
+    "still retires a real 400 whose body text mentions %s",
+    (quoted) => {
+      // The quoted status lives inside the embedded response body, so it is not
+      // the layer's own status and must not veto the genuine terminal 400.
+      const body = JSON.stringify({ error: "invalid_grant", error_description: quoted });
+      expect(
+        terminalOAuthRefreshErrorMarker(
+          new Error(`OpenAI Codex token refresh failed (400): ${body}`),
+        ),
+      ).toBe("invalid_grant");
+    },
+  );
+
+  it("retires an Anthropic terminal error whose body field mentions a 5xx", () => {
+    // Anthropic flattens nested errors into `details=...; status=400; ...
+    // body={...}`; the 503 sits inside the quoted body field, not the layer's
+    // own status.
+    const anthropic = new Error(
+      "Anthropic token refresh request failed. url=https://api.anthropic.com; " +
+        "details=Error: HTTP request failed. status=400; url=https://api.anthropic.com; " +
+        'body={"error":"invalid_grant","error_description":"upstream status=503"}',
+    );
+    expect(terminalOAuthRefreshErrorMarker(anthropic)).toBe("invalid_grant");
+  });
+
+  it("retires a Copilot-style terminal error whose body text mentions a 5xx", () => {
+    expect(
+      terminalOAuthRefreshErrorMarker(
+        new Error(
+          '400 Bad Request: {"error":"invalid_grant","error_description":"upstream (502)"}',
+        ),
+      ),
+    ).toBe("invalid_grant");
+  });
+
   it.each([
     [
       "4xx marker outer, 5xx inner",

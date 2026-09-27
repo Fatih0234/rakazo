@@ -98,6 +98,30 @@ const REFRESH_ERROR_STATUS_PATTERNS = [
 // stays transient even when the response body quotes a marker.
 const TERMINAL_REFRESH_HTTP_STATUSES = new Set([400, 401, 403]);
 
+// A layer's own status lives in pi's header formatting, before the embedded
+// response payload. Everything past the first payload marker — `): ` closing a
+// parenthesized status, `: {` opening a JSON body, `body=`/`stack=` fields in
+// Anthropic's flattened details, a bare `500: ` ending a flat status header,
+// or the `: ` after a Copilot-style leading status — is quoted server text
+// where a mention like "status 502" must not veto (or grant) terminality.
+function statusHeader(message: string): string {
+  let end = message.length;
+  const cutAt = (index: number, keep = 0) => {
+    if (index >= 0) end = Math.min(end, index + keep);
+  };
+  cutAt(message.indexOf("): "), 1); // keep ")" so `(400)` still parses
+  cutAt(message.indexOf(": {"), 1);
+  cutAt(message.indexOf("body="));
+  cutAt(message.indexOf("stack="));
+  const flat = /(\d{3}): /.exec(message);
+  if (flat && message.charAt(flat.index - 1) !== "(") {
+    // Keep the 3 status digits so the flat header still parses.
+    end = Math.min(end, flat.index + 3);
+  }
+  if (/^\d{3}[\s:]/.test(message)) cutAt(message.indexOf(": "), 1);
+  return message.slice(0, end);
+}
+
 const MAX_REFRESH_ERROR_CHAIN_DEPTH = 10;
 
 /**
@@ -108,9 +132,9 @@ const MAX_REFRESH_ERROR_CHAIN_DEPTH = 10;
  * <provider>", { cause })`, and the provider-level message embeds the token
  * endpoint's HTTP status and body, so inspect the whole `cause` chain: a
  * marker retires only when a terminal 4xx status accompanies it — and a 5xx
- * reported by ANY layer vetoes it, since a gateway failure deeper in the
- * chain can wrap a quoted marker without the token endpoint having judged
- * the credential at all.
+ * reported as ANY layer's own status vetoes it, since a gateway failure can
+ * wrap a quoted marker without the token endpoint having judged the
+ * credential at all.
  */
 export function terminalOAuthRefreshErrorMarker(error: unknown): string | undefined {
   let marker: string | undefined;
@@ -125,8 +149,9 @@ export function terminalOAuthRefreshErrorMarker(error: unknown): string | undefi
     const message =
       current instanceof Error ? current.message : typeof current === "string" ? current : "";
     marker ??= TERMINAL_REFRESH_ERROR_PATTERNS.find(([, pattern]) => pattern.test(message))?.[0];
+    const header = statusHeader(message);
     for (const pattern of REFRESH_ERROR_STATUS_PATTERNS) {
-      for (const match of message.matchAll(pattern)) {
+      for (const match of header.matchAll(pattern)) {
         const status = Number(match[1]);
         if (TERMINAL_REFRESH_HTTP_STATUSES.has(status)) terminalStatus = true;
         else if (status >= 500 && status <= 599) serverErrorStatus = true;
