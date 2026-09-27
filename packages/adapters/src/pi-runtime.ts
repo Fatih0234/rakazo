@@ -7,6 +7,9 @@ import {
 } from "@earendil-works/pi-agent-core";
 import {
   type Api,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  type Context,
   clampThinkingLevel,
   type Model,
   type Models,
@@ -15,6 +18,7 @@ import {
   Type,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import type {
   AdapterContext,
   AgentRunRequest,
@@ -45,6 +49,7 @@ import {
   billedPromptTokens,
   clipToolResultContent,
   clipToolResultText,
+  MODEL_STREAM_IDLE_TIMEOUT_MS,
   MODEL_STREAM_MAX_RETRIES,
   MODEL_STREAM_TIMEOUT_MS,
   REASONING_MODEL_MAX_TOKENS,
@@ -261,7 +266,7 @@ export class PiAgentRuntime implements AgentRuntime {
           sessionId: conversationSessionId(request.threadId, request.botId),
           steeringMode: "all",
           streamFn: (m, ctx, options) =>
-            models.streamSimple(m, ctx, reliableStreamOptions(m, options, request.model.maxTokens)),
+            reliableModelStream(models, m, ctx, options, request.model.maxTokens),
           getApiKey: async () => apiKey,
           transformContext: async (messages) =>
             pruneComputerScreenshotContext(
@@ -1076,11 +1081,7 @@ async function executeSubagent(host: ToolHost, executionId: string, args: Record
   const nested = new Agent({
     sessionId: conversationSessionId(host.request.threadId, host.request.botId, agentId),
     streamFn: (m, ctx, options) =>
-      selectedModel.models.streamSimple(
-        m,
-        ctx,
-        reliableStreamOptions(m, options, requestModel.maxTokens),
-      ),
+      reliableModelStream(selectedModel.models, m, ctx, options, requestModel.maxTokens),
     getApiKey: async () => selectedModel.apiKey,
     transformContext: async (messages) =>
       pruneComputerScreenshotContext(
@@ -1808,6 +1809,132 @@ function createQueue(): EventQueue {
   };
 }
 
+export function isCodexModel(model: Pick<Model<Api>, "api" | "provider">): boolean {
+  return model.provider === "openai-codex" || model.api === "openai-codex-responses";
+}
+
+/** Abort reason recorded when a Codex stream goes silent past the idle bound. */
+export const CODEX_STREAM_IDLE_TIMEOUT_MESSAGE = "Codex stream idle timeout";
+
+export interface StreamIdleWatchdog {
+  /** Composed abort signal to hand to the provider request. */
+  signal: AbortSignal;
+  /** Wraps the provider stream so every delivered event re-arms the idle bound. */
+  wrap(stream: AssistantMessageEventStream): AssistantMessageEventStream;
+  /** Stops the timer and drops the caller-signal listener. */
+  dispose(): void;
+}
+
+/**
+ * `timeoutMs` bounds only time-to-headers: once Codex SSE headers arrive, pi
+ * consumes the response body until it ends or the request signal aborts, so a
+ * connection that goes silent stalls a run forever. pi-ai offers no per-event
+ * hook, so the watchdog composes an AbortController into `options.signal` and
+ * observes the stream the agent consumes: every delivered event re-arms the
+ * timer, and `idleTimeoutMs` of silence aborts the request. pi reports any
+ * signal abort as a generic "Request was aborted", so when the watchdog fired
+ * the wrapper relabels the terminal error as an idle timeout rather than a
+ * caller abort.
+ */
+export function codexStreamIdleWatchdog(
+  upstream: AbortSignal | undefined,
+  idleTimeoutMs: number = MODEL_STREAM_IDLE_TIMEOUT_MS,
+): StreamIdleWatchdog {
+  const controller = new AbortController();
+  let timedOut = false;
+  let disposed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const onUpstreamAbort = () => controller.abort(upstream?.reason);
+  if (upstream?.aborted) controller.abort(upstream.reason);
+  else upstream?.addEventListener("abort", onUpstreamAbort, { once: true });
+
+  const arm = () => {
+    if (disposed || controller.signal.aborted) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (controller.signal.aborted) return;
+      timedOut = true;
+      controller.abort(new Error(CODEX_STREAM_IDLE_TIMEOUT_MESSAGE));
+    }, idleTimeoutMs);
+    timer.unref?.();
+  };
+
+  const dispose = () => {
+    disposed = true;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    upstream?.removeEventListener("abort", onUpstreamAbort);
+  };
+
+  arm();
+
+  const ping = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    arm();
+  };
+
+  const describeTimeout = (message: AssistantMessage): AssistantMessage =>
+    timedOut && message.stopReason === "aborted"
+      ? { ...message, stopReason: "error", errorMessage: CODEX_STREAM_IDLE_TIMEOUT_MESSAGE }
+      : message;
+
+  const rewrite = (event: AssistantMessageEvent): AssistantMessageEvent => {
+    if (event.type !== "error") return event;
+    const error = describeTimeout(event.error);
+    return error === event.error ? event : { type: "error", reason: "error", error };
+  };
+
+  return {
+    signal: controller.signal,
+    dispose,
+    wrap(inner) {
+      class Watched extends AssistantMessageEventStream {
+        override async *[Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+          try {
+            for await (const event of inner) {
+              ping();
+              yield rewrite(event);
+            }
+          } finally {
+            dispose();
+          }
+        }
+        override result(): Promise<AssistantMessage> {
+          return inner.result().then(describeTimeout).finally(dispose);
+        }
+      }
+      return new Watched();
+    },
+  };
+}
+
+export function reliableModelStream(
+  models: Models,
+  model: Model<Api>,
+  context: Context,
+  options: SimpleStreamOptions | undefined,
+  configuredMaxTokens: number | undefined,
+): AssistantMessageEventStream {
+  const watchdog = isCodexModel(model) ? codexStreamIdleWatchdog(options?.signal) : undefined;
+  try {
+    const stream = models.streamSimple(
+      model,
+      context,
+      reliableStreamOptions(
+        model,
+        watchdog ? { ...options, signal: watchdog.signal } : options,
+        configuredMaxTokens,
+      ),
+    );
+    return watchdog ? watchdog.wrap(stream) : stream;
+  } catch (error) {
+    watchdog?.dispose();
+    throw error;
+  }
+}
+
 export function reliableStreamOptions(
   model: Pick<Model<Api>, "api" | "provider" | "maxTokens" | "reasoning">,
   options?: SimpleStreamOptions,
@@ -1825,7 +1952,7 @@ export function reliableStreamOptions(
     ),
   };
 
-  if (model.provider === "openai-codex" || model.api === "openai-codex-responses") {
+  if (isCodexModel(model)) {
     // Pi cannot fall back after a WebSocket has emitted its start event. Long tool
     // runs then surface abnormal close 1006 as a terminal model error. SSE has
     // bounded network retries and no long-lived connection between tool turns.
