@@ -46,6 +46,13 @@ export interface AgentModelOAuthCredential {
   accountId?: string;
 }
 
+/**
+ * Why a stored OAuth credential is being dropped. `terminal-refresh-failure`
+ * means the provider permanently rejected the refresh token; `account-changed`
+ * means a refreshed token belongs to a different account than the stored one.
+ */
+export type ModelCredentialRetireReason = "terminal-refresh-failure" | "account-changed";
+
 export interface PortableFile {
   path: string;
   content: Uint8Array;
@@ -367,6 +374,8 @@ export interface AgentRunModel {
   oauth?: {
     credential: AgentModelOAuthCredential;
     persist?: (credential: AgentModelOAuthCredential) => Promise<void>;
+    /** Drop the stored credential after a terminal provider rejection. */
+    retire?: (reason: ModelCredentialRetireReason, detail?: string) => Promise<void>;
   };
 }
 

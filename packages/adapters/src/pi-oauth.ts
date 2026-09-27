@@ -6,6 +6,7 @@ import type {
   OAuthCredential,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import type { ModelCredentialRetireReason } from "@rakazo/adapter-kit";
 import {
   MAX_MODEL_CONTEXT_WINDOW,
   MAX_MODEL_MAX_TOKENS,
@@ -14,6 +15,7 @@ import {
   type ThinkingLevel,
   ThinkingLevelSchema,
 } from "@rakazo/contracts";
+import { getLogger } from "@rakazo/logging";
 import { createManualAnthropicOAuthLogin } from "./pi-anthropic-oauth.js";
 
 export const CHATGPT_OAUTH_PROVIDER = "openai-codex";
@@ -55,6 +57,48 @@ export const SUBSCRIPTION_SIGN_IN_PROVIDERS: Record<
 
 const MIN_OAUTH_VALIDITY_MS = 5 * 60 * 1000;
 const SIGN_IN_START_WAIT_MS = 30_000;
+
+const TERMINAL_REFRESH_ERROR_MARKERS = [
+  "invalid_grant",
+  "refresh_token_expired",
+  "refresh_token_reused",
+  "refresh_token_invalidated",
+] as const;
+
+// Word-ish boundaries keep `invalid_grant` from matching a longer token such
+// as `not_invalid_grant`, while still matching the quoted JSON bodies pi embeds
+// in its refresh errors.
+const TERMINAL_REFRESH_ERROR_PATTERNS = TERMINAL_REFRESH_ERROR_MARKERS.map(
+  (marker) => [marker, new RegExp(`(^|[^A-Za-z0-9_])${marker}([^A-Za-z0-9_]|$)`)] as const,
+);
+
+const MAX_REFRESH_ERROR_CHAIN_DEPTH = 10;
+
+/**
+ * The matched terminal marker when a refresh failure permanently kills the
+ * stored credential, `undefined` for transient failures (timeouts, 5xx,
+ * malformed or unknown responses) that must not retire it. pi wraps provider
+ * errors in `ModelsError("oauth", "OAuth refresh failed for <provider>",
+ * { cause })`, and the provider-level message embeds the token endpoint's HTTP
+ * status and body, so inspect the whole `cause` chain's messages.
+ */
+export function terminalOAuthRefreshErrorMarker(error: unknown): string | undefined {
+  let current: unknown = error;
+  for (
+    let depth = 0;
+    current !== undefined && current !== null && depth < MAX_REFRESH_ERROR_CHAIN_DEPTH;
+    depth += 1
+  ) {
+    const message =
+      current instanceof Error ? current.message : typeof current === "string" ? current : "";
+    const marker = TERMINAL_REFRESH_ERROR_PATTERNS.find(([, pattern]) =>
+      pattern.test(message),
+    )?.[0];
+    if (marker) return marker;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return undefined;
+}
 
 export type StoredModelSecret =
   | { kind: "api_key"; key: string; maxTokens?: number }
@@ -273,6 +317,7 @@ function providerCatalog() {
 
 type ResolveModelOpts = {
   persist?: (next: string) => Promise<void>;
+  retire?: (reason: ModelCredentialRetireReason, detail?: string) => Promise<void>;
   now?: number;
   oauth?: Pick<OAuthAuth, "refresh" | "toAuth">;
   signal?: AbortSignal;
@@ -296,7 +341,20 @@ export async function resolveModelAuth(
   let credential = parsed.credential;
   const maxTokens = parsed.maxTokens;
   if (credential.expires - now < MIN_OAUTH_VALIDITY_MS) {
-    credential = await oauth.refresh(credential, opts?.signal ?? new AbortController().signal);
+    try {
+      credential = await oauth.refresh(credential, opts?.signal ?? new AbortController().signal);
+    } catch (error) {
+      const marker = terminalOAuthRefreshErrorMarker(error);
+      if (marker && opts?.retire) {
+        try {
+          await opts.retire("terminal-refresh-failure", marker);
+        } catch (retireError) {
+          // A retirement failure must never mask the refresh error the caller sees.
+          getLogger().error("model credential retirement failed", retireError);
+        }
+      }
+      throw error;
+    }
     await opts?.persist?.(
       serializeModelSecret({
         kind: "oauth",
@@ -466,7 +524,9 @@ export class PiOAuthLogins {
       input.signal?.removeEventListener("abort", abortFromRequest);
       if (abort.signal.aborted) throw abort.signal.reason ?? new Error("Sign-in cancelled.");
       session.expiresTimer = setTimeout(() => {
-        if (session.state === "finalizing") return;
+        // Expire even a "finalizing" session: finish() persists on a detached
+        // signal, so aborting cannot corrupt the write — but returning early
+        // here would leak the session in `pending` forever when a persist hangs.
         session.abort.abort(new Error("Sign-in expired."));
         this.removeSession(session);
       }, started.expiresInSeconds * 1000);
@@ -629,7 +689,10 @@ export class PiOAuthLogins {
   }
 
   abortAll(): void {
-    for (const session of this.pending.values()) session.abort.abort();
+    for (const session of [...this.pending.values()]) {
+      this.removeSession(session);
+      session.abort.abort();
+    }
     this.pending.clear();
     this.activeByScope.clear();
   }

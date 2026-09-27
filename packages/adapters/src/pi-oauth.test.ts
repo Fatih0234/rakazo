@@ -1,5 +1,5 @@
 import type { Credential, OAuthCredential } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CHATGPT_OAUTH_PROVIDER,
   COPILOT_OAUTH_PROVIDER,
@@ -10,6 +10,7 @@ import {
   resolveModelAuth,
   secretValuesToRedact,
   serializeModelSecret,
+  terminalOAuthRefreshErrorMarker,
   XAI_OAUTH_PROVIDER,
 } from "./pi-oauth.js";
 
@@ -150,6 +151,152 @@ describe("model secrets", () => {
       maxTokens: 16384,
       credential: expect.objectContaining({ access: "new" }),
     });
+  });
+});
+
+describe("terminalOAuthRefreshErrorMarker", () => {
+  it.each([
+    "invalid_grant",
+    "refresh_token_expired",
+    "refresh_token_reused",
+    "refresh_token_invalidated",
+  ])("matches the terminal marker %s in a pi-wrapped refresh error", (marker) => {
+    const providerError = new Error(
+      `OpenAI Codex token refresh failed (400): {"error":"${marker}","error_description":"gone"}`,
+    );
+    const wrapped = new Error("OAuth refresh failed for openai-codex", { cause: providerError });
+    expect(terminalOAuthRefreshErrorMarker(wrapped)).toBe(marker);
+  });
+
+  it("matches a marker embedded in the outer message", () => {
+    expect(
+      terminalOAuthRefreshErrorMarker(new Error('token refresh failed (400): "invalid_grant"')),
+    ).toBe("invalid_grant");
+  });
+
+  it("matches a marker carried by a thrown string", () => {
+    expect(terminalOAuthRefreshErrorMarker("refresh_token_reused")).toBe("refresh_token_reused");
+  });
+
+  it.each([
+    ["network failure", new Error("OpenAI Codex token refresh error: fetch failed")],
+    ["server error", new Error("OpenAI Codex token refresh failed (503): service unavailable")],
+    ["timeout", new Error("The operation timed out")],
+    ["malformed body", new Error("OpenAI Codex token refresh response missing fields: {}")],
+    ["lookalike identifier", new Error('{"error":"not_invalid_grant"}')],
+    ["marker prefix only", new Error('{"error":"invalid_granted"}')],
+    ["non-error object", { message: "invalid_grant" }],
+    ["null", null],
+    ["undefined", undefined],
+  ])("does not classify a %s as terminal", (_label, error) => {
+    expect(terminalOAuthRefreshErrorMarker(error)).toBeUndefined();
+  });
+
+  it("stops walking after the chain depth limit", () => {
+    let error: Error = new Error('{"error":"invalid_grant"}');
+    for (let i = 0; i < 12; i += 1) error = new Error(`layer ${i}`, { cause: error });
+    expect(terminalOAuthRefreshErrorMarker(error)).toBeUndefined();
+
+    let shallow: Error = new Error('{"error":"invalid_grant"}');
+    for (let i = 0; i < 3; i += 1) shallow = new Error(`layer ${i}`, { cause: shallow });
+    expect(terminalOAuthRefreshErrorMarker(shallow)).toBe("invalid_grant");
+  });
+});
+
+describe("resolveModelAuth retirement", () => {
+  const expired = JSON.stringify(oauthCred({ access: "old", expires: 1 }));
+
+  const failingRefresh = (error: unknown) => ({
+    refresh: async (): Promise<OAuthCredential> => {
+      throw error;
+    },
+    toAuth: async (current: OAuthCredential) => ({ apiKey: current.access }),
+  });
+
+  it("retires once with the classified marker, then rethrows the refresh error", async () => {
+    const failure = new Error("OAuth refresh failed for openai-codex", {
+      cause: new Error('OpenAI Codex token refresh failed (400): {"error":"invalid_grant"}'),
+    });
+    const retire = vi.fn(async () => {});
+    const persist = vi.fn(async () => {});
+
+    await expect(
+      resolveModelAuth(expired, CHATGPT_OAUTH_PROVIDER, {
+        now: 10_000,
+        persist,
+        retire,
+        oauth: failingRefresh(failure),
+      }),
+    ).rejects.toBe(failure);
+
+    expect(retire).toHaveBeenCalledTimes(1);
+    expect(retire).toHaveBeenCalledWith("terminal-refresh-failure", "invalid_grant");
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("does not retire on transient refresh failures", async () => {
+    for (const failure of [
+      new Error("OpenAI Codex token refresh error: fetch failed"),
+      new Error("OpenAI Codex token refresh failed (500): {"),
+      new Error("request timed out"),
+    ]) {
+      const retire = vi.fn(async () => {});
+      await expect(
+        resolveModelAuth(expired, CHATGPT_OAUTH_PROVIDER, {
+          now: 10_000,
+          retire,
+          oauth: failingRefresh(failure),
+        }),
+      ).rejects.toBe(failure);
+      expect(retire).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rethrows the refresh error when retirement itself fails", async () => {
+    const failure = new Error('refresh failed (400): {"error":"refresh_token_expired"}');
+    const retireFailure = new Error("database gone");
+    const retire = vi.fn(async () => {
+      throw retireFailure;
+    });
+
+    await expect(
+      resolveModelAuth(expired, CHATGPT_OAUTH_PROVIDER, {
+        now: 10_000,
+        retire,
+        oauth: failingRefresh(failure),
+      }),
+    ).rejects.toBe(failure);
+    expect(retire).toHaveBeenCalledWith("terminal-refresh-failure", "refresh_token_expired");
+  });
+
+  it("rethrows the refresh error when no retire hook is configured", async () => {
+    const failure = new Error('refresh failed (400): {"error":"invalid_grant"}');
+    await expect(
+      resolveModelAuth(expired, CHATGPT_OAUTH_PROVIDER, {
+        now: 10_000,
+        oauth: failingRefresh(failure),
+      }),
+    ).rejects.toBe(failure);
+  });
+
+  it("does not refresh or retire while the stored token is still valid", async () => {
+    const refresh = vi.fn();
+    const retire = vi.fn(async () => {});
+    const resolved = await resolveModelAuth(
+      JSON.stringify(oauthCred({ access: "live", expires: 1_000_000 })),
+      CHATGPT_OAUTH_PROVIDER,
+      {
+        now: 10_000,
+        retire,
+        oauth: {
+          refresh,
+          toAuth: async (current: OAuthCredential) => ({ apiKey: current.access }),
+        },
+      },
+    );
+    expect(resolved.apiKey).toBe("live");
+    expect(refresh).not.toHaveBeenCalled();
+    expect(retire).not.toHaveBeenCalled();
   });
 });
 
@@ -841,5 +988,61 @@ describe("PiOAuthLogins", () => {
     });
     expect(deviceCodeResult(started).userCode).toBe("XAI-CODE");
     logins.abortAll();
+  });
+
+  describe("session timers", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("sweeps a session stuck finalizing when its expiry elapses", async () => {
+      vi.useFakeTimers();
+      const logins = new PiOAuthLogins(async (_provider, _type, interaction) => {
+        interaction.notify({
+          type: "device_code",
+          userCode: "SWEEP",
+          verificationUri: "https://auth.openai.com/codex/device",
+          expiresInSeconds: 60,
+        });
+        return oauthCred();
+      });
+      const actor = { userId: "u", spaceId: "w" };
+      const started = await logins.begin({ ...actor, provider: CHATGPT_OAUTH_PROVIDER });
+      await flushMicrotasks();
+
+      let releasePersist!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releasePersist = resolve;
+      });
+      const finishing = logins.finish(started.loginId, actor, async () => {
+        await gate;
+        return "saved";
+      });
+      await Promise.resolve();
+
+      // A hung persist must not pin the session: the expiry timer still fires,
+      // so the login is gone instead of reporting "pending" forever.
+      vi.advanceTimersByTime(61_000);
+      expect((await logins.complete(started.loginId, actor)).status).toBe("error");
+
+      // The in-flight persist still completes on its detached signal.
+      releasePersist();
+      await expect(finishing).resolves.toEqual({ status: "connected", value: "saved" });
+    });
+
+    it("clears armed expiry timers when abortAll runs", async () => {
+      vi.useFakeTimers();
+      const control = createControlledOAuthLogins();
+      await control.logins.begin({
+        userId: "u",
+        spaceId: "w",
+        provider: CHATGPT_OAUTH_PROVIDER,
+      });
+      const armed = vi.getTimerCount();
+      expect(armed).toBeGreaterThan(0);
+
+      control.logins.abortAll();
+      expect(vi.getTimerCount()).toBe(armed - 1);
+    });
   });
 });

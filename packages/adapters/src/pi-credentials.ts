@@ -5,7 +5,9 @@ import type {
   CredentialStore,
   OAuthCredential,
 } from "@earendil-works/pi-ai";
-import type { AgentModelOAuthCredential } from "@rakazo/adapter-kit";
+import type { AgentModelOAuthCredential, ModelCredentialRetireReason } from "@rakazo/adapter-kit";
+import { getLogger } from "@rakazo/logging";
+import { terminalOAuthRefreshErrorMarker } from "./pi-oauth.js";
 
 export function toOAuthCredential(value: AgentModelOAuthCredential): OAuthCredential {
   return { ...value, type: "oauth" };
@@ -24,6 +26,10 @@ export class PiRuntimeCredentialStore implements CredentialStore {
     private readonly providerId: string,
     credential?: Credential,
     private readonly persistOAuth?: (credential: OAuthCredential) => Promise<void>,
+    private readonly retireOAuth?: (
+      reason: ModelCredentialRetireReason,
+      detail?: string,
+    ) => Promise<void>,
   ) {
     this.credential = credential;
   }
@@ -48,7 +54,20 @@ export class PiRuntimeCredentialStore implements CredentialStore {
     const operation = previous.then(async () => {
       options?.signal?.throwIfAborted();
       const current = this.credential;
-      const next = await fn(current);
+      let next: Credential | undefined;
+      try {
+        next = await fn(current);
+      } catch (error) {
+        const marker = terminalOAuthRefreshErrorMarker(error);
+        if (marker && this.retireOAuth) {
+          // The in-flight request is already failing; retire the dead credential
+          // in the background so the next run sees the provider disconnected.
+          void this.retireOAuth("terminal-refresh-failure", marker).catch((retireError) =>
+            getLogger().error("model credential retirement failed", retireError),
+          );
+        }
+        throw error;
+      }
       options?.signal?.throwIfAborted();
       if (next !== undefined) {
         if (next.type === "oauth" && next !== current) {

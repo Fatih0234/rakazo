@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentModelOAuthCredential, AgentRuntime } from "@rakazo/adapter-kit";
+import type { AgentRunModel, AgentRuntime } from "@rakazo/adapter-kit";
 import {
   type EncryptedSecretStore,
   formatCurrentTimeInstruction,
@@ -7,7 +7,12 @@ import {
   serializeModelSecret,
   toOAuthCredential,
 } from "@rakazo/adapters";
-import { findDefaultModelCredential, findModelCredential, type PrismaClient } from "@rakazo/db";
+import {
+  findDefaultModelCredential,
+  findModelCredential,
+  type PrismaClient,
+  retireModelCredential,
+} from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 
 const MAX_RULES_CHARS = 4_000;
@@ -185,10 +190,7 @@ export class ModelTeamChatEngagementJudge implements TeamChatEngagementJudge {
       id: string;
       apiKey?: string;
       baseUrl?: string;
-      oauth?: {
-        credential: AgentModelOAuthCredential;
-        persist?: (credential: AgentModelOAuthCredential) => Promise<void>;
-      };
+      oauth?: AgentRunModel["oauth"];
     };
   } | null> {
     const settings = await this.deps.prisma.deploymentSettings.findUnique({
@@ -246,8 +248,14 @@ export class ModelTeamChatEngagementJudge implements TeamChatEngagementJudge {
         data: { ciphertext: stored.ciphertext },
       });
     };
+    const retire = () =>
+      retireModelCredential(this.deps.prisma, {
+        userId: bot.userId,
+        credentialId: credential.id,
+        secretId: credential.secretId,
+      });
     const plaintext = this.deps.secrets.load(secret.ciphertext, secret.id);
-    const auth = await resolveModelAuth(plaintext, provider, { persist });
+    const auth = await resolveModelAuth(plaintext, provider, { persist, retire });
     const parsed = auth.secret;
     const limit = parsed.maxTokens !== undefined ? { maxTokens: parsed.maxTokens } : {};
     if (parsed.kind === "oauth") {
@@ -267,6 +275,7 @@ export class ModelTeamChatEngagementJudge implements TeamChatEngagementJudge {
                 }),
               );
             },
+            retire,
           },
         },
       };

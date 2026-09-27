@@ -1,6 +1,6 @@
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PiRuntimeCredentialStore } from "./pi-credentials.js";
 
 function credential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
@@ -42,5 +42,61 @@ describe("PiRuntimeCredentialStore", () => {
 
     expect(persisted?.access).toBe("new-access");
     expect(await store.list()).toEqual([{ providerId: "openai-codex", type: "oauth" }]);
+  });
+
+  it("schedules retirement once when a mid-run refresh is terminally rejected", async () => {
+    const retire = vi.fn(async () => {});
+    const store = new PiRuntimeCredentialStore("openai-codex", credential(), undefined, retire);
+    const failure = new Error("OAuth refresh failed for openai-codex", {
+      cause: new Error('OpenAI Codex token refresh failed (400): {"error":"invalid_grant"}'),
+    });
+
+    await expect(
+      store.modify("openai-codex", async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+
+    expect(retire).toHaveBeenCalledTimes(1);
+    expect(retire).toHaveBeenCalledWith("terminal-refresh-failure", "invalid_grant");
+    // The failed refresh must not clear the in-memory credential itself.
+    expect(await store.list()).toEqual([{ providerId: "openai-codex", type: "oauth" }]);
+  });
+
+  it("does not retire on transient mid-run refresh failures", async () => {
+    const retire = vi.fn(async () => {});
+    const store = new PiRuntimeCredentialStore("openai-codex", credential(), undefined, retire);
+
+    for (const failure of [
+      new Error("OAuth refresh failed for openai-codex", {
+        cause: new Error("OpenAI Codex token refresh failed (500): upstream"),
+      }),
+      new Error("OpenAI Codex token refresh error: socket hang up"),
+    ]) {
+      await expect(
+        store.modify("openai-codex", async () => {
+          throw failure;
+        }),
+      ).rejects.toBe(failure);
+    }
+    expect(retire).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the refresh error when scheduled retirement fails", async () => {
+    const retire = vi.fn(async () => {
+      throw new Error("database gone");
+    });
+    const store = new PiRuntimeCredentialStore("openai-codex", credential(), undefined, retire);
+    const failure = new Error('refresh failed (400): {"error":"refresh_token_reused"}');
+
+    await expect(
+      store.modify("openai-codex", async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    expect(retire).toHaveBeenCalledWith("terminal-refresh-failure", "refresh_token_reused");
+    // Let the detached retirement settle; its failure is logged, not rethrown.
+    await Promise.resolve();
+    await Promise.resolve();
   });
 });

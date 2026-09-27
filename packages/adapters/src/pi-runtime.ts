@@ -563,6 +563,7 @@ export function modelsForRequest(
             provider,
             toOAuthCredential(oauth.credential),
             persist ? (next) => persist(next) : undefined,
+            oauth.retire,
           ),
         }),
       ),

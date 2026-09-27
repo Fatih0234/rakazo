@@ -15,6 +15,7 @@ import type {
   JobPublisher,
   ManagedConnectorProvider,
   MemoryStore,
+  ModelCredentialRetireReason,
   NotificationMessage,
   NotificationProvider,
   SandboxProvider,
@@ -97,6 +98,7 @@ import {
   type Prisma,
   type PrismaClient,
   parseComputerMode,
+  retireModelCredential,
   SpaceLimitError,
   type ThreadEvents,
 } from "@rakazo/db";
@@ -894,7 +896,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
       maxImagesPerPrompt: resolved.maxImagesPerPrompt,
       thinkingLevel: resolved.thinkingLevel ?? null,
       oauth: resolved.oauth
-        ? { credential: resolved.oauth, persist: resolved.persistOAuth }
+        ? {
+            credential: resolved.oauth,
+            persist: resolved.persistOAuth,
+            retire: resolved.retireOAuth,
+          }
         : undefined,
     };
   };
@@ -959,7 +965,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
         maxImagesPerPrompt: resolved.maxImagesPerPrompt,
         thinkingLevel: thinkingLevel ?? resolved.thinkingLevel ?? null,
         oauth: resolved.oauth
-          ? { credential: resolved.oauth, persist: resolved.persistOAuth }
+          ? {
+              credential: resolved.oauth,
+              persist: resolved.persistOAuth,
+              retire: resolved.retireOAuth,
+            }
           : undefined,
       };
     },
@@ -2106,7 +2116,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
                       baseUrl: judgeKey.baseUrl,
                       reasoning: judgeKey.reasoning,
                       oauth: judgeKey.oauth
-                        ? { credential: judgeKey.oauth, persist: judgeKey.persistOAuth }
+                        ? {
+                            credential: judgeKey.oauth,
+                            persist: judgeKey.persistOAuth,
+                            retire: judgeKey.retireOAuth,
+                          }
                         : undefined,
                       runId,
                       spaceId: run.spaceId,
@@ -3801,7 +3815,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 maxImagesPerPrompt: resolved.maxImagesPerPrompt,
                 thinkingLevel: thinkingLevel ?? resolved.thinkingLevel ?? null,
                 oauth: resolved.oauth
-                  ? { credential: resolved.oauth, persist: resolved.persistOAuth }
+                  ? {
+                      credential: resolved.oauth,
+                      persist: resolved.persistOAuth,
+                      retire: resolved.retireOAuth,
+                    }
                   : undefined,
               },
               resumeFromCheckpoint: takeoverResume?.checkpoint,
@@ -5206,6 +5224,7 @@ async function resolveModelKey(
   userId: string,
   spaceId: string,
   credential: {
+    id: string;
     secretId: string;
     provider: string;
     defaultModel?: string | null;
@@ -5225,6 +5244,7 @@ async function resolveModelKey(
   maxImagesPerPrompt?: number;
   oauth?: AgentModelOAuthCredential;
   persistOAuth?: (credential: AgentModelOAuthCredential) => Promise<void>;
+  retireOAuth?: (reason: ModelCredentialRetireReason, detail?: string) => Promise<void>;
   redact: string[];
 }> {
   if (credential) {
@@ -5254,8 +5274,18 @@ async function resolveModelKey(
           data: { ciphertext: stored.ciphertext },
         });
       };
+      // Retire exactly this credential. The secretId guard inside
+      // retireModelCredential keeps a reconnect that already swapped the
+      // secret from being deleted by a stale failure.
+      const retire = () =>
+        retireModelCredential(deps.prisma, {
+          userId,
+          credentialId: credential.id,
+          secretId: credential.secretId,
+        });
       const resolved = await resolveModelAuth(plaintext, credential.provider, {
         persist,
+        retire,
       });
       const oauth = resolved.secret.kind === "oauth" ? resolved.secret.credential : undefined;
       const baseUrl =
@@ -5316,6 +5346,7 @@ async function resolveModelKey(
               });
             }
           : undefined,
+        retireOAuth: retire,
         redact: [...secretValuesToRedact(resolved.secret), resolved.apiKey].filter(
           (value): value is string => Boolean(value),
         ),
