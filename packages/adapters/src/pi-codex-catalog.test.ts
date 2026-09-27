@@ -329,7 +329,7 @@ describe("CodexCatalogCache", () => {
 
     const stale = await cache.read("user-1", account());
     expect(stale?.map((model) => model.slug)).toEqual([SPARK]);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
 
     resolveSecond?.(
       okResponse(
@@ -438,7 +438,7 @@ describe("CodexCatalogCache", () => {
 
     now += 30_000;
     expect(await cache.read("user-1", account())).toBeUndefined();
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
   });
 
   it("keeps serving the last good catalog when a refresh fails", async () => {
@@ -569,11 +569,58 @@ describe("CodexCatalogCache", () => {
     expect(await cache.read("user-1", account())).toBeUndefined();
   });
 
-  it("records a failure when no access token resolves", async () => {
+  it("does not negative-cache a read that never got a bearer", async () => {
     const fetchImpl = listFetch();
-    const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => 0, waitMs: 50 });
+    const cache = new CodexCatalogCache({
+      fetch: fetchImpl,
+      now: () => 0,
+      waitMs: 50,
+      failureTtlMs: 30_000,
+    });
+
+    // No usable bearer: no fetch, and — unlike a real failure — no failure
+    // entry, so the next read retries instead of waiting out the TTL.
     expect(await cache.read("user-1", account(null))).toBeUndefined();
     expect(fetchImpl).not.toHaveBeenCalled();
+
+    // The credential's detached refresh landed: the very next read, well inside
+    // what would have been the failure TTL, must reach the network.
+    expect((await cache.read("user-1", account()))?.[0]?.slug).toBe(SPARK);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps serving the last good catalog while the bearer is expired, then recovers", async () => {
+    let now = 1_000_000;
+    const fetchImpl = listFetch();
+    const cache = new CodexCatalogCache({
+      fetch: fetchImpl,
+      now: () => now,
+      waitMs: 50,
+      failureTtlMs: 30_000,
+    });
+    let bearer: string | null = ACCESS_TOKEN;
+    const liveAccount = { accountId: ACCOUNT_ID, accessToken: async () => bearer };
+
+    expect((await cache.read("user-1", liveAccount))?.[0]?.slug).toBe(SPARK);
+
+    // Bearer expires while the entry is stale: the last good list still serves
+    // and no fetch is attempted — and nothing is cached over the stale entry,
+    // so every read re-checks the credential.
+    now += 16 * 60_000;
+    bearer = null;
+    expect((await cache.read("user-1", liveAccount))?.[0]?.slug).toBe(SPARK);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+
+    // Refresh landed: the next read revalidates for real, not after the
+    // failure TTL, and the fresh entry then serves without refetching.
+    bearer = ACCESS_TOKEN;
+    await vi.waitFor(async () => {
+      await cache.read("user-1", liveAccount);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+    now += 60_000;
+    expect((await cache.read("user-1", liveAccount))?.[0]?.slug).toBe(SPARK);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -659,6 +706,28 @@ describe("codexLiveListsModel", () => {
     ).resolves.toBe(false);
     expect(onExpiredToken).toHaveBeenCalledTimes(1);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("recovers on the next read once the detached refresh replaces the bearer", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      okResponse(catalogPayload([{ slug: SPARK, visibility: "list", supported_in_api: true }])),
+    );
+    // failureTtlMs dwarfs the test: a cached failure would hide the model.
+    const cache = new CodexCatalogCache({ fetch: fetchImpl, now: () => Date.now(), waitMs: 50 });
+    const onExpiredToken = vi.fn();
+
+    await expect(
+      codexLiveListsModel(cache, "user-1", oauthSecret(ACCESS_TOKEN, -1_000), SPARK, {
+        onExpiredToken,
+      }),
+    ).resolves.toBe(false);
+    expect(onExpiredToken).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    // The expired-bearer read left no failure entry, so a refreshed credential
+    // reaches the network on the very next check.
+    await expect(codexLiveListsModel(cache, "user-1", oauthSecret(), SPARK)).resolves.toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("does not fire onExpiredToken while the bearer is valid", async () => {

@@ -239,6 +239,15 @@ type CodexCatalogCacheEntry =
   | { ok: false; expiresAt: number };
 
 /**
+ * A refresh that never reached the network — no usable bearer, expired token —
+ * is not a fetch failure: it must not negative-cache, or a credential that gets
+ * refreshed a moment later would stay hidden behind the failure TTL.
+ */
+type CodexCatalogFetch =
+  | { attempted: true; models: CodexCatalogModel[] | undefined }
+  | { attempted: false };
+
+/**
  * In-memory per (userId, accountId) catalog with a single in-flight refresh per key.
  * Reads never block past `waitMs`: a fresh hit returns immediately, a stale hit serves
  * the last good list while a background refresh runs, and a cold miss waits a short
@@ -313,11 +322,17 @@ export class CodexCatalogCache implements CodexLiveCatalog {
     // forever, so the tracked promise has its own hard deadline.
     const work = Promise.race([
       this.fetchModels(account),
-      sleep(this.deadlineMs).then(() => undefined),
+      sleep(this.deadlineMs).then(
+        (): CodexCatalogFetch => ({ attempted: true, models: undefined }),
+      ),
     ]);
-    const tracked = work.then((models) => {
+    const tracked = work.then((outcome) => {
       if (this.inflight.get(key) === tracked) this.inflight.delete(key);
-      this.store(key, this.nextEntry(key, models));
+      // Only an attempted fetch records a result. A missing or expired bearer
+      // stores nothing, so the next read retries the credential instead of
+      // serving a failure entry while a detached refresh is still landing.
+      if (outcome.attempted) this.store(key, this.nextEntry(key, outcome.models));
+      const models = outcome.attempted ? outcome.models : undefined;
       return models && models.length > 0 ? models : undefined;
     });
     this.inflight.set(key, tracked);
@@ -338,16 +353,19 @@ export class CodexCatalogCache implements CodexLiveCatalog {
     return { ok: false, expiresAt: this.now() + this.failureTtlMs };
   }
 
-  private async fetchModels(
-    account: CodexCatalogAccount,
-  ): Promise<CodexCatalogModel[] | undefined> {
+  private async fetchModels(account: CodexCatalogAccount): Promise<CodexCatalogFetch> {
+    let accessToken: string | null;
     try {
-      const accessToken = await account.accessToken();
-      if (!accessToken) return undefined;
-      const result = await fetchCodexCatalog(accessToken, account.accountId, this.fetchImpl);
-      return result.status === "ok" ? result.models : undefined;
+      accessToken = await account.accessToken();
     } catch {
-      return undefined;
+      return { attempted: false };
+    }
+    if (!accessToken) return { attempted: false };
+    try {
+      const result = await fetchCodexCatalog(accessToken, account.accountId, this.fetchImpl);
+      return { attempted: true, models: result.status === "ok" ? result.models : undefined };
+    } catch {
+      return { attempted: true, models: undefined };
     }
   }
 

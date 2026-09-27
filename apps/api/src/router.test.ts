@@ -1821,9 +1821,17 @@ describe("codex live catalog", () => {
     expect(txCall).toBeDefined();
     // The unbounded-wait read happens before the transaction opens; inside it
     // the catalog is only consulted from settled cache state.
+    const txOpenedAt = transaction.mock.invocationCallOrder[0]!;
     expect(read.mock.invocationCallOrder[read.mock.calls.indexOf(warmCall!)]!).toBeLessThan(
-      transaction.mock.invocationCallOrder[0]!,
+      txOpenedAt,
     );
+    // Every catalog read issued after the transaction opened is zero-wait — a
+    // cold cache can never stall the serializable transaction on the network.
+    const inTxCalls = read.mock.calls.filter(
+      (_, index) => read.mock.invocationCallOrder[index]! > txOpenedAt,
+    );
+    expect(inTxCalls.length).toBeGreaterThan(0);
+    for (const call of inTxCalls) expect(call[2]?.waitMs).toBe(0);
     expect(upsert).toHaveBeenCalled();
   });
 });
