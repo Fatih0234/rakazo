@@ -1,7 +1,12 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { DEFAULT_MODEL_MAX_TOKENS } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
-import { conversationSessionId, isOpenCodeProvider, reliableStreamOptions } from "./pi-runtime.js";
+import {
+  conversationSessionId,
+  isOpenCodeProvider,
+  reliableStreamOptions,
+  resolveRuntimeModel,
+} from "./pi-runtime.js";
 import { MODEL_STREAM_MAX_RETRIES, MODEL_STREAM_TIMEOUT_MS } from "./pi-runtime-limits.js";
 
 const streamDefaults = {
@@ -192,6 +197,54 @@ describe("Pi runtime transport", () => {
     expect(reliableStreamOptions(codexModel, options, undefined, token).headers).toEqual({
       "x-openai-internal-codex-residency": "manual",
     });
+  });
+
+  it("keeps an explicitly-passed residency header under a different casing", () => {
+    const token = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
+    });
+    const options = {
+      transport: "auto" as const,
+      headers: { "X-OPENAI-INTERNAL-CODEX-RESIDENCY": "manual" },
+    };
+
+    expect(reliableStreamOptions(codexModel, options, undefined, token).headers).toEqual({
+      "X-OPENAI-INTERNAL-CODEX-RESIDENCY": "manual",
+    });
+  });
+
+  it("derives residency from the live credential after a mid-run OAuth refresh", async () => {
+    const initial = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
+    });
+    const refreshed = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "eu-west" },
+    });
+    const resolved = resolveRuntimeModel({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+      oauth: {
+        credential: { type: "oauth", access: initial, refresh: "refresh-1", expires: 0 },
+      },
+    });
+    // The getter the stream functions hand to reliableStreamOptions.
+    const accessToken = () => resolved.credentials?.accessToken ?? resolved.apiKey;
+    const residencyOf = () =>
+      reliableStreamOptions(codexModel, undefined, undefined, accessToken).headers?.[
+        "x-openai-internal-codex-residency"
+      ];
+
+    expect(residencyOf()).toBe("us-east");
+
+    // Pi swaps the stored credential when the OAuth token refreshes mid-run.
+    await resolved.credentials?.modify("openai-codex", async () => ({
+      type: "oauth",
+      access: refreshed,
+      refresh: "refresh-2",
+      expires: Date.now() + 3_600_000,
+    }));
+
+    expect(residencyOf()).toBe("eu-west");
   });
 
   it("never attaches the residency header for non-Codex providers", () => {

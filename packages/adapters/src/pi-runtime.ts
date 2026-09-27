@@ -14,6 +14,7 @@ import {
   type Model,
   type Models,
   type ModelThinkingLevel,
+  type ProviderHeaders,
   type SimpleStreamOptions,
   Type,
 } from "@earendil-works/pi-ai";
@@ -273,7 +274,7 @@ export class PiAgentRuntime implements AgentRuntime {
               ctx,
               options,
               request.model.maxTokens,
-              request.model.oauth?.credential.access ?? apiKey,
+              () => selectedModel.credentials?.accessToken ?? apiKey,
             ),
           getApiKey: async () => apiKey,
           transformContext: async (messages) =>
@@ -531,6 +532,8 @@ export function resolveRuntimeModel(modelConfig: AgentRunRequest["model"]): {
   models: Models;
   model: Model<Api> | undefined;
   apiKey: string | undefined;
+  /** Live credential store; OAuth refreshes swap the credential mid-run. */
+  credentials: PiRuntimeCredentialStore | undefined;
 } {
   const provider = modelConfig.provider === "scripted" ? "openrouter" : modelConfig.provider;
   const envDefaultModel = process.env.PI_DEFAULT_MODEL?.trim();
@@ -538,7 +541,8 @@ export function resolveRuntimeModel(modelConfig: AgentRunRequest["model"]): {
   const requestedId =
     modelConfig.id === "scripted" ? envDefaultModel || DEFAULT_OPENROUTER_MODEL_ID : modelConfig.id;
   const modelId = usableModelId(requestedId) ?? "";
-  const models = modelsForRequest({ model: modelConfig }, provider);
+  const credentials = credentialStoreForRequest({ model: modelConfig }, provider);
+  const models = modelsForRequest({ model: modelConfig }, provider, credentials);
   let model = models.getModel(provider, modelId);
   if (!model && provider !== "openrouter" && provider !== OPENAI_COMPATIBLE_PROVIDER_ID) {
     model = models.getModel("openrouter", modelId);
@@ -559,26 +563,32 @@ export function resolveRuntimeModel(modelConfig: AgentRunRequest["model"]): {
         // another provider would ship our key to a vendor it was not issued for.
         (modelConfig.apiKey ??
         (provider === "openrouter" ? process.env.OPENROUTER_API_KEY : undefined));
-  return { provider, modelId, models, model, apiKey };
+  return { provider, modelId, models, model, apiKey, credentials };
+}
+
+function credentialStoreForRequest(
+  request: Pick<AgentRunRequest, "model">,
+  provider: string,
+): PiRuntimeCredentialStore | undefined {
+  const oauth = request.model.oauth;
+  if (!oauth) return undefined;
+  const persist = oauth.persist;
+  return new PiRuntimeCredentialStore(
+    provider,
+    toOAuthCredential(oauth.credential),
+    persist ? (next) => persist(next) : undefined,
+  );
 }
 
 export function modelsForRequest(
   request: Pick<AgentRunRequest, "model">,
   provider: string,
+  credentials?: PiRuntimeCredentialStore,
 ): Models {
-  const oauth = request.model.oauth;
-  if (oauth) {
-    const persist = oauth.persist;
+  const store = credentials ?? credentialStoreForRequest(request, provider);
+  if (store) {
     return registerOpenAiCompatibleCatalog(
-      registerLocalProvider(
-        builtinModels({
-          credentials: new PiRuntimeCredentialStore(
-            provider,
-            toOAuthCredential(oauth.credential),
-            persist ? (next) => persist(next) : undefined,
-          ),
-        }),
-      ),
+      registerLocalProvider(builtinModels({ credentials: store })),
     );
   }
   if (
@@ -1095,7 +1105,7 @@ async function executeSubagent(host: ToolHost, executionId: string, args: Record
         ctx,
         options,
         requestModel.maxTokens,
-        requestModel.oauth?.credential.access ?? selectedModel.apiKey,
+        () => selectedModel.credentials?.accessToken ?? selectedModel.apiKey,
       ),
     getApiKey: async () => selectedModel.apiKey,
     transformContext: async (messages) =>
@@ -1931,7 +1941,7 @@ export function reliableModelStream(
   context: Context,
   options: SimpleStreamOptions | undefined,
   configuredMaxTokens: number | undefined,
-  accessToken?: string,
+  accessToken?: string | (() => string | undefined),
 ): AssistantMessageEventStream {
   const watchdog = isCodexModel(model) ? codexStreamIdleWatchdog(options?.signal) : undefined;
   try {
@@ -1952,11 +1962,18 @@ export function reliableModelStream(
   }
 }
 
+const CODEX_RESIDENCY_HEADER = "x-openai-internal-codex-residency";
+
+/** Header names are case-insensitive: any caller-set casing counts as explicit. */
+function hasHeader(headers: ProviderHeaders | undefined, name: string): boolean {
+  return Object.keys(headers ?? {}).some((key) => key.toLowerCase() === name);
+}
+
 export function reliableStreamOptions(
   model: Pick<Model<Api>, "api" | "provider" | "maxTokens" | "reasoning">,
   options?: SimpleStreamOptions,
   configuredMaxTokens?: number,
-  accessToken?: string,
+  accessToken?: string | (() => string | undefined),
 ): SimpleStreamOptions {
   let next: SimpleStreamOptions = {
     ...options,
@@ -1976,13 +1993,13 @@ export function reliableStreamOptions(
     // bounded network retries and no long-lived connection between tool turns.
     next = { ...next, transport: "sse" };
     // Forward the account's compute residency so the Codex backend routes to the
-    // right region. An explicit caller header wins.
-    const residency = codexComputeResidency(accessToken);
-    if (residency) {
-      next = {
-        ...next,
-        headers: { "x-openai-internal-codex-residency": residency, ...next.headers },
-      };
+    // right region. A getter reads the credential store live so a mid-run OAuth
+    // refresh is seen; an explicit caller header wins under any casing.
+    const residency = codexComputeResidency(
+      typeof accessToken === "function" ? accessToken() : accessToken,
+    );
+    if (residency && !hasHeader(next.headers, CODEX_RESIDENCY_HEADER)) {
+      next = { ...next, headers: { ...next.headers, [CODEX_RESIDENCY_HEADER]: residency } };
     }
   }
 
