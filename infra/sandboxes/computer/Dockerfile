@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim AS capture-builder
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS capture-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libx11-dev \
@@ -13,7 +13,10 @@ COPY xcapture.c .
 RUN cc -O3 -fPIC -shared -Wall -Wextra -Werror -o librakazo-xcapture.so xcapture.c \
     -lX11 -lXext -lXdamage -lXfixes -lXtst -lpng
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+# Dev tools let bots clone repos and fetch artifacts; containers run uid 1000
+# with no privilege escalation, so nothing can be installed at runtime.
+# Compilers stay in the builder stage; heavier toolchains are a separate call.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     x11vnc \
@@ -34,6 +37,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
     dbus-x11 \
     xdg-utils \
+    curl \
+    git \
+    jq \
+    openssh-client \
+    unzip \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --gid 1000 rakazo \
   && useradd --uid 1000 --gid rakazo --create-home --shell /bin/bash rakazo \
