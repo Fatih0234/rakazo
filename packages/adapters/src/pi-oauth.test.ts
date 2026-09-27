@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CHATGPT_OAUTH_PROVIDER,
   COPILOT_OAUTH_PROVIDER,
+  OAUTH_ACCOUNT_CHANGED_ERROR,
   type PiOAuthBegin,
   PiOAuthLogins,
   parseModelSecret,
@@ -21,6 +22,14 @@ const oauthCred = (overrides: Partial<OAuthCredential> = {}): OAuthCredential =>
   expires: Date.now() + 60_000,
   accountId: "acct",
   ...overrides,
+});
+
+// Unsigned fake JWT: base64url JSON payload, no real token material.
+const fakeJwt = (payload: unknown) =>
+  `fake.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.fake`;
+
+const chatGptAccountClaim = (accountId: string) => ({
+  "https://api.openai.com/auth": { chatgpt_account_id: accountId },
 });
 
 async function flushMicrotasks() {
@@ -425,6 +434,156 @@ describe("resolveModelAuth retirement", () => {
     expect(refresh).not.toHaveBeenCalled();
     expect(retire).not.toHaveBeenCalled();
   });
+});
+
+describe("resolveModelAuth account-change guard", () => {
+  const expiredAccount = (accountId: string | undefined, access = "old") =>
+    JSON.stringify(oauthCred({ access, expires: 1, accountId }));
+
+  const succeedingRefresh = (next: OAuthCredential) => ({
+    refresh: async (): Promise<OAuthCredential> => next,
+    toAuth: async (current: OAuthCredential) => ({ apiKey: current.access }),
+  });
+
+  it("persists a refresh that returns the same account", async () => {
+    const retire = vi.fn(async () => {});
+    const persist = vi.fn(async () => {});
+    const resolved = await resolveModelAuth(expiredAccount("acct-a"), CHATGPT_OAUTH_PROVIDER, {
+      now: 10_000,
+      persist,
+      retire,
+      oauth: succeedingRefresh(oauthCred({ access: "new", expires: 99_999, accountId: "acct-a" })),
+    });
+    expect(resolved.apiKey).toBe("new");
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(retire).not.toHaveBeenCalled();
+  });
+
+  it("retires the credential and fails when the refresh returns a different account", async () => {
+    const retire = vi.fn(async () => {});
+    const persist = vi.fn(async () => {});
+    const toAuth = vi.fn(
+      async (current: OAuthCredential): Promise<{ apiKey: string }> => ({
+        apiKey: current.access,
+      }),
+    );
+
+    await expect(
+      resolveModelAuth(expiredAccount("acct-a"), CHATGPT_OAUTH_PROVIDER, {
+        now: 10_000,
+        persist,
+        retire,
+        oauth: {
+          refresh: async () => oauthCred({ access: "new", expires: 99_999, accountId: "acct-b" }),
+          toAuth,
+        },
+      }),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+
+    expect(retire).toHaveBeenCalledTimes(1);
+    expect(retire).toHaveBeenCalledWith(
+      "account-changed",
+      "stored account acct-a, refreshed account acct-b",
+    );
+    // The account-B token is never persisted or used.
+    expect(persist).not.toHaveBeenCalled();
+    expect(toAuth).not.toHaveBeenCalled();
+  });
+
+  it("detects the account change from the refreshed token's JWT claim", async () => {
+    const retire = vi.fn(async () => {});
+    // A refresh that does not copy `accountId` onto the credential is still
+    // caught when the new access token carries the ChatGPT account claim.
+    const refresh = async (): Promise<OAuthCredential> =>
+      oauthCred({
+        access: fakeJwt(chatGptAccountClaim("acct-b")),
+        expires: 99_999,
+        accountId: undefined,
+      });
+
+    await expect(
+      resolveModelAuth(expiredAccount("acct-a"), CHATGPT_OAUTH_PROVIDER, {
+        now: 10_000,
+        retire,
+        oauth: {
+          refresh,
+          toAuth: async (current: OAuthCredential) => ({ apiKey: current.access }),
+        },
+      }),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    expect(retire).toHaveBeenCalledWith(
+      "account-changed",
+      "stored account acct-a, refreshed account acct-b",
+    );
+  });
+
+  it("compares against a stored account id carried only by the stored access JWT", async () => {
+    const retire = vi.fn(async () => {});
+    await expect(
+      resolveModelAuth(
+        expiredAccount(undefined, fakeJwt(chatGptAccountClaim("acct-a"))),
+        CHATGPT_OAUTH_PROVIDER,
+        {
+          now: 10_000,
+          retire,
+          oauth: succeedingRefresh(
+            oauthCred({ access: "new", expires: 99_999, accountId: "acct-b" }),
+          ),
+        },
+      ),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    expect(retire).toHaveBeenCalledWith(
+      "account-changed",
+      "stored account acct-a, refreshed account acct-b",
+    );
+  });
+
+  it("still fails with the readable error when account-change retirement fails", async () => {
+    const retire = vi.fn(async () => {
+      throw new Error("database gone");
+    });
+
+    await expect(
+      resolveModelAuth(expiredAccount("acct-a"), CHATGPT_OAUTH_PROVIDER, {
+        now: 10_000,
+        retire,
+        oauth: succeedingRefresh(
+          oauthCred({ access: "new", expires: 99_999, accountId: "acct-b" }),
+        ),
+      }),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    expect(retire).toHaveBeenCalledWith(
+      "account-changed",
+      "stored account acct-a, refreshed account acct-b",
+    );
+  });
+
+  it.each([
+    ["stored side", undefined, "acct-b"],
+    ["refreshed side", "acct-a", undefined],
+    ["both sides", undefined, undefined],
+  ])(
+    "tolerates a missing account id on the %s",
+    async (_case, storedAccountId, refreshedAccountId) => {
+      const retire = vi.fn(async () => {});
+      const persist = vi.fn(async () => {});
+      const resolved = await resolveModelAuth(
+        expiredAccount(storedAccountId),
+        CHATGPT_OAUTH_PROVIDER,
+        {
+          now: 10_000,
+          persist,
+          retire,
+          oauth: succeedingRefresh(
+            oauthCred({ access: "new", expires: 99_999, accountId: refreshedAccountId }),
+          ),
+        },
+      );
+      expect(resolved.apiKey).toBe("new");
+      expect(persist).toHaveBeenCalledTimes(1);
+      expect(retire).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("PiOAuthLogins", () => {

@@ -11,7 +11,11 @@ import type {
   ModelCredentialRetireReason,
 } from "@rakazo/adapter-kit";
 import { getLogger } from "@rakazo/logging";
-import { terminalOAuthRefreshErrorMarker } from "./pi-oauth.js";
+import {
+  OAUTH_ACCOUNT_CHANGED_ERROR,
+  oauthCredentialAccountId,
+  terminalOAuthRefreshErrorMarker,
+} from "./pi-oauth.js";
 
 export function toOAuthCredential(value: AgentModelOAuthCredential): OAuthCredential {
   return { ...value, type: "oauth" };
@@ -84,6 +88,24 @@ export class PiRuntimeCredentialStore implements CredentialStore {
       options?.signal?.throwIfAborted();
       if (next !== undefined) {
         if (next.type === "oauth" && next !== current) {
+          const storedAccountId =
+            current?.type === "oauth" ? oauthCredentialAccountId(current) : undefined;
+          const refreshedAccountId = oauthCredentialAccountId(next);
+          if (storedAccountId && refreshedAccountId && storedAccountId !== refreshedAccountId) {
+            // The refresh succeeded but belongs to a different account: retire
+            // the stored credential in the background so the next run sees the
+            // provider disconnected, and fail this run instead of persisting
+            // or using the new token.
+            if (this.retireOAuth) {
+              void this.retireOAuth(
+                "account-changed",
+                `stored account ${storedAccountId}, refreshed account ${refreshedAccountId}`,
+              ).catch((retireError) =>
+                getLogger().error("model credential retirement failed", retireError),
+              );
+            }
+            throw new Error(OAUTH_ACCOUNT_CHANGED_ERROR);
+          }
           await this.persistOAuth?.(next);
         }
         this.credential = next;

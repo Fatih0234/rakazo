@@ -162,6 +162,44 @@ export function terminalOAuthRefreshErrorMarker(error: unknown): string | undefi
   return marker !== undefined && terminalStatus && !serverErrorStatus ? marker : undefined;
 }
 
+const OPENAI_AUTH_CLAIMS_NAMESPACE = "https://api.openai.com/auth";
+
+/**
+ * Readable failure surfaced when a refresh comes back for a different ChatGPT
+ * account than the one that was connected.
+ */
+export const OAUTH_ACCOUNT_CHANGED_ERROR =
+  "The ChatGPT account changed during sign-in refresh. Connect the provider again.";
+
+/**
+ * Account identity asserted by an OAuth credential: the provider-populated
+ * `accountId` when present (pi's Codex refresh always sets it), else the
+ * ChatGPT-namespaced `chatgpt_account_id` claim inside a JWT access token —
+ * the same claim pi's `extractAccountId` reads. Never throws: an undecodable
+ * token yields `undefined`, which conservatively disables the account-change
+ * comparison instead of breaking refresh.
+ */
+export function oauthCredentialAccountId(credential: OAuthCredential): string | undefined {
+  if (typeof credential.accountId === "string" && credential.accountId) {
+    return credential.accountId;
+  }
+  const parts = credential.access.split(".");
+  const payload = parts.length === 3 ? parts[1] : undefined;
+  if (!payload) return undefined;
+  try {
+    const claims: unknown = JSON.parse(Buffer.from(payload, "base64url").toString());
+    if (!claims || typeof claims !== "object") return undefined;
+    const namespaced = (claims as Record<string, unknown>)[OPENAI_AUTH_CLAIMS_NAMESPACE];
+    const accountId =
+      namespaced && typeof namespaced === "object"
+        ? (namespaced as Record<string, unknown>).chatgpt_account_id
+        : undefined;
+    return typeof accountId === "string" && accountId ? accountId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export type StoredModelSecret =
   | { kind: "api_key"; key: string; maxTokens?: number }
   | { kind: "oauth"; credential: OAuthCredential; maxTokens?: number }
@@ -451,6 +489,26 @@ export async function resolveModelAuth(
         }
       }
       throw error;
+    }
+    // A refresh that comes back for a different ChatGPT account must never be
+    // persisted or used: compare before persist so the new token is dropped
+    // with the credential, then fail with a readable error. Either side
+    // without an account id disables the comparison — no false positives.
+    const storedAccountId = oauthCredentialAccountId(parsed.credential);
+    const refreshedAccountId = oauthCredentialAccountId(credential);
+    if (storedAccountId && refreshedAccountId && storedAccountId !== refreshedAccountId) {
+      if (opts?.retire) {
+        try {
+          await opts.retire(
+            "account-changed",
+            `stored account ${storedAccountId}, refreshed account ${refreshedAccountId}`,
+          );
+        } catch (retireError) {
+          // A retirement failure must never mask the account-change error.
+          getLogger().error("model credential retirement failed", retireError);
+        }
+      }
+      throw new Error(OAUTH_ACCOUNT_CHANGED_ERROR);
     }
     await opts?.persist?.(
       serializeModelSecret({

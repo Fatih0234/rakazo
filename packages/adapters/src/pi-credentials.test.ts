@@ -2,6 +2,7 @@ import type { OAuthCredential } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it, vi } from "vitest";
 import { PiRuntimeCredentialStore } from "./pi-credentials.js";
+import { OAUTH_ACCOUNT_CHANGED_ERROR } from "./pi-oauth.js";
 
 function credential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
@@ -137,5 +138,97 @@ describe("PiRuntimeCredentialStore", () => {
       "refresh_token_reused",
       expect.objectContaining({ refresh: "refresh-token" }),
     );
+  });
+
+  it("persists a mid-run refresh that returns the same account", async () => {
+    const retire = vi.fn(async () => {});
+    let persisted: OAuthCredential | undefined;
+    const store = new PiRuntimeCredentialStore(
+      "openai-codex",
+      credential({ access: "old-access", accountId: "acct-a" }),
+      async (next) => {
+        persisted = next;
+      },
+      retire,
+    );
+
+    await store.modify("openai-codex", async () =>
+      credential({ access: "new-access", accountId: "acct-a" }),
+    );
+
+    expect(persisted?.access).toBe("new-access");
+    expect(retire).not.toHaveBeenCalled();
+  });
+
+  it("retires and fails a mid-run refresh that returns a different account", async () => {
+    const retire = vi.fn(async () => {});
+    const persist = vi.fn(async () => {});
+    const store = new PiRuntimeCredentialStore(
+      "openai-codex",
+      credential({ accountId: "acct-a" }),
+      persist,
+      retire,
+    );
+
+    await expect(
+      store.modify("openai-codex", async () =>
+        credential({ access: "new-access", accountId: "acct-b" }),
+      ),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+
+    expect(retire).toHaveBeenCalledTimes(1);
+    expect(retire).toHaveBeenCalledWith(
+      "account-changed",
+      "stored account acct-a, refreshed account acct-b",
+    );
+    // The account-B token is never persisted or adopted in memory.
+    expect(persist).not.toHaveBeenCalled();
+    expect(await store.read("openai-codex")).toMatchObject({ access: "access-token" });
+  });
+
+  it("still fails the refresh when scheduled account-change retirement fails", async () => {
+    const retire = vi.fn(async () => {
+      throw new Error("database gone");
+    });
+    const store = new PiRuntimeCredentialStore(
+      "openai-codex",
+      credential({ accountId: "acct-a" }),
+      undefined,
+      retire,
+    );
+
+    await expect(
+      store.modify("openai-codex", async () => credential({ accountId: "acct-b" })),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    expect(retire).toHaveBeenCalledWith(
+      "account-changed",
+      "stored account acct-a, refreshed account acct-b",
+    );
+    // Let the detached retirement settle; its failure is logged, not rethrown.
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  it("tolerates a missing account id on either side of a mid-run refresh", async () => {
+    const retire = vi.fn(async () => {});
+    const persisted: OAuthCredential[] = [];
+    const store = new PiRuntimeCredentialStore(
+      "openai-codex",
+      credential({ access: "old-access" }),
+      async (next) => {
+        persisted.push(next);
+      },
+      retire,
+    );
+
+    // Stored side has no account id: no comparison, no retirement.
+    await store.modify("openai-codex", async () =>
+      credential({ access: "new-access", accountId: "acct-b" }),
+    );
+    // Refreshed side has no account id either.
+    await store.modify("openai-codex", async () => credential({ access: "newer-access" }));
+
+    expect(persisted.map((entry) => entry.access)).toEqual(["new-access", "newer-access"]);
+    expect(retire).not.toHaveBeenCalled();
   });
 });
