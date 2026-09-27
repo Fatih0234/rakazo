@@ -55,6 +55,8 @@ export const SUBSCRIPTION_SIGN_IN_PROVIDERS: Record<
 
 const MIN_OAUTH_VALIDITY_MS = 5 * 60 * 1000;
 const SIGN_IN_START_WAIT_MS = 30_000;
+const CORRUPT_MODEL_SECRET_MESSAGE =
+  "Stored model credential is corrupt. Connect the provider again.";
 
 export type StoredModelSecret =
   | { kind: "api_key"; key: string; maxTokens?: number }
@@ -151,73 +153,79 @@ function parsedMaxTokens(value: unknown): number | undefined {
 
 export function parseModelSecret(plaintext: string): StoredModelSecret {
   const trimmed = plaintext.trim();
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      if (
-        parsed.kind === "openai_compatible" &&
-        typeof parsed.baseUrl === "string" &&
-        parsed.baseUrl.trim()
-      ) {
-        const apiKey = typeof parsed.apiKey === "string" ? parsed.apiKey : undefined;
-        const parsedThinkingLevel = ThinkingLevelSchema.nullable().safeParse(parsed.thinkingLevel);
-        const thinkingLevel = parsedThinkingLevel.success ? parsedThinkingLevel.data : undefined;
-        const maxTokens = parsedMaxTokens(parsed.maxTokens);
-        const contextWindow =
-          typeof parsed.contextWindow === "number" &&
-          Number.isInteger(parsed.contextWindow) &&
-          parsed.contextWindow >= 1 &&
-          parsed.contextWindow <= MAX_MODEL_CONTEXT_WINDOW
-            ? parsed.contextWindow
-            : undefined;
-        const visionModelIds = Array.isArray(parsed.visionModelIds)
-          ? parsed.visionModelIds.filter(
-              (modelId): modelId is string =>
-                typeof modelId === "string" && modelId.trim().length > 0,
-            )
-          : undefined;
-        const maxImagesPerPrompt =
-          typeof parsed.maxImagesPerPrompt === "number" &&
-          Number.isInteger(parsed.maxImagesPerPrompt) &&
-          parsed.maxImagesPerPrompt >= 1 &&
-          parsed.maxImagesPerPrompt <= 1000
-            ? parsed.maxImagesPerPrompt
-            : undefined;
-        return {
-          kind: "openai_compatible",
-          baseUrl: parsed.baseUrl.trim(),
-          ...(apiKey ? { apiKey } : {}),
-          ...(typeof parsed.reasoning === "boolean" ? { reasoning: parsed.reasoning } : {}),
-          ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
-          ...(maxTokens !== undefined ? { maxTokens } : {}),
-          ...(contextWindow !== undefined ? { contextWindow } : {}),
-          ...(visionModelIds ? { visionModelIds } : {}),
-          ...(maxImagesPerPrompt !== undefined ? { maxImagesPerPrompt } : {}),
-        };
-      }
-      if (parsed.kind === "api_key" && typeof parsed.key === "string" && parsed.key) {
-        const maxTokens = parsedMaxTokens(parsed.maxTokens);
-        return {
-          kind: "api_key",
-          key: parsed.key,
-          ...(maxTokens !== undefined ? { maxTokens } : {}),
-        };
-      }
-      const wrappedOAuth =
-        parsed.kind === "oauth" ? readOAuthCredential(parsed.credential) : undefined;
-      if (wrappedOAuth) {
-        const maxTokens = parsedMaxTokens(parsed.maxTokens);
-        return {
-          kind: "oauth",
-          credential: wrappedOAuth,
-          ...(maxTokens !== undefined ? { maxTokens } : {}),
-        };
-      }
-      const legacyOAuth = readOAuthCredential(parsed);
-      if (legacyOAuth) return { kind: "oauth", credential: legacyOAuth };
-    } catch {
-      // Treat malformed JSON as a literal API key.
+  if (!trimmed.startsWith("{")) return { kind: "api_key", key: plaintext };
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    // Treat malformed JSON as a literal API key.
+    return { kind: "api_key", key: plaintext };
+  }
+  if (parsed.kind === "openai_compatible") {
+    if (typeof parsed.baseUrl !== "string" || !parsed.baseUrl.trim()) {
+      throw new Error(CORRUPT_MODEL_SECRET_MESSAGE);
     }
+    const apiKey = typeof parsed.apiKey === "string" ? parsed.apiKey : undefined;
+    const parsedThinkingLevel = ThinkingLevelSchema.nullable().safeParse(parsed.thinkingLevel);
+    const thinkingLevel = parsedThinkingLevel.success ? parsedThinkingLevel.data : undefined;
+    const maxTokens = parsedMaxTokens(parsed.maxTokens);
+    const contextWindow =
+      typeof parsed.contextWindow === "number" &&
+      Number.isInteger(parsed.contextWindow) &&
+      parsed.contextWindow >= 1 &&
+      parsed.contextWindow <= MAX_MODEL_CONTEXT_WINDOW
+        ? parsed.contextWindow
+        : undefined;
+    const visionModelIds = Array.isArray(parsed.visionModelIds)
+      ? parsed.visionModelIds.filter(
+          (modelId): modelId is string => typeof modelId === "string" && modelId.trim().length > 0,
+        )
+      : undefined;
+    const maxImagesPerPrompt =
+      typeof parsed.maxImagesPerPrompt === "number" &&
+      Number.isInteger(parsed.maxImagesPerPrompt) &&
+      parsed.maxImagesPerPrompt >= 1 &&
+      parsed.maxImagesPerPrompt <= 1000
+        ? parsed.maxImagesPerPrompt
+        : undefined;
+    return {
+      kind: "openai_compatible",
+      baseUrl: parsed.baseUrl.trim(),
+      ...(apiKey ? { apiKey } : {}),
+      ...(typeof parsed.reasoning === "boolean" ? { reasoning: parsed.reasoning } : {}),
+      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(visionModelIds ? { visionModelIds } : {}),
+      ...(maxImagesPerPrompt !== undefined ? { maxImagesPerPrompt } : {}),
+    };
+  }
+  if (parsed.kind === "api_key") {
+    if (typeof parsed.key !== "string" || !parsed.key) {
+      throw new Error(CORRUPT_MODEL_SECRET_MESSAGE);
+    }
+    const maxTokens = parsedMaxTokens(parsed.maxTokens);
+    return {
+      kind: "api_key",
+      key: parsed.key,
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+    };
+  }
+  if (parsed.kind === "oauth") {
+    const credential = readOAuthCredential(parsed.credential);
+    if (!credential) throw new Error(CORRUPT_MODEL_SECRET_MESSAGE);
+    const maxTokens = parsedMaxTokens(parsed.maxTokens);
+    return {
+      kind: "oauth",
+      credential,
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+    };
+  }
+  // Legacy secrets serialize the bare OAuth credential without a kind wrapper.
+  if (parsed.type === "oauth") {
+    const credential = readOAuthCredential(parsed);
+    if (!credential) throw new Error(CORRUPT_MODEL_SECRET_MESSAGE);
+    return { kind: "oauth", credential };
   }
   return { kind: "api_key", key: plaintext };
 }

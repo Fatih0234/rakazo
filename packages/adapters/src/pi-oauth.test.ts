@@ -109,6 +109,37 @@ describe("model secrets", () => {
     });
   });
 
+  it("rejects credential JSON that declares a kind but misses its fields", () => {
+    expect(() => parseModelSecret(JSON.stringify({ kind: "oauth" }))).toThrow(/corrupt/);
+    expect(() =>
+      parseModelSecret(JSON.stringify({ kind: "oauth", credential: { type: "oauth" } })),
+    ).toThrow(/corrupt/);
+    expect(() => parseModelSecret(JSON.stringify({ kind: "api_key" }))).toThrow(/corrupt/);
+    expect(() => parseModelSecret(JSON.stringify({ kind: "api_key", key: "" }))).toThrow(/corrupt/);
+    expect(() => parseModelSecret(JSON.stringify({ kind: "openai_compatible" }))).toThrow(
+      /corrupt/,
+    );
+  });
+
+  it("rejects a broken legacy OAuth credential object", () => {
+    expect(() =>
+      parseModelSecret(JSON.stringify({ type: "oauth", access: "access-token" })),
+    ).toThrow(/corrupt/);
+  });
+
+  it("keeps JSON without a recognized credential kind as a literal API key", () => {
+    const unknownKind = JSON.stringify({ kind: "bearer", token: "abc" });
+    expect(parseModelSecret(unknownKind)).toEqual({ kind: "api_key", key: unknownKind });
+    const objectKey = JSON.stringify({ hello: "world" });
+    expect(parseModelSecret(objectKey)).toEqual({ kind: "api_key", key: objectKey });
+    expect(parseModelSecret("{broken-json")).toEqual({ kind: "api_key", key: "{broken-json" });
+  });
+
+  it("fails a corrupt stored credential instead of using it as an API key", async () => {
+    const corrupt = JSON.stringify({ kind: "oauth", credential: { type: "oauth" } });
+    await expect(resolveModelApiKey(corrupt, CHATGPT_OAUTH_PROVIDER)).rejects.toThrow(/corrupt/);
+  });
+
   it("refreshes expired OAuth tokens and persists them", async () => {
     const credential = oauthCred({ access: "old", expires: 1 });
     let saved = "";

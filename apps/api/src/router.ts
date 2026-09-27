@@ -986,7 +986,9 @@ export function createRouter(deps: RouterDeps) {
             return persistModelCredential(deps, context.actor, {
               provider: login.provider,
               plaintext: serializeModelSecret({ kind: "oauth", credential: login.credential }),
-              label: login.label ?? "ChatGPT Plus/Pro",
+              label:
+                login.label ??
+                listPiCatalog().find((entry) => entry.provider === login.provider)?.providerName,
               modelId: login.modelId,
               signal: login.signal,
             });

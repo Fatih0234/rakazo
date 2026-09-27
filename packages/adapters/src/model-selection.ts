@@ -237,7 +237,13 @@ export async function readStoredModelAuth(
   } catch {
     return { status: "unreadable" };
   }
-  const message = validateModelAuthAvailability(provider, modelId, plaintext);
+  let message: string | undefined;
+  try {
+    message = validateModelAuthAvailability(provider, modelId, plaintext);
+  } catch {
+    // A secret that decrypts but does not parse is as unreadable as a corrupt one.
+    return { status: "unreadable" };
+  }
   return message ? { status: "rejected", message } : { status: "ready" };
 }
 

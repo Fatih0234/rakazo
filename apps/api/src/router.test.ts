@@ -1090,6 +1090,71 @@ describe("model credential persistence", () => {
       }),
     );
   });
+
+  it("rejects an API key for ChatGPT-subscription Codex before persisting", async () => {
+    const { upsert, deps, handler } = persistDeps();
+
+    const response = await call(handler, "models/connect", {
+      provider: "openai-codex",
+      apiKey: "sk-test-key-123",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      json: expect.objectContaining({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("ChatGPT subscription sign-in is required"),
+      }),
+    });
+    expect(deps.secrets.put).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it("still accepts an API key for other providers", async () => {
+    const { deps, handler } = persistDeps();
+
+    const response = await call(handler, "models/connect", {
+      provider: "anthropic",
+      apiKey: "sk-test-key-123",
+    });
+
+    expect(response.status).toBe(200);
+    expect(deps.secrets.put).toHaveBeenCalledWith(
+      "sk-test-key-123",
+      expect.objectContaining({ userId: actor.userId }),
+    );
+  });
+
+  it.each([
+    ["github-copilot", "GitHub Copilot"],
+    ["openai-codex", "OpenAI Codex"],
+    ["anthropic", "Anthropic"],
+  ])("labels a %s subscription sign-in with its own provider name", async (provider, label) => {
+    const { finish, deps, handler } = persistDeps();
+    finish.mockImplementation(async (_loginId, _actor, persist) => ({
+      status: "connected" as const,
+      value: await persist({
+        status: "connected",
+        provider,
+        credential: {
+          type: "oauth",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+        signal: new AbortController().signal,
+      }),
+    }));
+
+    const response = await call(handler, "models/finishOAuth", { loginId: "login-1" });
+
+    expect(response.status).toBe(200);
+    expect(deps.prisma.userModelCredential.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ provider, label }),
+      }),
+    );
+  });
 });
 
 describe("bot intro run", () => {
