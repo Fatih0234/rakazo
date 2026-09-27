@@ -40,6 +40,7 @@ import {
 } from "./openai-tool-parameters.js";
 import { PiRuntimeCredentialStore, toOAuthCredential } from "./pi-credentials.js";
 import { registerLocalProvider } from "./pi-local-provider.js";
+import { codexComputeResidency } from "./pi-oauth.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_ID,
   registerOpenAiCompatibleCatalog,
@@ -266,7 +267,14 @@ export class PiAgentRuntime implements AgentRuntime {
           sessionId: conversationSessionId(request.threadId, request.botId),
           steeringMode: "all",
           streamFn: (m, ctx, options) =>
-            reliableModelStream(models, m, ctx, options, request.model.maxTokens),
+            reliableModelStream(
+              models,
+              m,
+              ctx,
+              options,
+              request.model.maxTokens,
+              request.model.oauth?.credential.access ?? apiKey,
+            ),
           getApiKey: async () => apiKey,
           transformContext: async (messages) =>
             pruneComputerScreenshotContext(
@@ -1081,7 +1089,14 @@ async function executeSubagent(host: ToolHost, executionId: string, args: Record
   const nested = new Agent({
     sessionId: conversationSessionId(host.request.threadId, host.request.botId, agentId),
     streamFn: (m, ctx, options) =>
-      reliableModelStream(selectedModel.models, m, ctx, options, requestModel.maxTokens),
+      reliableModelStream(
+        selectedModel.models,
+        m,
+        ctx,
+        options,
+        requestModel.maxTokens,
+        requestModel.oauth?.credential.access ?? selectedModel.apiKey,
+      ),
     getApiKey: async () => selectedModel.apiKey,
     transformContext: async (messages) =>
       pruneComputerScreenshotContext(
@@ -1916,6 +1931,7 @@ export function reliableModelStream(
   context: Context,
   options: SimpleStreamOptions | undefined,
   configuredMaxTokens: number | undefined,
+  accessToken?: string,
 ): AssistantMessageEventStream {
   const watchdog = isCodexModel(model) ? codexStreamIdleWatchdog(options?.signal) : undefined;
   try {
@@ -1926,6 +1942,7 @@ export function reliableModelStream(
         model,
         watchdog ? { ...options, signal: watchdog.signal } : options,
         configuredMaxTokens,
+        accessToken,
       ),
     );
     return watchdog ? watchdog.wrap(stream) : stream;
@@ -1939,6 +1956,7 @@ export function reliableStreamOptions(
   model: Pick<Model<Api>, "api" | "provider" | "maxTokens" | "reasoning">,
   options?: SimpleStreamOptions,
   configuredMaxTokens?: number,
+  accessToken?: string,
 ): SimpleStreamOptions {
   let next: SimpleStreamOptions = {
     ...options,
@@ -1957,6 +1975,15 @@ export function reliableStreamOptions(
     // runs then surface abnormal close 1006 as a terminal model error. SSE has
     // bounded network retries and no long-lived connection between tool turns.
     next = { ...next, transport: "sse" };
+    // Forward the account's compute residency so the Codex backend routes to the
+    // right region. An explicit caller header wins.
+    const residency = codexComputeResidency(accessToken);
+    if (residency) {
+      next = {
+        ...next,
+        headers: { "x-openai-internal-codex-residency": residency, ...next.headers },
+      };
+    }
   }
 
   // OpenCode Go/Zen require a sticky x-opencode-session header (affinity + some

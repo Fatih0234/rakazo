@@ -10,6 +10,12 @@ const streamDefaults = {
   maxTokens: DEFAULT_MODEL_MAX_TOKENS,
 };
 
+// Unsigned fake JWT: base64url JSON payload, no real token material.
+const fakeJwt = (payload: unknown) =>
+  `fake.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.fake`;
+
+const codexModel = { provider: "openai-codex", api: "openai-codex-responses" } as Model<Api>;
+
 describe("Pi runtime transport", () => {
   it.each([
     { source: "provider", provider: "openai-codex", api: "openai-completions" },
@@ -84,6 +90,119 @@ describe("Pi runtime transport", () => {
     expect(result.headers?.["x-opencode-session"]).toBe(result.sessionId);
     expect(result.headers?.["x-opencode-client"]).toBe("rakazo");
     expect(result.timeoutMs).toBe(MODEL_STREAM_TIMEOUT_MS);
+  });
+
+  it.each([
+    {
+      source: "provider",
+      model: { provider: "openai-codex", api: "openai-completions" } as Model<Api>,
+    },
+    {
+      source: "API",
+      model: { provider: "custom-provider", api: "openai-codex-responses" } as Model<Api>,
+    },
+  ])("forwards the compute residency claim when Codex is identified by $source", ({ model }) => {
+    const token = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
+    });
+
+    expect(reliableStreamOptions(model, { transport: "auto" }, undefined, token)).toEqual({
+      ...streamDefaults,
+      transport: "sse",
+      headers: { "x-openai-internal-codex-residency": "us-east" },
+    });
+  });
+
+  it("forwards a root-level residency claim when the namespaced one is absent", () => {
+    const token = fakeJwt({ chatgpt_compute_residency: "eu-west" });
+
+    expect(
+      reliableStreamOptions(codexModel, undefined, undefined, token).headers?.[
+        "x-openai-internal-codex-residency"
+      ],
+    ).toBe("eu-west");
+  });
+
+  it("prefers the namespaced residency claim over the root-level one", () => {
+    const token = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
+      chatgpt_compute_residency: "eu-west",
+    });
+
+    expect(
+      reliableStreamOptions(codexModel, undefined, undefined, token).headers?.[
+        "x-openai-internal-codex-residency"
+      ],
+    ).toBe("us-east");
+  });
+
+  it("forwards unknown residency values unvalidated", () => {
+    const token = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "future-region_1" },
+    });
+
+    expect(
+      reliableStreamOptions(codexModel, undefined, undefined, token).headers?.[
+        "x-openai-internal-codex-residency"
+      ],
+    ).toBe("future-region_1");
+  });
+
+  it.each([
+    ["missing", {}],
+    [
+      "no_constraint",
+      { "https://api.openai.com/auth": { chatgpt_compute_residency: "no_constraint" } },
+    ],
+    ["empty", { chatgpt_compute_residency: "" }],
+    ["non-string", { "https://api.openai.com/auth": { chatgpt_compute_residency: 42 } }],
+    ["non-object namespace", { "https://api.openai.com/auth": "us-east" }],
+  ])("sends no residency header when the claim is %s", (_case, payload) => {
+    const result = reliableStreamOptions(codexModel, undefined, undefined, fakeJwt(payload));
+
+    expect(result.headers?.["x-openai-internal-codex-residency"]).toBeUndefined();
+  });
+
+  it.each(["not-a-jwt", "only.two", "a.b.c.d", undefined])(
+    "sends no residency header for malformed or absent token %s",
+    (token) => {
+      const result = reliableStreamOptions(codexModel, undefined, undefined, token);
+
+      expect(result.headers?.["x-openai-internal-codex-residency"]).toBeUndefined();
+    },
+  );
+
+  it("sends no residency header for a malformed payload", () => {
+    const token = `fake.${Buffer.from("not json").toString("base64url")}.fake`;
+
+    const result = reliableStreamOptions(codexModel, undefined, undefined, token);
+
+    expect(result.headers?.["x-openai-internal-codex-residency"]).toBeUndefined();
+  });
+
+  it("keeps an explicitly-passed residency header over the token claim", () => {
+    const token = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
+    });
+    const options = {
+      transport: "auto" as const,
+      headers: { "x-openai-internal-codex-residency": "manual" },
+    };
+
+    expect(reliableStreamOptions(codexModel, options, undefined, token).headers).toEqual({
+      "x-openai-internal-codex-residency": "manual",
+    });
+  });
+
+  it("never attaches the residency header for non-Codex providers", () => {
+    const model = { provider: "openrouter", api: "openai-completions" } as Model<Api>;
+    const token = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_compute_residency: "us-east" },
+    });
+
+    const result = reliableStreamOptions(model, undefined, undefined, token);
+
+    expect(result.headers).toBeUndefined();
   });
 
   it("keeps a stable conversation session id per bot thread", () => {

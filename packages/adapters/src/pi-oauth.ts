@@ -268,6 +268,35 @@ export function secretValuesToRedact(secret: StoredModelSecret): string[] {
   return [secret.credential.access, secret.credential.refresh].filter(Boolean);
 }
 
+const OPENAI_AUTH_CLAIMS_NAMESPACE = "https://api.openai.com/auth";
+
+/**
+ * Reads the Codex access token's compute-residency claim. The raw value is
+ * forwarded unvalidated so future regions work without a client update; it
+ * never throws — a malformed token fails later in pi's own claim extraction.
+ */
+export function codexComputeResidency(accessToken: string | undefined): string | undefined {
+  const parts = accessToken?.split(".") ?? [];
+  const payload = parts.length === 3 ? parts[1] : undefined;
+  if (!payload) return undefined;
+  try {
+    const claims: unknown = JSON.parse(Buffer.from(payload, "base64url").toString());
+    if (!claims || typeof claims !== "object") return undefined;
+    const record = claims as Record<string, unknown>;
+    const namespaced = record[OPENAI_AUTH_CLAIMS_NAMESPACE];
+    const claim =
+      (namespaced && typeof namespaced === "object"
+        ? (namespaced as Record<string, unknown>).chatgpt_compute_residency
+        : undefined) ?? record.chatgpt_compute_residency;
+    if (typeof claim !== "string" || claim === "" || claim === "no_constraint") {
+      return undefined;
+    }
+    return claim;
+  } catch {
+    return undefined;
+  }
+}
+
 export function loadProviderOAuth(providerId: string): OAuthAuth | undefined {
   return providerCatalog().getProvider(providerId)?.auth.oauth;
 }
