@@ -1844,6 +1844,8 @@ export const CODEX_STREAM_IDLE_TIMEOUT_MESSAGE = "Codex stream idle timeout";
 export interface StreamIdleWatchdog {
   /** Composed abort signal to hand to the provider request. */
   signal: AbortSignal;
+  /** Re-arms the idle bound; invoke on response headers and each delivered event. */
+  ping(): void;
   /** Wraps the provider stream so every delivered event re-arms the idle bound. */
   wrap(stream: AssistantMessageEventStream): AssistantMessageEventStream;
   /** Stops the timer and drops the caller-signal listener. */
@@ -1853,18 +1855,19 @@ export interface StreamIdleWatchdog {
 /**
  * `timeoutMs` bounds each attempt's time-to-headers: once Codex SSE headers
  * arrive, pi consumes the response body until it ends or the request signal
- * aborts, so a connection that goes silent stalls a run forever. pi-ai offers
- * no per-event hook, so the watchdog composes an AbortController into
- * `options.signal` and observes the stream the agent consumes: the first
- * delivered event arms the timer, every further event re-arms it, and
- * `idleTimeoutMs` of silence aborts the request.
+ * aborts, so a connection that goes silent stalls a run forever. The watchdog
+ * composes an AbortController into `options.signal` and re-arms the idle
+ * bound at two points: `options.onResponse` — pi invokes it inside the retry
+ * loop each time an attempt's headers land — and every stream event the agent
+ * consumes. `idleTimeoutMs` of silence aborts the request.
  *
- * Arming on the first event — not at stream creation — keeps each of pi's
- * header-timeout retries inside its own `timeoutMs` budget. A single budget
- * armed up front would let a burnt-out attempt's leftover abort a still-valid
- * retry. pi reports any signal abort as a generic "Request was aborted", so
- * when the watchdog fired the wrapper relabels the terminal error as an idle
- * timeout rather than a caller abort.
+ * Arming at headers rather than stream creation keeps each attempt's
+ * time-to-headers inside its own `timeoutMs` budget: a burnt-out attempt
+ * leaves no leftover that could abort a still-valid retry, while a response
+ * that sends headers then goes silent is still bounded. pi reports any signal
+ * abort as a generic "Request was aborted", so when the watchdog fired the
+ * wrapper relabels the terminal error as an idle timeout rather than a caller
+ * abort.
  */
 export function codexStreamIdleWatchdog(
   upstream: AbortSignal | undefined,
@@ -1897,8 +1900,9 @@ export function codexStreamIdleWatchdog(
     upstream?.removeEventListener("abort", onUpstreamAbort);
   };
 
-  // No timer before the first event: the pre-first-event window is bounded by
-  // each attempt's own headers timeout, so idle budget must not burn there.
+  // Nothing arms the timer before response headers land: the pre-headers
+  // window is bounded per attempt by timeoutMs, so idle budget must not burn
+  // there and a retry always starts from a fresh full budget.
   const ping = () => {
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;
@@ -1918,6 +1922,7 @@ export function codexStreamIdleWatchdog(
 
   return {
     signal: controller.signal,
+    ping,
     dispose,
     wrap(inner) {
       class Watched extends AssistantMessageEventStream {
@@ -1955,7 +1960,21 @@ export function reliableModelStream(
       context,
       reliableStreamOptions(
         model,
-        watchdog ? { ...options, signal: watchdog.signal } : options,
+        watchdog
+          ? {
+              ...options,
+              signal: watchdog.signal,
+              // pi invokes onResponse inside its retry loop once an attempt's
+              // headers arrive, before the body is consumed — each attempt that
+              // gets this far re-arms a fresh idle budget, so headers-then-silence
+              // is bounded without burning the budget on time-to-headers. A
+              // caller-supplied hook still runs.
+              onResponse: (response, requestModel) => {
+                watchdog.ping();
+                return options?.onResponse?.(response, requestModel);
+              },
+            }
+          : options,
         configuredMaxTokens,
         accessToken,
       ),
