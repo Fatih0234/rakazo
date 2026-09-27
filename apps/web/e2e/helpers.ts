@@ -1,7 +1,7 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 
 export function isRealSandboxProvider(provider = process.env.SANDBOX_PROVIDER) {
-  return provider === "e2b" || provider === "daytona" || provider === "box";
+  return provider === "daytona" || provider === "box";
 }
 
 export function realSandboxTimeout(real: number, emulated: number) {

@@ -12,7 +12,6 @@ describe("resolveSandboxProvider", () => {
   });
 
   it("falls back to none when a remote provider key is missing", () => {
-    expect(resolveSandboxProvider({ SANDBOX_PROVIDER: "e2b" })).toBe("none");
     expect(resolveSandboxProvider({ SANDBOX_PROVIDER: "daytona" })).toBe("none");
     expect(resolveSandboxProvider({ SANDBOX_PROVIDER: "createos" })).toBe("none");
     expect(resolveSandboxProvider({ SANDBOX_PROVIDER: "box" })).toBe("none");

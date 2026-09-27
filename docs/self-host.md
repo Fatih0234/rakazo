@@ -1,6 +1,6 @@
 # Self-hosting Rakazo
 
-The signed-in product is a long-running API, a Graphile Worker, Postgres, and a computer provider (Docker supervisor, E2B, Daytona, CreateOS, or Box). It is not a static site. The marketing site in `apps/www` can be hosted separately.
+The signed-in product is a long-running API, a Graphile Worker, Postgres, and a computer provider (Docker supervisor, Daytona, CreateOS, or Box). It is not a static site. The marketing site in `apps/www` can be hosted separately.
 
 ## Local (source checkout)
 
@@ -30,8 +30,8 @@ run `bash install-images.sh`. Flags may be combined in either order: `--prepare-
 
 `SANDBOX_PROVIDER` defaults to `docker`. The images Compose file runs a sandbox supervisor
 (from the app image, on the internal network only) and pulls `ghcr.io/elie222/rakazo/computer`.
-Signup and local Docker computers work without an E2B account. Optional remote providers: set
-`SANDBOX_PROVIDER` to `e2b`, `daytona`, `createos`, or `box` and add the matching API key. The published-images
+Signup and local Docker computers work without a remote sandbox account. Optional remote providers: set
+`SANDBOX_PROVIDER` to `daytona`, `createos`, or `box` and add the matching API key. The published-images
 Compose stack requires `SANDBOX_SUPERVISOR_TOKEN` for every provider; leave it empty and `compose up` fails closed.
 
 Optional: set `OPENROUTER_API_KEY` or connect a model in the UI after signup.
@@ -57,7 +57,7 @@ app.example.com {
 ```
 
 Open **Agent computer** on a bot, or send a message that uses the desktop, to see
-the local Docker computer. For in-stack Caddy plus remote E2B computers, use the
+the local Docker computer. For in-stack Caddy plus a remote computer provider, use the
 [production Compose](#public-single-vm-deployment) path and `infra/compose/Caddyfile.prod`
 instead of this host proxy.
 
@@ -231,13 +231,12 @@ Optional:
 ```env
 SIGNUPS_ENABLED=true
 SIGNUP_ALLOWLIST=you@example.com,@company.com
-SANDBOX_PROVIDER=docker   # or none, e2b, daytona, createos, box. Keep fake only for pnpm test.
+SANDBOX_PROVIDER=docker   # or none, daytona, createos, box. Keep fake only for pnpm test.
 AGENT_RUNTIME=pi          # Keep scripted only for pnpm test.
 WAKEUP_DRIVER=graphile
 SANDBOX_IDLE_MS=600000    # pause the bot computer after 10 minutes idle
 SANDBOX_COMMAND_TIMEOUT_MS=300000 # stop a shell command after 5 minutes
 MAX_TOOL_CALLS_PER_TURN=  # optional Pi turn tool-call fuse; unset/0 = unlimited
-E2B_API_KEY=              # when SANDBOX_PROVIDER=e2b
 DAYTONA_API_KEY=          # when SANDBOX_PROVIDER=daytona
 CREATEOS_SANDBOX_API_KEY= # when SANDBOX_PROVIDER=createos
 BOX_API_KEY=              # when SANDBOX_PROVIDER=box
@@ -296,17 +295,14 @@ Optional messaging platforms (iMessage, Slack, WhatsApp, Telegram, Feishu/Lark) 
 
 ## Choosing a computer provider
 
-The Electron desktop app is a client of the same API. Docker and E2B still apply. On first launch, Electron asks the deployment owner whether bots should keep using Docker or run on this Mac as you. `SANDBOX_PROVIDER=desktop` is a separate, explicit provider that always runs commands on the service host.
+The Electron desktop app is a client of the same API. Docker and the remote providers still apply. On first launch, Electron asks the deployment owner whether bots should keep using Docker or run on this Mac as you. `SANDBOX_PROVIDER=desktop` is a separate, explicit provider that always runs commands on the service host.
 
 - **Published images** (`docker-compose.images.yml`) default to `SANDBOX_PROVIDER=docker` with a
-  local supervisor and published `ghcr.io/elie222/rakazo/computer` image. No E2B account required.
-  Optional: set `e2b`, `daytona`, `createos`, or `box` plus the matching API key for remote computers.
+  local supervisor and published `ghcr.io/elie222/rakazo/computer` image. No remote sandbox account required.
+  Optional: set `daytona`, `createos`, or `box` plus the matching API key for remote computers.
 - **Docker** is the quick-start default for published images and for a source checkout / full local
   Compose stack. Workspace bots share a persistent Team Computer by default; Private computers are
   optional. Keep the supervisor private, as the included Compose files do.
-- **E2B** runs bot computers away from the Rakazo host and is a good choice for public or multi-user
-  production deployments. Rakazo checkpoints the portable workspace and browser-profile directory to
-  `DATA_DIR`; the E2B disk is a runtime cache, not the durable source of truth.
 - **Daytona** provides the same remote-computer contract through Daytona sandboxes. Configure
   `DAYTONA_API_KEY` and optionally `DAYTONA_API_URL` / `DAYTONA_TARGET` / `DAYTONA_SNAPSHOT`.
 - **CreateOS** provides the same remote-computer contract through CreateOS desktop sandboxes.
@@ -341,9 +337,9 @@ output directory of any failed run.
 ## Public single-VM deployment
 
 `infra/compose/docker-compose.prod.yml` runs the hosted product with Postgres, the API, worker, web app,
-and automatic HTTPS through Caddy. It uses E2B for bot computers, so the VM never exposes a Docker
-supervisor or browser containers — `infra/compose/docker-compose.prod.docker.yml` is the opt-in
-overlay that runs local Docker computers on the same stack (see below). The root-equivalent updater
+and automatic HTTPS through Caddy. `SANDBOX_PROVIDER` defaults to `none` in the base file — set a
+remote provider for hosted computers, or apply `infra/compose/docker-compose.prod.docker.yml`, the
+opt-in overlay that runs local Docker computers on the same stack (see below). The root-equivalent updater
 sidecar is an explicit opt-in profile.
 
 Before deploying to a new Ubuntu host, create and verify a key-only `deploy` account, then apply the
@@ -385,8 +381,8 @@ WEB_ORIGIN=https://app.example.com
 API_URL=https://app.example.com
 SIGNUPS_ENABLED=true
 SIGNUP_ALLOWLIST=owner@example.com,reviewer@example.com
-# e2b, daytona, or box
-SANDBOX_PROVIDER=e2b
+# docker (with the overlay), daytona, createos, or box; none boots without computers
+SANDBOX_PROVIDER=docker
 AGENT_RUNTIME=pi
 WAKEUP_DRIVER=graphile
 DATA_DIR=/data

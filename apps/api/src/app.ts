@@ -238,7 +238,6 @@ export async function createApp(
       ...sandboxProviderOptionsFromEnv(),
       supervisorUrl: env.sandboxSupervisorUrl,
       supervisorToken: env.sandboxSupervisorToken,
-      e2bApiKey: env.e2bApiKey,
       daytonaApiKey: env.daytonaApiKey,
       daytonaApiUrl: env.daytonaApiUrl,
       daytonaTarget: env.daytonaTarget,

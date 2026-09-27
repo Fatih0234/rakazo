@@ -5,8 +5,8 @@ import { FakeSandboxProvider } from "./fake-sandbox.js";
 export class ManagedSandboxEmulator extends FakeSandboxProvider {
   constructor(
     private readonly emulator: { id: string; kind: ComputerRef["kind"] } = {
-      id: "e2b-emulator",
-      kind: "e2b",
+      id: "managed-emulator",
+      kind: "fake",
     },
   ) {
     super();

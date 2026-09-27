@@ -29,7 +29,7 @@ export function teachCaptureKey(
 }
 
 // Browser key names are not X11 keysyms. Anything sent as a `key` input ends up in
-// `xdotool key <name>` (or the e2b equivalent), which silently drops names it cannot resolve.
+// `xdotool key <name>` (or the provider equivalent), which silently drops names it cannot resolve.
 const X11_KEYSYM_BY_DOM_KEY: Record<string, string> = {
   Enter: "Return",
   Backspace: "BackSpace",

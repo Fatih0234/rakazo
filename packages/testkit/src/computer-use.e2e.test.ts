@@ -14,7 +14,7 @@ describeLive("real model and sandbox computer journey", () => {
   let dataDir: string | undefined;
   let handles: Awaited<ReturnType<typeof createApp>>;
   let computer: ComputerRef | undefined;
-  let sandboxProvider: "box" | "e2b";
+  let sandboxProvider: "box";
   let botId: string | undefined;
   let runId: string | undefined;
 
@@ -36,7 +36,6 @@ describeLive("real model and sandbox computer journey", () => {
       dataDir,
       sandboxProvider,
       agentRuntime: "pi",
-      e2bApiKey: process.env.E2B_API_KEY,
       boxApiKey: process.env.BOX_API_KEY,
       boxApiUrl: process.env.BOX_API_URL ?? process.env.BOX_BASE_URL,
       openRouterKey: process.env.OPENROUTER_API_KEY,

@@ -47,7 +47,7 @@ describe("loadEnv", () => {
     expect(
       loadEnv({
         ...base,
-        SANDBOX_PROVIDER: "e2b",
+        SANDBOX_PROVIDER: "daytona",
       }).sandboxProvider,
     ).toBe("none");
     expect(
@@ -129,7 +129,7 @@ describe("loadEnv", () => {
       BETTER_AUTH_SECRET: "prod-auth-secret-with-enough-length",
       ENCRYPTION_KEY: "prod-encryption-key-with-enough-length",
       SCREEN_PROXY_SECRET: "prod-screen-proxy-secret-with-enough-length",
-      SANDBOX_PROVIDER: "e2b",
+      SANDBOX_PROVIDER: "daytona",
       API_HOST: "0.0.0.0",
     });
     expect(env.authSecret).toBe("prod-auth-secret-with-enough-length");

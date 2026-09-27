@@ -12,7 +12,6 @@ import {
   sandboxIdleMs,
   sleepComputerIfIdle,
 } from "./computer-idle.js";
-import { e2bCreateOptions } from "./e2b-sandbox.js";
 
 describe("sandbox idle", () => {
   it("defaults to ten minutes when SANDBOX_IDLE_MS is unset", () => {
@@ -437,15 +436,6 @@ describe("CANCEL_PRIMARY_BROWSER_WORK", () => {
     expect(CANCEL_PRIMARY_BROWSER_WORK).not.toContain("*[c]hromium*");
     expect(CANCEL_PRIMARY_BROWSER_WORK).not.toContain("*[f]irefox*");
     expect(CANCEL_PRIMARY_BROWSER_WORK).not.toContain("*[g]oogle-chrome*");
-  });
-});
-
-describe("e2b create options", () => {
-  it("pauses on timeout instead of killing the sandbox", () => {
-    const opts = e2bCreateOptions("bot-1", "e2b_test");
-    expect(opts.lifecycle).toEqual({ onTimeout: "pause", autoResume: false });
-    expect(opts.timeoutMs).toBe(sandboxIdleMs());
-    expect(opts.metadata.botId).toBe("bot-1");
   });
 });
 

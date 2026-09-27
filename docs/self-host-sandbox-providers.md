@@ -10,7 +10,7 @@ for the sharing and persistence contract.
 | --- | --- | --- |
 | Local Docker computers | `SANDBOX_PROVIDER=docker` | `SANDBOX_SUPERVISOR_TOKEN`, computer image, Docker socket for supervisor |
 | UI only, no computers | `SANDBOX_PROVIDER=none` | No provider credential; published-images Compose still requires `SANDBOX_SUPERVISOR_TOKEN` |
-| Managed remote desktop | `e2b` / `daytona` / `box` | `SANDBOX_SUPERVISOR_TOKEN` (published-images Compose), matching API key (and optional URL knobs for Daytona/Box) |
+| Managed remote desktop | `daytona` / `box` | `SANDBOX_SUPERVISOR_TOKEN` (published-images Compose), matching API key (and optional URL knobs for Daytona/Box) |
 
 Published-images [Compose](../infra/compose/docker-compose.images.yml) defaults to **`docker`**.
 It always starts the supervisor and requires `SANDBOX_SUPERVISOR_TOKEN`, including for `none`
@@ -37,7 +37,7 @@ curl -fsS http://127.0.0.1:3100/health
 
 Missing supervisor token is a **setup failure**: do not treat `sandbox: "none"` as success for this path.
 
-Signup and local Docker computers work **without** an E2B (or other remote) account.
+Signup and local Docker computers work **without** a remote sandbox account.
 
 ## `none`
 
@@ -49,7 +49,6 @@ Set `SANDBOX_PROVIDER` to exactly one of:
 
 | Value | Credential | Notes |
 | --- | --- | --- |
-| `e2b` | `E2B_API_KEY` | Hosted sandboxes |
 | `daytona` | `DAYTONA_API_KEY` | Optional `DAYTONA_API_URL`, `DAYTONA_TARGET`, `DAYTONA_SNAPSHOT` |
 | `box` | `BOX_API_KEY` | Optional `BOX_API_URL` (see `.env.example`) |
 
@@ -67,7 +66,7 @@ docker compose --env-file .env -f docker-compose.images.yml up -d
 curl -fsS http://127.0.0.1:3100/health
 ```
 
-Confirm `sandbox` equals the intended provider (`e2b`, `daytona`, or `box`).
+Confirm `sandbox` equals the intended provider (`daytona` or `box`).
 HTTP 200 alone does not verify a remote provider: a missing API key falls back to `sandbox: "none"`.
 A present but invalid key still reports the selected provider. Open a bot's computer to verify
 provisioning and desktop access.

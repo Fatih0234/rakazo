@@ -732,7 +732,7 @@ describe("computer screen url", () => {
         defaultModel: "fake-model",
         webOrigin: "http://127.0.0.1:5173",
         screenProxySecret: "fake-test-secret",
-        sandboxProvider: "e2b",
+        sandboxProvider: "docker",
       },
       dataDir: "/tmp/rakazo-router-test",
     } as unknown as RouterDeps;

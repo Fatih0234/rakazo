@@ -5,8 +5,8 @@ import {
   SingleScreenClaimTracker,
   withComputerScreenAvailability,
 } from "./computer-screens.js";
-import { ManagedSandboxEmulator } from "./e2b-emulator.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
+import { ManagedSandboxEmulator } from "./managed-emulator.js";
 
 const writer = {
   operationId: "1",

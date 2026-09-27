@@ -38,7 +38,6 @@ export interface AppEnv {
   cursorApiKey: string | undefined;
   agentRuntime: string;
   deploymentModelKey: string | undefined;
-  e2bApiKey: string | undefined;
   daytonaApiKey: string | undefined;
   daytonaApiUrl: string | undefined;
   daytonaTarget: string | undefined;
@@ -129,7 +128,6 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     agentRuntime: source.AGENT_RUNTIME ?? "pi",
     // Provider, model and key resolve together: see resolveDeploymentModel.
     deploymentModelKey: deploymentModel.key,
-    e2bApiKey: source.E2B_API_KEY,
     daytonaApiKey: source.DAYTONA_API_KEY,
     daytonaApiUrl: source.DAYTONA_API_URL,
     daytonaTarget: source.DAYTONA_TARGET,

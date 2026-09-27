@@ -6,7 +6,6 @@ export function resolveSandboxProvider(source: NodeJS.ProcessEnv = process.env):
   if (configured !== undefined && !configured.trim()) return "none";
   const requested = configured?.trim() || "docker";
   if (requested === "none") return "none";
-  if (requested === "e2b" && !optional(source.E2B_API_KEY)) return "none";
   if (requested === "daytona" && !optional(source.DAYTONA_API_KEY)) return "none";
   if (requested === "createos" && !optional(source.CREATEOS_SANDBOX_API_KEY)) return "none";
   if (requested === "box" && !optional(source.BOX_API_KEY)) return "none";
@@ -26,7 +25,6 @@ export function sandboxProviderOptionsFromEnv(
   source: NodeJS.ProcessEnv = process.env,
 ): Pick<
   SandboxProviderOptions,
-  | "e2bApiKey"
   | "daytonaApiKey"
   | "daytonaApiUrl"
   | "daytonaTarget"
@@ -38,7 +36,6 @@ export function sandboxProviderOptionsFromEnv(
   | "boxApiUrl"
 > {
   return {
-    e2bApiKey: source.E2B_API_KEY,
     daytonaApiKey: source.DAYTONA_API_KEY,
     daytonaApiUrl: source.DAYTONA_API_URL,
     daytonaTarget: source.DAYTONA_TARGET,

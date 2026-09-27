@@ -1,12 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  BoxSandboxProvider,
-  CreateOSSandboxProvider,
-  E2BSandboxProvider,
-  PiAgentRuntime,
-} from "@rakazo/adapters";
+import { BoxSandboxProvider, CreateOSSandboxProvider, PiAgentRuntime } from "@rakazo/adapters";
 import type { RunStatus } from "@rakazo/contracts";
 import { isTerminal } from "@rakazo/core";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
@@ -15,45 +10,15 @@ import { sessionCookieHeader } from "./index.js";
 
 if (process.env.VERIFY_PROVIDERS) loadRootEnv();
 
-const liveE2b = Boolean(process.env.VERIFY_PROVIDERS && process.env.E2B_API_KEY);
 const liveBox = Boolean(process.env.VERIFY_PROVIDERS && process.env.BOX_API_KEY);
 const liveCreateos = Boolean(process.env.VERIFY_PROVIDERS && process.env.CREATEOS_SANDBOX_API_KEY);
 const livePi = Boolean(process.env.VERIFY_PROVIDERS && process.env.OPENROUTER_API_KEY);
 const livePiApp = Boolean(livePi && process.env.DATABASE_URL);
 
-const describeE2b = liveE2b ? describe : describe.skip;
 const describeBox = liveBox ? describe : describe.skip;
 const describeCreateos = liveCreateos ? describe : describe.skip;
 const describePi = livePi ? describe : describe.skip;
 const describePiApp = livePiApp ? describe : describe.skip;
-
-describeE2b("live E2B canary", () => {
-  it("provisions a desktop, runs a command, and destroys it", async () => {
-    const sandbox = new E2BSandboxProvider(process.env.E2B_API_KEY!);
-    const ctx = {
-      operationId: "canary",
-      traceId: "canary",
-      spaceId: "canary",
-      userId: "canary",
-      signal: new AbortController().signal,
-    };
-    const computer = await sandbox.provision(
-      { botId: "canary", homePath: "/home/user/rakazo-home" },
-      ctx,
-    );
-    try {
-      await sandbox.prepare(computer, ctx);
-      let stdout = "";
-      for await (const event of sandbox.execute(computer, { argv: ["echo", "e2b-ok"] }, ctx)) {
-        if (event.type === "stdout") stdout += event.data;
-        if (event.type === "exit") expect(event.code).toBe(0);
-      }
-      expect(stdout).toContain("e2b-ok");
-    } finally {
-      await sandbox.destroy(computer, ctx);
-    }
-  }, 120_000);
-});
 
 describeBox("live Box canary", () => {
   it("provisions a desktop, observes it, preserves a file across stop/resume, and destroys it", async () => {

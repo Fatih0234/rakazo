@@ -24,10 +24,10 @@ const compose = parse(readFileSync(composeFile, "utf8")) as {
 const updater = compose.services.updater as ComposeService;
 
 describe("the production computer provider", () => {
-  it.each(["api", "worker"])("lets .env select the %s provider with an E2B default", (name) => {
+  it.each(["api", "worker"])("lets .env select the %s provider with a none default", (name) => {
     expect(compose.services[name]?.env_file).toEqual(["../../.env"]);
     // biome-ignore lint/suspicious/noTemplateCurlyInString: this is the literal Compose expression
-    expect(compose.services[name]?.environment?.SANDBOX_PROVIDER).toBe("${SANDBOX_PROVIDER:-e2b}");
+    expect(compose.services[name]?.environment?.SANDBOX_PROVIDER).toBe("${SANDBOX_PROVIDER:-none}");
   });
 });
 

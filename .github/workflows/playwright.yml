@@ -9,7 +9,6 @@ on:
         type: choice
         options:
           - fake
-          - e2b
           - daytona
           - box
         default: fake
@@ -36,9 +35,6 @@ on:
         required: false
       S3_SECRET_ACCESS_KEY:
         description: Secret key used to publish visual reports
-        required: false
-      E2B_API_KEY:
-        description: E2B API key used only when the E2B sandbox is selected
         required: false
       DAYTONA_API_KEY:
         description: Daytona API key used only when the Daytona sandbox is selected
@@ -75,11 +71,6 @@ jobs:
         # Skip --with-deps: GitHub ubuntu-latest already has Chromium's OS libraries,
         # and apt-get against azure.archive.ubuntu.com can stall until the job timeout.
         run: pnpm --filter @rakazo/web exec playwright install chromium
-      - name: Validate E2B credentials
-        if: inputs.sandbox_provider == 'e2b'
-        env:
-          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-        run: test -n "$E2B_API_KEY"
       - name: Validate Daytona credentials
         if: inputs.sandbox_provider == 'daytona'
         env:
@@ -94,7 +85,6 @@ jobs:
         id: playwright_tests
         env:
           SANDBOX_TEST_PROVIDER: ${{ inputs.sandbox_provider }}
-          E2B_API_KEY: ${{ inputs.sandbox_provider == 'e2b' && secrets.E2B_API_KEY || '' }}
           DAYTONA_API_KEY: ${{ inputs.sandbox_provider == 'daytona' && secrets.DAYTONA_API_KEY || '' }}
           BOX_API_KEY: ${{ inputs.sandbox_provider == 'box' && secrets.BOX_API_KEY || '' }}
         run: pnpm test:e2e -- --sandbox="$SANDBOX_TEST_PROVIDER"

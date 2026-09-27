@@ -1,4 +1,4 @@
-import { ManagedSandboxEmulator } from "./e2b-emulator.js";
+import { ManagedSandboxEmulator } from "./managed-emulator.js";
 
 /** Managed-provider emulator configured with Box identity. */
 export class BoxSandboxEmulator extends ManagedSandboxEmulator {

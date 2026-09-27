@@ -6,15 +6,13 @@ import { DaytonaSandboxEmulator } from "./daytona-emulator.js";
 import { DaytonaSandboxProvider } from "./daytona-sandbox.js";
 import { DesktopSandboxProvider } from "./desktop-sandbox.js";
 import { DockerSandboxProvider } from "./docker-sandbox.js";
-import { ManagedSandboxEmulator } from "./e2b-emulator.js";
-import { E2BSandboxProvider } from "./e2b-sandbox.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
+import { ManagedSandboxEmulator } from "./managed-emulator.js";
 import { NoneSandboxProvider } from "./none-sandbox.js";
 
 export interface SandboxProviderOptions {
   supervisorUrl?: string;
   supervisorToken?: string;
-  e2bApiKey?: string;
   daytonaApiKey?: string;
   daytonaApiUrl?: string;
   daytonaTarget?: string;
@@ -28,7 +26,7 @@ export interface SandboxProviderOptions {
 }
 
 function missingRemoteKey(
-  provider: "e2b" | "daytona" | "createos" | "box",
+  provider: "daytona" | "createos" | "box",
   envName: string,
 ): SandboxProvider {
   return new NoneSandboxProvider(
@@ -41,9 +39,6 @@ export function createSandboxProvider(kind: string, opts: SandboxProviderOptions
     case "none":
     case "":
       return new NoneSandboxProvider();
-    case "e2b":
-      if (!opts.e2bApiKey?.trim()) return missingRemoteKey("e2b", "E2B_API_KEY");
-      return new E2BSandboxProvider(opts.e2bApiKey);
     case "daytona":
       if (!opts.daytonaApiKey?.trim()) return missingRemoteKey("daytona", "DAYTONA_API_KEY");
       return new DaytonaSandboxProvider({
@@ -68,7 +63,7 @@ export function createSandboxProvider(kind: string, opts: SandboxProviderOptions
         opts.supervisorUrl ?? "http://127.0.0.1:7091",
         opts.supervisorToken,
       );
-    case "e2b-emulator":
+    case "managed-emulator":
       return new ManagedSandboxEmulator();
     case "daytona-emulator":
       return new DaytonaSandboxEmulator();
@@ -82,7 +77,7 @@ export function createSandboxProvider(kind: string, opts: SandboxProviderOptions
       return new FakeSandboxProvider();
     default:
       throw new Error(
-        `Unknown SANDBOX_PROVIDER "${kind}". Use none | docker | e2b | daytona | createos | box | e2b-emulator | daytona-emulator | box-emulator | desktop | fake.`,
+        `Unknown SANDBOX_PROVIDER "${kind}". Use none | docker | daytona | createos | box | managed-emulator | daytona-emulator | box-emulator | desktop | fake.`,
       );
   }
 }

@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import { BoxSandboxEmulator } from "./box-emulator.js";
 import { DaytonaSandboxEmulator } from "./daytona-emulator.js";
 import { DesktopSandboxProvider } from "./desktop-sandbox.js";
-import { ManagedSandboxEmulator } from "./e2b-emulator.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
+import { ManagedSandboxEmulator } from "./managed-emulator.js";
 import { provisionPrepared } from "./sandbox-test-support.js";
 
 const ctx = {
