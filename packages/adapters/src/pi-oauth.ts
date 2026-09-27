@@ -360,7 +360,8 @@ export class PiOAuthLogins {
     }
 
     const scope = oauthScopeKey(input.userId, input.spaceId, input.provider);
-    const prepared = await this.withReplacementLock(scope, input.signal, async () => {
+    const lockKey = oauthProviderKey(input.userId, input.provider);
+    const prepared = await this.withReplacementLock(lockKey, input.signal, async () => {
       await this.retireActiveSession(scope, input.signal);
       throwIfAborted(input.signal);
 
@@ -632,16 +633,27 @@ export class PiOAuthLogins {
     }
   }
 
-  /** Retire every sign-in for one provider so a finishing session cannot
-   *  re-persist a credential after disconnect deletes it. */
-  async cancelProvider(input: {
-    userId: string;
-    spaceId: string;
-    provider: string;
-  }): Promise<void> {
-    await this.retireActiveSession(
-      oauthScopeKey(input.userId, input.spaceId, input.provider),
+  /** Retire every sign-in this user started for one provider, in any space —
+   *  disconnect removes the account credential, so no space's session may
+   *  finish afterward. The shared provider lock orders this against begin. */
+  async cancelProvider(input: { userId: string; provider: string }): Promise<void> {
+    await this.withReplacementLock(
+      oauthProviderKey(input.userId, input.provider),
       undefined,
+      async () => {
+        const scopes = [
+          ...new Set(
+            [...this.pending.values()]
+              .filter(
+                (session) => session.userId === input.userId && session.provider === input.provider,
+              )
+              .map((session) => session.scope),
+          ),
+        ];
+        for (const scope of scopes) {
+          await this.retireActiveSession(scope, undefined);
+        }
+      },
     );
   }
 
@@ -688,6 +700,12 @@ function sleep(ms: number): Promise<void> {
 
 function oauthScopeKey(userId: string, spaceId: string, provider: string): string {
   return JSON.stringify([userId, spaceId, provider]);
+}
+
+// Begins and disconnect cancellation share one lock per user+provider so a
+// mid-flight begin cannot install a session after disconnect retires them.
+function oauthProviderKey(userId: string, provider: string): string {
+  return JSON.stringify([userId, provider]);
 }
 
 function httpsAuthorizationUrl(input: string): string {
