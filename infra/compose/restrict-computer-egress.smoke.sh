@@ -12,31 +12,35 @@ bash -n "$script"
 printed="$(bash "$script" --print)"
 [[ -n "$printed" ]] || fail "--print produced no rules"
 
-# Same-bridge traffic (supervisor/web peers under br_netfilter, where bridged
-# frames traverse FORWARD) is returned to Docker's own chains before any drop.
-first_line="$(head -1 <<<"$printed")"
-[[ "$first_line" == 'iptables -I DOCKER-USER -i rakazo-c+ -o rakazo-c+ -j RETURN' ]] ||
-  fail "same-bridge RETURN must be the first DOCKER-USER rule"
-grep -qxF 'ip6tables -I DOCKER-USER -i rakazo-c+ -o rakazo-c+ -j RETURN' <<<"$printed" ||
+# --print emits execution order (each rule inserts at the top of its chain), so
+# the same-bridge RETURN — which must END UP first in DOCKER-USER — prints last
+# among the IPv4 DOCKER-USER rules. Same-bridge traffic (supervisor/web peers
+# under br_netfilter, where bridged frames traverse FORWARD) is returned to
+# Docker's own chains before any drop.
+last_v4_user="$(grep '^iptables -I DOCKER-USER' <<<"$printed" | tail -1)"
+[[ "$last_v4_user" == 'iptables -I DOCKER-USER 1 -i rakazo-c+ -o rakazo-c+ -j RETURN' ]] ||
+  fail "same-bridge RETURN must print last among IPv4 DOCKER-USER rules"
+grep -qxF 'ip6tables -I DOCKER-USER 1 -i rakazo-c+ -o rakazo-c+ -j RETURN' <<<"$printed" ||
   fail "missing IPv6 same-bridge RETURN"
 
 # Every non-public IPv4 block is dropped on the computer bridges' forwarded path.
 for cidr in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 \
   172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4; do
-  grep -qxF "iptables -I DOCKER-USER -i rakazo-c+ -d $cidr -j DROP" <<<"$printed" ||
+  grep -qxF "iptables -I DOCKER-USER 1 -i rakazo-c+ -d $cidr -j DROP" <<<"$printed" ||
     fail "missing DOCKER-USER drop for $cidr"
 done
 
-# Host input: established replies (host/supervisor-initiated control and screen
-# connections) must stay accepted ahead of the catch-all drop for new inbound.
-est_line="$(grep -nx 'iptables -I INPUT -i rakazo-c+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT' <<<"$printed" | head -1 | cut -d: -f1)"
-drop_line="$(grep -nx 'iptables -I INPUT -i rakazo-c+ -j DROP' <<<"$printed" | head -1 | cut -d: -f1)"
-[[ -n "$est_line" && -n "$drop_line" && "$est_line" -lt "$drop_line" ]] ||
-  fail "INPUT established-accept must precede the drop"
+# Host input: the catch-all drop executes before the established-accept so the
+# accept ends up above it (host/supervisor-initiated control and screen
+# connections keep working while the computer cannot open connections out).
+drop_i="$(grep -nx 'iptables -I INPUT 1 -i rakazo-c+ -j DROP' <<<"$printed" | head -1 | cut -d: -f1)"
+est_i="$(grep -nx 'iptables -I INPUT 1 -i rakazo-c+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT' <<<"$printed" | head -1 | cut -d: -f1)"
+[[ -n "$drop_i" && -n "$est_i" && "$drop_i" -lt "$est_i" ]] ||
+  fail "--print must emit the INPUT drop before the established accept"
 
 # IPv6 drops ULA (includes AWS metadata fd00:ec2::254), link-local, multicast, loopback.
 for cidr in ::1/128 fc00::/7 fe80::/10 ff00::/8; do
-  grep -qxF "ip6tables -I DOCKER-USER -i rakazo-c+ -d $cidr -j DROP" <<<"$printed" ||
+  grep -qxF "ip6tables -I DOCKER-USER 1 -i rakazo-c+ -d $cidr -j DROP" <<<"$printed" ||
     fail "missing IPv6 drop for $cidr"
 done
 
@@ -55,7 +59,11 @@ op="$1"; shift || true
 case "$op" in
   -L) exit 0 ;;
   -C) grep -qxF -- "$*" "$state" 2>/dev/null ;;
-  -I) chain="$1"; shift 2; printf '%s %s\n' "$chain" "$*" >>"$state" ;;
+  # -I CHAIN 1 inserts at the top: model it as a prepend so the state file
+  # mirrors real chain order (top to bottom).
+  -I) chain="$1"; shift 2 || true
+      { printf '%s %s\n' "$chain" "$*"; cat "$state" 2>/dev/null; } >"$state.tmp"
+      mv "$state.tmp" "$state" ;;
   -D) grep -vxF -- "$*" "$state" >"$state.tmp" 2>/dev/null || true; mv "$state.tmp" "$state" ;;
 esac
 STUB
@@ -90,11 +98,40 @@ RAKAZO_IPTABLES="$bin/iptables" RAKAZO_IP6TABLES="$bin/ip6tables" bash "$script"
 [[ "$(grep -c '^-I ' "$STUB_DIR/ip6tables.calls")" == 7 ]] ||
   fail "IPv6 rules re-inserted on repeat apply"
 
+# --print output replays verbatim: feeding the printed commands through the
+# stubbed firewall must reproduce the exact chains --apply built.
+replay_dir="$scratch/replay"
+mkdir -p "$replay_dir"
+for tool in iptables ip6tables; do
+  cat >"$replay_dir/$tool" <<'STUB'
+#!/usr/bin/env bash
+name="$(basename "$0")"
+state="$REPLAY_DIR/$name.state"
+if [[ "$1" == "-I" ]]; then
+  chain="$2"; shift 3 || true
+  { printf '%s %s\n' "$chain" "$*"; cat "$state" 2>/dev/null; } >"$state.tmp"
+  mv "$state.tmp" "$state"
+fi
+STUB
+  chmod +x "$replay_dir/$tool"
+done
+REPLAY_DIR="$replay_dir" PATH="$replay_dir:$PATH" bash -c \
+  'while IFS= read -r l; do $l; done' <<<"$printed"
+diff "$v4_state" "$replay_dir/iptables.state" >/dev/null ||
+  fail "--print replay does not reproduce the applied IPv4 chain"
+diff "$v6_state" "$replay_dir/ip6tables.state" >/dev/null ||
+  fail "--print replay does not reproduce the applied IPv6 chain"
+
 # Without ip6tables on PATH the IPv6 family is skipped silently.
 rm -f "$v4_state" "$v6_state" "$v4_calls" "$STUB_DIR/ip6tables.calls"
 RAKAZO_IPTABLES="$bin/iptables" RAKAZO_IP6TABLES="$bin/missing-ip6tables" bash "$script" --apply
 [[ ! -e "$v6_state" ]] || fail "IPv6 rules applied despite missing ip6tables"
 [[ -f "$v4_state" ]] || fail "IPv4 rules missing when ip6tables absent"
+
+# Missing IPv4 iptables must fail loudly — a silent no-op would claim
+# restricted egress while installing nothing.
+RAKAZO_IPTABLES="$bin/missing-iptables" RAKAZO_IP6TABLES="$bin/missing-ip6tables" \
+  bash "$script" --apply && fail "--apply succeeded with no iptables binary" || true
 
 # Docs and Compose keep the flag and script wired together.
 docs="$root/../../docs/self-host.md"

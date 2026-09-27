@@ -141,11 +141,33 @@ remove_family() {
 }
 
 apply_rules() {
-  apply_family "$IPTABLES" egress_rules_v4
-  if command -v "$IP6TABLES" >/dev/null 2>&1 &&
-    "$IP6TABLES" -L DOCKER-USER -n >/dev/null 2>&1; then
-    apply_family "$IP6TABLES" egress_rules_v6
+  # Missing IPv4 iptables must be loud: otherwise this prints success having
+  # installed nothing (e.g. hosts on the nftables backend without the shim).
+  if ! command -v "$IPTABLES" >/dev/null 2>&1; then
+    echo "$IPTABLES not found — restricted egress needs the iptables firewall backend." >&2
+    exit 1
   fi
+  apply_family "$IPTABLES" egress_rules_v4
+  if command -v "$IP6TABLES" >/dev/null 2>&1; then
+    if "$IP6TABLES" -L DOCKER-USER -n >/dev/null 2>&1; then
+      apply_family "$IP6TABLES" egress_rules_v6
+    else
+      echo "ip6tables DOCKER-USER not up yet — IPv6 egress unrestricted until re-run." >&2
+    fi
+  fi
+}
+
+# Emit the commands --apply runs, in execution order: every rule inserts at the
+# top of its chain, so the documented order prints in reverse. Pasting the
+# output verbatim reproduces the intended chain.
+print_family() {
+  local cmd="$1" rules=() line i
+  command -v "$cmd" >/dev/null 2>&1 || return 0
+  mapfile -t rules < <("$2")
+  for ((i = ${#rules[@]} - 1; i >= 0; i--)); do
+    line="${rules[i]}"
+    printf '%s -I %s 1 %s\n' "$cmd" "${line%% *}" "${line#* }"
+  done
 }
 
 require_root() {
@@ -216,12 +238,8 @@ case "$mode" in
     echo "Computer egress rules and persistence removed."
     ;;
   --print)
-    while IFS= read -r line; do
-      printf '%s -I %s %s\n' "$IPTABLES" "${line%% *}" "${line#* }"
-    done < <(egress_rules_v4)
-    while IFS= read -r line; do
-      printf '%s -I %s %s\n' "$IP6TABLES" "${line%% *}" "${line#* }"
-    done < <(egress_rules_v6)
+    print_family "$IPTABLES" egress_rules_v4
+    print_family "$IP6TABLES" egress_rules_v6
     ;;
   -h | --help)
     usage

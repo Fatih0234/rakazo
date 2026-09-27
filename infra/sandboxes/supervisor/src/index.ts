@@ -194,7 +194,12 @@ app.post("/computers", async (c) => {
         );
         if (
           info.Image === desired.Id &&
-          (!networkMode || info.HostConfig.NetworkMode === networkMode) &&
+          // A named-network container must also still be attached: a network
+          // deleted mid-recreate leaves HostConfig.NetworkMode set while
+          // NetworkSettings is empty, and resuming that yields no connectivity.
+          (!networkMode ||
+            (info.HostConfig.NetworkMode === networkMode &&
+              Boolean(info.NetworkSettings?.Networks?.[networkMode]))) &&
           info.Config.User === computerUser &&
           controlPublishOk &&
           (!storage.homeVolume || homeVolumeMatches(info.HostConfig.Mounts, storage.homeVolume))
@@ -1250,23 +1255,43 @@ async function ensureBotNetwork(botId: string) {
 // only caller is the create path, which replaces the computer container anyway,
 // and supervisor/web screen peers rejoin lazily via connectComposeScreenPeers.
 async function rekeyRestrictedBotNetwork(name: string, botId: string) {
-  const network = docker.getNetwork(name);
-  const info = await network.inspect().catch(() => undefined);
-  if (!info) return;
-  if (info.Options?.["com.docker.network.bridge.name"] === computerBridgeNameFor(botId)) {
-    return;
+  const expectedBridge = computerBridgeNameFor(botId);
+  const inspect = () =>
+    docker
+      .getNetwork(name)
+      .inspect()
+      .catch(() => undefined);
+  const hasNamedBridge = (info: Docker.NetworkInspectInfo | undefined) =>
+    info?.Options?.["com.docker.network.bridge.name"] === expectedBridge;
+  const info = await inspect();
+  if (info && !hasNamedBridge(info)) {
+    for (const containerId of Object.keys(info.Containers ?? {})) {
+      await docker
+        .getNetwork(name)
+        .disconnect({ Container: containerId, Force: true })
+        .catch(() => undefined);
+    }
+    const removed = await docker
+      .getNetwork(name)
+      .remove()
+      .then(
+        () => true,
+        () => false,
+      );
+    // Fail closed: attaching the computer to a network the host ruleset does
+    // not match would silently grant unrestricted egress under restricted mode.
+    if (!removed) {
+      throw new Error(`cannot restrict egress: failed to replace unrestricted network ${name}`);
+    }
   }
-  for (const containerId of Object.keys(info.Containers ?? {})) {
-    await network.disconnect({ Container: containerId, Force: true }).catch(() => undefined);
+  if (!info || !hasNamedBridge(info)) {
+    await docker.createNetwork(computerNetworkCreateOptions(botId, "restricted")).catch((error) => {
+      if (!/already exists/i.test(String(error))) throw error;
+    });
   }
-  const removed = await network.remove().then(
-    () => true,
-    () => false,
-  );
-  if (!removed) return;
-  await docker.createNetwork(computerNetworkCreateOptions(botId, "restricted")).catch((error) => {
-    if (!/already exists/i.test(String(error))) throw error;
-  });
+  if (!hasNamedBridge(await inspect())) {
+    throw new Error(`cannot restrict egress: network ${name} is missing the named bridge`);
+  }
 }
 
 async function removeBotNetwork(botId: string) {

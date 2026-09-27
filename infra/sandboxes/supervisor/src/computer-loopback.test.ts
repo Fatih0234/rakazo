@@ -240,7 +240,10 @@ describe("computer loopback provision lifecycle", () => {
         PortBindings: { "7070/tcp": hosts.map((HostIp) => ({ HostIp, HostPort: "0" })) },
       },
       State: { Running: false },
-      NetworkSettings: { Ports: { "6080/tcp": [{ HostIp: "127.0.0.1", HostPort: screenPort }] } },
+      NetworkSettings: {
+        Ports: { "6080/tcp": [{ HostIp: "127.0.0.1", HostPort: screenPort }] },
+        Networks: { [computerNetworkNameFor("bot")]: {} },
+      },
     };
     const existing = {
       id: "existing",
@@ -581,6 +584,7 @@ describe("space computer limit enforcement", () => {
           PortBindings: {},
           Mounts: [],
         },
+        NetworkSettings: { Networks: { [computerNetworkNameFor("bot-existing")]: {} } },
       }),
       start: vi.fn().mockResolvedValue(undefined),
     };
@@ -614,6 +618,67 @@ describe("space computer limit enforcement", () => {
       resumed: true,
     });
     expect(mocks.docker.createContainer).not.toHaveBeenCalled();
+  });
+
+  it("replaces a running container that lost its network attachment", async () => {
+    setupContainerFixture();
+
+    // A named network deleted out from under a container (e.g. a failed rekey)
+    // leaves HostConfig.NetworkMode set while NetworkSettings has no endpoint —
+    // resuming it would report success with zero connectivity, so it must be
+    // replaced instead.
+    const existing = {
+      id: "detached-container",
+      inspect: vi.fn().mockResolvedValue({
+        Image: "image",
+        Config: {
+          User: hostComputerUser(process.getuid?.(), process.getgid?.()),
+          Labels: {
+            "rakazo.managed": "true",
+            "rakazo.botId": "bot-detached",
+            "rakazo.spaceId": "space-1",
+          },
+        },
+        State: { Running: true },
+        HostConfig: {
+          NetworkMode: computerNetworkNameFor("bot-detached"),
+          PortBindings: {},
+          Mounts: [],
+        },
+        NetworkSettings: { Networks: {} },
+      }),
+      start: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+
+    mocks.docker.getContainer.mockReturnValue(existing);
+    mocks.docker.listContainers.mockImplementation(
+      async (opts?: { filters?: { label?: string[] } }) => {
+        const labels = opts?.filters?.label ?? [];
+        if (labels.some((l: string) => l === "rakazo.botId=bot-detached")) {
+          return [
+            {
+              Id: existing.id,
+              Labels: {
+                "rakazo.managed": "true",
+                "rakazo.botId": "bot-detached",
+                "rakazo.spaceId": "space-1",
+              },
+            },
+          ];
+        }
+        return [];
+      },
+    );
+
+    const response = await provisionBot("bot-detached", "space-1");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      id: "new-container-id",
+      resumed: false,
+    });
+    expect(existing.remove).toHaveBeenCalledWith({ force: true });
+    expect(mocks.docker.createContainer).toHaveBeenCalled();
   });
 
   it("counts legacy workspaceId COMPUTER_IMAGE containers toward the limit", async () => {
