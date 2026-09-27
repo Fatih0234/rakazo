@@ -19,6 +19,10 @@ export function MessageHoverMetadata({
       data-testid="message-hover-rail"
       className={`absolute top-1/2 z-10 flex -translate-y-1/2 items-center transition-opacity ${reveal} ${
         side === "end" ? "start-full ms-1" : "end-full me-1"
+      } [@media(hover:none)]:static [@media(hover:none)]:mt-1 [@media(hover:none)]:w-full [@media(hover:none)]:translate-y-0 ${
+        side === "end"
+          ? "[@media(hover:none)]:ms-0 [@media(hover:none)]:justify-start"
+          : "[@media(hover:none)]:me-0 [@media(hover:none)]:justify-end"
       }`}
     >
       {children}

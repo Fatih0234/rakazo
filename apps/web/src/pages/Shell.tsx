@@ -4831,19 +4831,11 @@ const Transcript = memo(function Transcript({
                       ? undefined
                       : `relative w-fit min-w-0 ${
                           message.role === "user"
-                            ? "max-w-[min(84%,calc(100%_-_6rem))] [@media(hover:none)]:max-w-[min(84%,calc(100%_-_3rem))]"
-                            : "max-w-[min(88%,calc(100%_-_6rem))] [@media(hover:none)]:max-w-[min(88%,calc(100%_-_3rem))]"
+                            ? "max-w-[min(84%,calc(100%_-_6rem))] [@media(hover:none)]:max-w-[84%]"
+                            : "max-w-[min(88%,calc(100%_-_6rem))] [@media(hover:none)]:max-w-[88%]"
                         }`
                   }
                 >
-                  {peerReceipt ? null : (
-                    <MessageHoverActions
-                      message={message}
-                      side={message.role === "user" ? "start" : "end"}
-                      onReply={onReply}
-                      onReact={onReact}
-                    />
-                  )}
                   <MessageView
                     artifactTarget={artifactTarget}
                     message={message}
@@ -4875,6 +4867,14 @@ const Transcript = memo(function Transcript({
                     onSpeak={() => onSpeak(message)}
                     onOpenComputer={onOpenComputer}
                   />
+                  {peerReceipt ? null : (
+                    <MessageHoverActions
+                      message={message}
+                      side={message.role === "user" ? "start" : "end"}
+                      onReply={onReply}
+                      onReact={onReact}
+                    />
+                  )}
                 </div>
               </div>
               {!peerReceipt && messageReactions ? (
@@ -5882,7 +5882,7 @@ function MessageHoverActions({
               aria-label={t`React`}
               className={cn(
                 iconButtonClass,
-                "hidden h-7 w-7 [@media(hover:hover)_and_(pointer:fine)]:grid",
+                "h-11 w-11 [@media(hover:hover)_and_(pointer:fine)]:h-7 [@media(hover:hover)_and_(pointer:fine)]:w-7",
               )}
             >
               <Smile size={15} strokeWidth={1.7} />
@@ -5913,7 +5913,7 @@ function MessageHoverActions({
           type="button"
           aria-label={t`Reply`}
           onClick={() => onReply(message)}
-          className={`${iconButtonClass} hidden [@media(hover:hover)_and_(pointer:fine)]:grid`}
+          className={`${iconButtonClass} h-11 w-11 [@media(hover:hover)_and_(pointer:fine)]:h-7 [@media(hover:hover)_and_(pointer:fine)]:w-7`}
         >
           <Reply size={15} strokeWidth={1.7} />
         </button>
@@ -5928,31 +5928,6 @@ function MessageHoverActions({
             <MoreHorizontal size={15} strokeWidth={1.7} />
           </DropdownMenuTrigger>
           <DropdownMenuContent align={side === "end" ? "start" : "end"}>
-            {canReactToThreadMessage(message) ? (
-              <div className="flex gap-0 px-1.5 py-1 [@media(hover:hover)_and_(pointer:fine)]:hidden">
-                {MESSAGE_REACTIONS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    aria-label={emoji}
-                    className="grid h-11 w-11 place-items-center rounded-xl text-2xl hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
-                    onClick={() => {
-                      setMoreOpen(false);
-                      void onReact(message, emoji);
-                    }}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <DropdownMenuItem
-              className="[@media(hover:hover)_and_(pointer:fine)]:hidden"
-              onClick={() => onReply(message)}
-            >
-              <Reply size={15} />
-              <Trans>Reply</Trans>
-            </DropdownMenuItem>
             <DropdownMenuItem onClick={copyMessage}>
               <Copy size={14} strokeWidth={1.7} />
               <Trans>Copy</Trans>
