@@ -122,11 +122,21 @@ diff "$v4_state" "$replay_dir/iptables.state" >/dev/null ||
 diff "$v6_state" "$replay_dir/ip6tables.state" >/dev/null ||
   fail "--print replay does not reproduce the applied IPv6 chain"
 
-# Without ip6tables on PATH the IPv6 family is skipped silently.
+# Without ip6tables on PATH the IPv6 family is skipped only when the host has
+# no global IPv6 (loopback scope 10). On a dual-stack host (scope 00) the same
+# missing chain must fail loudly instead of announcing success.
+inet6_local="$scratch/if_inet6.local"
+inet6_global="$scratch/if_inet6.global"
+printf '%s\n' "00000000000000000000000000000001 01 80 10 80 lo" >"$inet6_local"
+printf '%s\n' "20010db800000000000000000000000001 02 40 00 00 eth0" >"$inet6_global"
 rm -f "$v4_state" "$v6_state" "$v4_calls" "$STUB_DIR/ip6tables.calls"
-RAKAZO_IPTABLES="$bin/iptables" RAKAZO_IP6TABLES="$bin/missing-ip6tables" bash "$script" --apply
+RAKAZO_IF_INET6="$inet6_local" RAKAZO_IPTABLES="$bin/iptables" \
+  RAKAZO_IP6TABLES="$bin/missing-ip6tables" bash "$script" --apply
 [[ ! -e "$v6_state" ]] || fail "IPv6 rules applied despite missing ip6tables"
 [[ -f "$v4_state" ]] || fail "IPv4 rules missing when ip6tables absent"
+RAKAZO_IF_INET6="$inet6_global" RAKAZO_IPTABLES="$bin/iptables" \
+  RAKAZO_IP6TABLES="$bin/missing-ip6tables" bash "$script" --apply &&
+  fail "--apply succeeded on dual-stack host without programmable IPv6" || true
 
 # Missing IPv4 iptables must fail loudly — a silent no-op would claim
 # restricted egress while installing nothing.

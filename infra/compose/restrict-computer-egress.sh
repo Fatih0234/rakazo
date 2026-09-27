@@ -33,6 +33,7 @@ set -Eeuo pipefail
 IPTABLES="${RAKAZO_IPTABLES:-iptables}"
 IP6TABLES="${RAKAZO_IP6TABLES:-ip6tables}"
 SYSTEMCTL="${RAKAZO_SYSTEMCTL:-systemctl}"
+IF_INET6="${RAKAZO_IF_INET6:-/proc/net/if_inet6}"
 BRIDGE_PREFIX="rakazo-c"
 INSTALLED_PATH=/usr/local/sbin/rakazo-computer-egress
 UNIT_PATH=/etc/systemd/system/rakazo-computer-egress.service
@@ -148,13 +149,21 @@ apply_rules() {
     exit 1
   fi
   apply_family "$IPTABLES" egress_rules_v4
-  if command -v "$IP6TABLES" >/dev/null 2>&1; then
-    if "$IP6TABLES" -L DOCKER-USER -n >/dev/null 2>&1; then
-      apply_family "$IP6TABLES" egress_rules_v6
-    else
-      echo "ip6tables DOCKER-USER not up yet — IPv6 egress unrestricted until re-run." >&2
-    fi
+  if command -v "$IP6TABLES" >/dev/null 2>&1 && "$IP6TABLES" -L DOCKER-USER -n >/dev/null 2>&1; then
+    apply_family "$IP6TABLES" egress_rules_v6
+  elif host_has_ipv6; then
+    # A dual-stack host without a programmable IPv6 chain would keep computer
+    # IPv6 egress unrestricted while this script reports success — fail closed.
+    echo "$IP6TABLES DOCKER-USER is unavailable but the host has global IPv6 —" >&2
+    echo "computers would keep unrestricted IPv6 egress. Start Docker first (it" >&2
+    echo "creates the chain) or disable IPv6, then re-run." >&2
+    exit 1
   fi
+}
+
+# Scope-00 (global) entries in if_inet6 mean the host routes IPv6.
+host_has_ipv6() {
+  [[ -f $IF_INET6 ]] && awk '$4 == "00" { found = 1 } END { exit !found }' "$IF_INET6"
 }
 
 # Emit the commands --apply runs, in execution order: every rule inserts at the

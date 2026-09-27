@@ -192,6 +192,22 @@ app.post("/computers", async (c) => {
           info.HostConfig.PortBindings,
           controlViaLoopback,
         );
+        // A network created while egress was open keeps a generic br-* bridge
+        // the host ruleset does not match, so restricted mode must not resume a
+        // computer on it — the replace path rekeys the network instead.
+        const restrictedBridgeOk =
+          !networkMode ||
+          computerEgressMode !== "restricted" ||
+          networkMode !== computerNetworkNameFor(body.botId) ||
+          (await docker
+            .getNetwork(networkMode)
+            .inspect()
+            .then(
+              (net) =>
+                net.Options?.["com.docker.network.bridge.name"] ===
+                computerBridgeNameFor(body.botId),
+              () => false,
+            ));
         if (
           info.Image === desired.Id &&
           // A named-network container must also still be attached: a network
@@ -200,6 +216,7 @@ app.post("/computers", async (c) => {
           (!networkMode ||
             (info.HostConfig.NetworkMode === networkMode &&
               Boolean(info.NetworkSettings?.Networks?.[networkMode]))) &&
+          restrictedBridgeOk &&
           info.Config.User === computerUser &&
           controlPublishOk &&
           (!storage.homeVolume || homeVolumeMatches(info.HostConfig.Mounts, storage.homeVolume))
@@ -1265,22 +1282,25 @@ async function rekeyRestrictedBotNetwork(name: string, botId: string) {
     info?.Options?.["com.docker.network.bridge.name"] === expectedBridge;
   const info = await inspect();
   if (info && !hasNamedBridge(info)) {
-    for (const containerId of Object.keys(info.Containers ?? {})) {
-      await docker
-        .getNetwork(name)
-        .disconnect({ Container: containerId, Force: true })
-        .catch(() => undefined);
+    const network = docker.getNetwork(name);
+    const containerIds = Object.keys(info.Containers ?? {});
+    for (const containerId of containerIds) {
+      await network.disconnect({ Container: containerId, Force: true }).catch(() => undefined);
     }
-    const removed = await docker
-      .getNetwork(name)
-      .remove()
-      .then(
-        () => true,
-        () => false,
-      );
+    const removed = await network.remove().then(
+      () => true,
+      () => false,
+    );
     // Fail closed: attaching the computer to a network the host ruleset does
     // not match would silently grant unrestricted egress under restricted mode.
+    // Reattach first so a failed rekey does not strand a running computer
+    // without connectivity.
     if (!removed) {
+      await Promise.all(
+        containerIds.map((containerId) =>
+          network.connect({ Container: containerId }).catch(() => undefined),
+        ),
+      );
       throw new Error(`cannot restrict egress: failed to replace unrestricted network ${name}`);
     }
   }

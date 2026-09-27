@@ -113,8 +113,14 @@ and the ruleset exempts traffic whose in- and out-interface are both `rakazo-c*`
 any drop (that exemption is load-bearing on hosts where `br_netfilter` feeds bridged
 frames through `FORWARD`). Rules match interface names rather than subnets, so computer
 create/delete cycles need no firewall maintenance; deleting a computer removes its
-traffic from the match and nothing else. Computers provisioned before the flag flips
-keep their old bridge until the computer is deleted or replaced.
+traffic from the match and nothing else. A computer provisioned before the flag flips
+is replaced on its next provision — resuming it on an unnamed bridge would bypass the
+restriction.
+
+To disable restricted egress, set `SANDBOX_COMPUTER_EGRESS=open`, recreate the
+supervisor, and run `sudo bash infra/compose/restrict-computer-egress.sh --remove`.
+The flag alone does not uninstall the host rules, which keep matching the still-named
+`rakazo-c*` bridges until removed.
 
 Do not enable restricted egress if computers must reach LAN services, an internal proxy,
 or endpoints bound to the host. Requires Linux Docker Engine with the iptables backend —
