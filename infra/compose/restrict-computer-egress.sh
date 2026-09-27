@@ -149,11 +149,18 @@ apply_rules() {
     exit 1
   fi
   apply_family "$IPTABLES" egress_rules_v4
-  if command -v "$IP6TABLES" >/dev/null 2>&1 && "$IP6TABLES" -L DOCKER-USER -n >/dev/null 2>&1; then
+  if ! command -v "$IP6TABLES" >/dev/null 2>&1; then
+    if host_has_ipv6; then
+      echo "$IP6TABLES not found but the host has global IPv6 — computers would" >&2
+      echo "keep unrestricted IPv6 egress. Install ip6tables or disable IPv6." >&2
+      exit 1
+    fi
+  elif "$IP6TABLES" -L DOCKER-USER -n >/dev/null 2>&1 ||
+    { host_has_ipv6 && wait_for_docker_user "$IP6TABLES"; }; then
+    # The chain can lag dockerd startup; on dual-stack hosts it gets the same
+    # grace window apply_family gives IPv4 before we reject the host.
     apply_family "$IP6TABLES" egress_rules_v6
   elif host_has_ipv6; then
-    # A dual-stack host without a programmable IPv6 chain would keep computer
-    # IPv6 egress unrestricted while this script reports success — fail closed.
     echo "$IP6TABLES DOCKER-USER is unavailable but the host has global IPv6 —" >&2
     echo "computers would keep unrestricted IPv6 egress. Start Docker first (it" >&2
     echo "creates the chain) or disable IPv6, then re-run." >&2

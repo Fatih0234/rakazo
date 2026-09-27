@@ -206,7 +206,16 @@ app.post("/computers", async (c) => {
               (net) =>
                 net.Options?.["com.docker.network.bridge.name"] ===
                 computerBridgeNameFor(body.botId),
-              () => false,
+              (error) => {
+                // A missing network is incompatible; transient inspect
+                // failures must surface instead of force-replacing a
+                // healthy computer.
+                const status = (error as { statusCode?: number })?.statusCode;
+                if (status === 404 || /no such network|not found/i.test(String(error))) {
+                  return false;
+                }
+                throw error;
+              },
             ));
         if (
           info.Image === desired.Id &&
@@ -1298,7 +1307,9 @@ async function rekeyRestrictedBotNetwork(name: string, botId: string) {
     if (!removed) {
       await Promise.all(
         containerIds.map((containerId) =>
-          network.connect({ Container: containerId }).catch(() => undefined),
+          network.connect({ Container: containerId }).catch((error) => {
+            if (!/already exists|already connected/i.test(String(error))) throw error;
+          }),
         ),
       );
       throw new Error(`cannot restrict egress: failed to replace unrestricted network ${name}`);
