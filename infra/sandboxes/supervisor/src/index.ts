@@ -24,7 +24,9 @@ import {
   COMPUTER_IMAGE,
   COMPUTER_UID,
   COMPUTER_USER,
+  computerBridgeNameFor,
   computerHomeStorage,
+  computerNetworkCreateOptions,
   computerNetworkNameFor,
   computerNetworkNamesForCleanup,
   computerResourceLimits,
@@ -36,6 +38,7 @@ import {
   legacyNetworkOwnedSolelyBy,
   publishedLoopbackControlHostPort,
   resolveComputerControlEndpoint,
+  resolveComputerEgressMode,
   resolveScreenNetworkMode,
   resolveScreenPublishTarget,
   resolveSpaceComputerLimit,
@@ -94,6 +97,7 @@ let imageReady: Promise<void> | undefined;
 let supervisorInfo: Docker.ContainerInspectInfo | undefined;
 const supervisorToken = resolveSupervisorToken(process.env);
 const screenNetworkMode = resolveScreenNetworkMode(process.env.SANDBOX_SCREEN_NETWORK);
+const computerEgressMode = resolveComputerEgressMode();
 const teamScreenLimit = resolveTeamScreenLimit();
 // Host-run supervisors on Docker Desktop (macOS/Windows) cannot reach container
 // IPs, so computer control must use a published loopback port instead.
@@ -807,6 +811,13 @@ function startSupervisor() {
   // and pass its healthcheck, then fail the first POST /computers with a 500 that reads like a
   // Docker problem. Failing here names the variable while the deployment is still coming up.
   computerResourceLimits();
+  if (computerEgressMode === "restricted") {
+    // Enforcement is host-side (DOCKER-USER/INPUT on rakazo-c* bridges); the flag
+    // only names the interfaces. Without the host script, egress stays open.
+    logger.warn(
+      "SANDBOX_COMPUTER_EGRESS=restricted requires the host firewall rules from infra/compose/restrict-computer-egress.sh (see docs/self-host.md)",
+    );
+  }
   const port = Number(process.env.SUPERVISOR_PORT ?? 7091);
   const hostname = process.env.SUPERVISOR_HOST ?? "127.0.0.1";
   const server = serve({ fetch: app.fetch, hostname, port }, () => {
@@ -1223,13 +1234,39 @@ async function connectComposeScreenPeers(networkName: string, info: Docker.Conta
 }
 
 async function ensureBotNetwork(botId: string) {
-  const name = computerNetworkNameFor(botId);
   return docker
-    .createNetwork({ Name: name, Driver: "bridge", CheckDuplicate: true })
-    .catch((error) => {
+    .createNetwork(computerNetworkCreateOptions(botId, computerEgressMode))
+    .catch(async (error) => {
       // Existing networks and concurrent provision requests are both safe.
       if (!/already exists/i.test(String(error))) throw error;
+      if (computerEgressMode === "restricted") {
+        await rekeyRestrictedBotNetwork(computerNetworkNameFor(botId), botId);
+      }
     });
+}
+
+// A network created before SANDBOX_COMPUTER_EGRESS=restricted has a generic br-*
+// bridge the host ruleset does not match. Recreate it with the named bridge: the
+// only caller is the create path, which replaces the computer container anyway,
+// and supervisor/web screen peers rejoin lazily via connectComposeScreenPeers.
+async function rekeyRestrictedBotNetwork(name: string, botId: string) {
+  const network = docker.getNetwork(name);
+  const info = await network.inspect().catch(() => undefined);
+  if (!info) return;
+  if (info.Options?.["com.docker.network.bridge.name"] === computerBridgeNameFor(botId)) {
+    return;
+  }
+  for (const containerId of Object.keys(info.Containers ?? {})) {
+    await network.disconnect({ Container: containerId, Force: true }).catch(() => undefined);
+  }
+  const removed = await network.remove().then(
+    () => true,
+    () => false,
+  );
+  if (!removed) return;
+  await docker.createNetwork(computerNetworkCreateOptions(botId, "restricted")).catch((error) => {
+    if (!/already exists/i.test(String(error))) throw error;
+  });
 }
 
 async function removeBotNetwork(botId: string) {
