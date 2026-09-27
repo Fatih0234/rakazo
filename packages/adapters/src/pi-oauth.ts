@@ -6,7 +6,7 @@ import type {
   OAuthCredential,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import type { ModelCredentialRetireReason } from "@rakazo/adapter-kit";
+import type { ModelCredentialFailedState, ModelCredentialRetireReason } from "@rakazo/adapter-kit";
 import {
   MAX_MODEL_CONTEXT_WINDOW,
   MAX_MODEL_MAX_TOKENS,
@@ -63,26 +63,56 @@ const TERMINAL_REFRESH_ERROR_MARKERS = [
   "refresh_token_expired",
   "refresh_token_reused",
   "refresh_token_invalidated",
+  // pi's Kimi Coding refresh reports a dead credential (401, 403, or a body
+  // `error: "invalid_grant"`) as this message without embedding the OAuth
+  // marker text itself.
+  "Kimi Code token refresh unauthorized",
 ] as const;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // Word-ish boundaries keep `invalid_grant` from matching a longer token such
 // as `not_invalid_grant`, while still matching the quoted JSON bodies pi embeds
 // in its refresh errors.
 const TERMINAL_REFRESH_ERROR_PATTERNS = TERMINAL_REFRESH_ERROR_MARKERS.map(
-  (marker) => [marker, new RegExp(`(^|[^A-Za-z0-9_])${marker}([^A-Za-z0-9_]|$)`)] as const,
+  (marker) =>
+    [marker, new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(marker)}([^A-Za-z0-9_]|$)`)] as const,
 );
+
+// pi embeds the token endpoint's HTTP status inside refresh error messages —
+// `failed (400):` for OpenAI Codex, `(HTTP 400)` for xAI, `(status 401)` for
+// Kimi Code, `status=400` inside Anthropic's flattened details, and
+// `401 Unauthorized:` at the start for GitHub Copilot — so extract only those
+// anchored shapes. A loose `\d{3}` would also match unrelated numbers quoted
+// in response bodies.
+const REFRESH_ERROR_STATUS_PATTERNS = [
+  /\bHTTP (\d{3})\b/gi,
+  /\bstatus[= ](\d{3})\b/gi,
+  /\((\d{3})\)/g,
+  /^(\d{3})(?=[\s:])/g,
+];
+
+// OAuth terminal rejections arrive as 400/401/403; a 5xx or unparseable status
+// stays transient even when the response body quotes a marker.
+const TERMINAL_REFRESH_HTTP_STATUSES = new Set([400, 401, 403]);
 
 const MAX_REFRESH_ERROR_CHAIN_DEPTH = 10;
 
 /**
  * The matched terminal marker when a refresh failure permanently kills the
- * stored credential, `undefined` for transient failures (timeouts, 5xx,
- * malformed or unknown responses) that must not retire it. pi wraps provider
- * errors in `ModelsError("oauth", "OAuth refresh failed for <provider>",
- * { cause })`, and the provider-level message embeds the token endpoint's HTTP
- * status and body, so inspect the whole `cause` chain's messages.
+ * stored credential, `undefined` for transient failures (timeouts, network
+ * errors, 5xx, malformed or unknown responses) that must not retire it. pi
+ * wraps provider errors in `ModelsError("oauth", "OAuth refresh failed for
+ * <provider>", { cause })`, and the provider-level message embeds the token
+ * endpoint's HTTP status and body, so inspect the whole `cause` chain: a
+ * marker retires only when a terminal 4xx status accompanies it anywhere in
+ * the chain — a 5xx body can still quote `invalid_grant` and must not retire.
  */
 export function terminalOAuthRefreshErrorMarker(error: unknown): string | undefined {
+  let marker: string | undefined;
+  let terminalStatus = false;
   let current: unknown = error;
   for (
     let depth = 0;
@@ -91,13 +121,16 @@ export function terminalOAuthRefreshErrorMarker(error: unknown): string | undefi
   ) {
     const message =
       current instanceof Error ? current.message : typeof current === "string" ? current : "";
-    const marker = TERMINAL_REFRESH_ERROR_PATTERNS.find(([, pattern]) =>
-      pattern.test(message),
-    )?.[0];
-    if (marker) return marker;
+    marker ??= TERMINAL_REFRESH_ERROR_PATTERNS.find(([, pattern]) => pattern.test(message))?.[0];
+    for (const pattern of REFRESH_ERROR_STATUS_PATTERNS) {
+      for (const match of message.matchAll(pattern)) {
+        if (TERMINAL_REFRESH_HTTP_STATUSES.has(Number(match[1]))) terminalStatus = true;
+      }
+    }
+    if (marker !== undefined && terminalStatus) return marker;
     current = current instanceof Error ? current.cause : undefined;
   }
-  return undefined;
+  return marker !== undefined && terminalStatus ? marker : undefined;
 }
 
 export type StoredModelSecret =
@@ -304,6 +337,34 @@ export function secretValuesToRedact(secret: StoredModelSecret): string[] {
   return [secret.credential.access, secret.credential.refresh].filter(Boolean);
 }
 
+/**
+ * Build the stale-failure fence `retireModelCredential` applies inside its
+ * transaction. The predicate reports whether the credential's current secret
+ * row still decrypts to the exact OAuth material whose refresh failed — same
+ * refresh token and expiry — so a row rewritten by a concurrent successful
+ * refresh or reconnect skips the delete instead of losing the newer tokens.
+ * Anything that cannot be verified (unreadable ciphertext, non-OAuth
+ * material) reports false so the delete is skipped rather than destroying a
+ * credential it cannot prove stale.
+ */
+export function matchesFailedOAuthSecret(
+  load: (ciphertext: string, secretId: string) => string,
+  failed: ModelCredentialFailedState,
+): (secret: { id: string; ciphertext: string }) => boolean {
+  return (secret) => {
+    try {
+      const stored = parseModelSecret(load(secret.ciphertext, secret.id));
+      return (
+        stored.kind === "oauth" &&
+        stored.credential.refresh === failed.refresh &&
+        stored.credential.expires === failed.expires
+      );
+    } catch {
+      return false;
+    }
+  };
+}
+
 export function loadProviderOAuth(providerId: string): OAuthAuth | undefined {
   return providerCatalog().getProvider(providerId)?.auth.oauth;
 }
@@ -317,7 +378,11 @@ function providerCatalog() {
 
 type ResolveModelOpts = {
   persist?: (next: string) => Promise<void>;
-  retire?: (reason: ModelCredentialRetireReason, detail?: string) => Promise<void>;
+  retire?: (
+    reason: ModelCredentialRetireReason,
+    detail?: string,
+    failed?: ModelCredentialFailedState,
+  ) => Promise<void>;
   now?: number;
   oauth?: Pick<OAuthAuth, "refresh" | "toAuth">;
   signal?: AbortSignal;
@@ -347,7 +412,10 @@ export async function resolveModelAuth(
       const marker = terminalOAuthRefreshErrorMarker(error);
       if (marker && opts?.retire) {
         try {
-          await opts.retire("terminal-refresh-failure", marker);
+          // `credential` is still the stored material the failed refresh was
+          // attempted on — retirement fences on it so a concurrently persisted
+          // newer credential survives the delete.
+          await opts.retire("terminal-refresh-failure", marker, credential);
         } catch (retireError) {
           // A retirement failure must never mask the refresh error the caller sees.
           getLogger().error("model credential retirement failed", retireError);
@@ -524,9 +592,10 @@ export class PiOAuthLogins {
       input.signal?.removeEventListener("abort", abortFromRequest);
       if (abort.signal.aborted) throw abort.signal.reason ?? new Error("Sign-in cancelled.");
       session.expiresTimer = setTimeout(() => {
-        // Expire even a "finalizing" session: finish() persists on a detached
-        // signal, so aborting cannot corrupt the write — but returning early
-        // here would leak the session in `pending` forever when a persist hangs.
+        // Sweep even a "finalizing" session: finish() persists on the session
+        // signal, so this abort fences its write — a late commit cannot
+        // overwrite a replacement login — and removing the session keeps a
+        // hung persist from pinning it in `pending` forever.
         session.abort.abort(new Error("Sign-in expired."));
         this.removeSession(session);
       }, started.expiresInSeconds * 1000);
@@ -599,12 +668,15 @@ export class PiOAuthLogins {
     if (result.status !== "connected") return result;
 
     // The state transition is synchronous, so cancel either wins before this claim or waits for
-    // the finalization to settle. The finalization signal is intentionally detached from cancel.
+    // the finalization to settle. Cancellation stays detached from the write —
+    // cancel() awaits `finishing` instead of aborting — while the session
+    // signal itself fences it: expiry and abortAll abort a finalizing write so
+    // it cannot land after the session was swept and clobber a replacement.
     const finishing = deferred<void>();
     session.finishing = finishing.promise;
     session.state = "finalizing";
     try {
-      const value = await persist({ ...result, signal: new AbortController().signal });
+      const value = await persist({ ...result, signal: session.abort.signal });
       session.state = "consumed";
       this.removeSession(session);
       session.abort.abort();

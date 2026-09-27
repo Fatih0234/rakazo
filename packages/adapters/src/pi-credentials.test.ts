@@ -44,7 +44,7 @@ describe("PiRuntimeCredentialStore", () => {
     expect(await store.list()).toEqual([{ providerId: "openai-codex", type: "oauth" }]);
   });
 
-  it("schedules retirement once when a mid-run refresh is terminally rejected", async () => {
+  it("retires once when a mid-run refresh is terminally rejected", async () => {
     const retire = vi.fn(async () => {});
     const store = new PiRuntimeCredentialStore("openai-codex", credential(), undefined, retire);
     const failure = new Error("OAuth refresh failed for openai-codex", {
@@ -58,9 +58,47 @@ describe("PiRuntimeCredentialStore", () => {
     ).rejects.toBe(failure);
 
     expect(retire).toHaveBeenCalledTimes(1);
-    expect(retire).toHaveBeenCalledWith("terminal-refresh-failure", "invalid_grant");
+    expect(retire).toHaveBeenCalledWith(
+      "terminal-refresh-failure",
+      "invalid_grant",
+      // The credential state the failed refresh was attempted on.
+      expect.objectContaining({ refresh: "refresh-token" }),
+    );
     // The failed refresh must not clear the in-memory credential itself.
     expect(await store.list()).toEqual([{ providerId: "openai-codex", type: "oauth" }]);
+  });
+
+  it("settles retirement before the refresh error surfaces", async () => {
+    let releaseRetire!: () => void;
+    const retireGate = new Promise<void>((resolve) => {
+      releaseRetire = resolve;
+    });
+    const retire = vi.fn(() => retireGate);
+    const store = new PiRuntimeCredentialStore("openai-codex", credential(), undefined, retire);
+    const failure = new Error("OAuth refresh failed for openai-codex", {
+      cause: new Error('OpenAI Codex token refresh failed (400): {"error":"invalid_grant"}'),
+    });
+
+    let settled = false;
+    const modification = store
+      .modify("openai-codex", async () => {
+        throw failure;
+      })
+      .then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+    // The delete must commit before the failure can be observed.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+
+    releaseRetire();
+    await modification;
+    expect(settled).toBe(true);
   });
 
   it("does not retire on transient mid-run refresh failures", async () => {
@@ -82,7 +120,7 @@ describe("PiRuntimeCredentialStore", () => {
     expect(retire).not.toHaveBeenCalled();
   });
 
-  it("surfaces the refresh error when scheduled retirement fails", async () => {
+  it("surfaces the refresh error when the awaited retirement fails", async () => {
     const retire = vi.fn(async () => {
       throw new Error("database gone");
     });
@@ -94,9 +132,10 @@ describe("PiRuntimeCredentialStore", () => {
         throw failure;
       }),
     ).rejects.toBe(failure);
-    expect(retire).toHaveBeenCalledWith("terminal-refresh-failure", "refresh_token_reused");
-    // Let the detached retirement settle; its failure is logged, not rethrown.
-    await Promise.resolve();
-    await Promise.resolve();
+    expect(retire).toHaveBeenCalledWith(
+      "terminal-refresh-failure",
+      "refresh_token_reused",
+      expect.objectContaining({ refresh: "refresh-token" }),
+    );
   });
 });

@@ -56,7 +56,7 @@ type StoredPreferenceRow = {
   credentialId: string;
 };
 
-type StoredSecretRow = { id: string };
+type StoredSecretRow = { id: string; ciphertext?: string };
 
 function retirePrisma(state: {
   credentials: StoredCredentialRow[];
@@ -102,6 +102,10 @@ function retirePrisma(state: {
       }),
     },
     secret: {
+      findFirst: vi.fn(
+        async (args: { where: { id: string }; select?: Record<string, boolean> }) =>
+          state.secrets.find((row) => row.id === args.where.id) ?? null,
+      ),
       deleteMany: vi.fn(async (args: { where: { id: string } }) => {
         const before = state.secrets.length;
         state.secrets = state.secrets.filter((row) => row.id !== args.where.id);
@@ -177,6 +181,72 @@ describe("retireModelCredential", () => {
 
     expect(state.credentials).toEqual([codexCredential({ id: "cred-voice-shared" })]);
     expect(state.secrets).toEqual([{ id: "secret-codex" }]);
+  });
+
+  it("skips deletion when the stored secret no longer matches the failed state", async () => {
+    // A concurrent successful refresh rewrote the same secret row in place, so
+    // the row still on the credential holds newer material than the failure.
+    const state = {
+      credentials: [codexCredential()],
+      preferences: [codexPreference()],
+      secrets: [{ id: "secret-codex", ciphertext: "cipher-rotated" }],
+    };
+    const { prisma, tx } = retirePrisma(state);
+
+    await retireModelCredential(prisma, {
+      userId: "user-1",
+      credentialId: "cred-codex",
+      secretId: "secret-codex",
+      matchesFailedSecret: (row) => row.ciphertext === "cipher-failed",
+    });
+
+    expect(tx.secret.findFirst).toHaveBeenCalledWith({
+      where: { id: "secret-codex" },
+      select: { id: true, ciphertext: true },
+    });
+    expect(tx.userModelCredential.delete).not.toHaveBeenCalled();
+    expect(state.credentials).toHaveLength(1);
+    expect(state.preferences).toHaveLength(1);
+    expect(state.secrets).toHaveLength(1);
+  });
+
+  it("deletes the credential when the stored secret still matches the failed state", async () => {
+    const state = {
+      credentials: [codexCredential()],
+      preferences: [codexPreference()],
+      secrets: [{ id: "secret-codex", ciphertext: "cipher-failed" }],
+    };
+    const { prisma } = retirePrisma(state);
+
+    await retireModelCredential(prisma, {
+      userId: "user-1",
+      credentialId: "cred-codex",
+      secretId: "secret-codex",
+      matchesFailedSecret: (row) => row.ciphertext === "cipher-failed",
+    });
+
+    expect(state.credentials).toEqual([]);
+    expect(state.preferences).toEqual([]);
+    expect(state.secrets).toEqual([]);
+  });
+
+  it("still deletes when the secret row is already gone", async () => {
+    const state = {
+      credentials: [codexCredential()],
+      preferences: [codexPreference()],
+      secrets: [],
+    };
+    const { prisma } = retirePrisma(state);
+
+    await retireModelCredential(prisma, {
+      userId: "user-1",
+      credentialId: "cred-codex",
+      secretId: "secret-codex",
+      matchesFailedSecret: () => false,
+    });
+
+    expect(state.credentials).toEqual([]);
+    expect(state.preferences).toEqual([]);
   });
 
   it("leaves a credential alone when it already moved to a new secret", async () => {

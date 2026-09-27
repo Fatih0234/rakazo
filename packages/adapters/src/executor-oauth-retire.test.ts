@@ -83,6 +83,10 @@ function oauthPrisma() {
       }),
     },
     secret: {
+      findFirst: vi.fn(
+        async (args: { where: { id: string }; select?: Record<string, boolean> }) =>
+          state.secrets.find((row) => row.id === args.where.id) ?? null,
+      ),
       deleteMany: vi.fn(async (args: { where: { id: string } }) => {
         const before = state.secrets.length;
         state.secrets = state.secrets.filter((row) => row.id !== args.where.id);
@@ -136,10 +140,25 @@ function expiredOAuthPlaintext() {
   });
 }
 
-function oauthExecutor(prisma: PrismaClient) {
+function rotatedOAuthPlaintext() {
+  return serializeModelSecret({
+    kind: "oauth",
+    credential: {
+      type: "oauth",
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+      expires: Date.now() + 3600_000,
+    },
+  });
+}
+
+function oauthExecutor(
+  prisma: PrismaClient,
+  load: (ciphertext: string, secretId: string) => string = () => expiredOAuthPlaintext(),
+) {
   return createRunExecutor({
     prisma,
-    secretStore: { load: vi.fn(() => expiredOAuthPlaintext()), put: vi.fn() },
+    secretStore: { load: vi.fn(load), put: vi.fn() },
   } as unknown as Parameters<typeof createRunExecutor>[0]);
 }
 
@@ -193,6 +212,58 @@ describe("OAuth credential retirement on terminal refresh rejection", () => {
     const auth = await modelCredentialAuthKindsForSpace(
       prisma,
       { load: vi.fn(() => expiredOAuthPlaintext()) },
+      SCOPE,
+    );
+    expect(auth.byProvider[PROVIDER]).toBe("oauth");
+  });
+
+  it("keeps the credential when a 5xx response quotes a terminal marker", async () => {
+    // A gateway error can echo an OAuth error body; the 5xx status means the
+    // rejection is not a terminal judgment on the stored refresh token.
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: "invalid_grant", error_description: "gone" }), {
+          status: 502,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { prisma, state } = oauthPrisma();
+    const executor = oauthExecutor(prisma);
+
+    await expect(executor.resolveConnectedModel(SCOPE, PROVIDER, MODEL_ID)).rejects.toThrow(/502/);
+
+    expect(state.credentials).toHaveLength(1);
+    expect(state.preferences).toHaveLength(1);
+    expect(state.secrets).toHaveLength(1);
+  });
+
+  it("keeps a credential a concurrent refresh already rewrote", async () => {
+    // The refresh raced a sibling run that persisted rotated tokens into the
+    // same secret row; the stale failure must not delete the newer material.
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: "invalid_grant", error_description: "gone" }), {
+          status: 400,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { prisma, state } = oauthPrisma();
+    const load = vi
+      .fn()
+      .mockImplementationOnce(() => expiredOAuthPlaintext())
+      .mockImplementation(() => rotatedOAuthPlaintext());
+    const executor = oauthExecutor(prisma, load);
+
+    await expect(executor.resolveConnectedModel(SCOPE, PROVIDER, MODEL_ID)).rejects.toThrow(
+      /invalid_grant/,
+    );
+
+    expect(state.credentials).toHaveLength(1);
+    expect(state.preferences).toHaveLength(1);
+    expect(state.secrets).toHaveLength(1);
+    const auth = await modelCredentialAuthKindsForSpace(
+      prisma,
+      { load: vi.fn(() => rotatedOAuthPlaintext()) },
       SCOPE,
     );
     expect(auth.byProvider[PROVIDER]).toBe("oauth");

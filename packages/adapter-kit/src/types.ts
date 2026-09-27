@@ -53,6 +53,17 @@ export interface AgentModelOAuthCredential {
  */
 export type ModelCredentialRetireReason = "terminal-refresh-failure" | "account-changed";
 
+/**
+ * Identity of the stored credential material whose refresh attempt triggered
+ * retirement. Implementations compare it to the secret still on the credential
+ * row so a concurrently persisted newer credential — same row rewritten by a
+ * successful refresh, or a reconnect — is not deleted by the stale failure.
+ */
+export interface ModelCredentialFailedState {
+  refresh: string;
+  expires: number;
+}
+
 export interface PortableFile {
   path: string;
   content: Uint8Array;
@@ -375,7 +386,11 @@ export interface AgentRunModel {
     credential: AgentModelOAuthCredential;
     persist?: (credential: AgentModelOAuthCredential) => Promise<void>;
     /** Drop the stored credential after a terminal provider rejection. */
-    retire?: (reason: ModelCredentialRetireReason, detail?: string) => Promise<void>;
+    retire?: (
+      reason: ModelCredentialRetireReason,
+      detail?: string,
+      failed?: ModelCredentialFailedState,
+    ) => Promise<void>;
   };
 }
 

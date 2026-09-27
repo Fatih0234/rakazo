@@ -5,7 +5,11 @@ import type {
   CredentialStore,
   OAuthCredential,
 } from "@earendil-works/pi-ai";
-import type { AgentModelOAuthCredential, ModelCredentialRetireReason } from "@rakazo/adapter-kit";
+import type {
+  AgentModelOAuthCredential,
+  ModelCredentialFailedState,
+  ModelCredentialRetireReason,
+} from "@rakazo/adapter-kit";
 import { getLogger } from "@rakazo/logging";
 import { terminalOAuthRefreshErrorMarker } from "./pi-oauth.js";
 
@@ -29,6 +33,7 @@ export class PiRuntimeCredentialStore implements CredentialStore {
     private readonly retireOAuth?: (
       reason: ModelCredentialRetireReason,
       detail?: string,
+      failed?: ModelCredentialFailedState,
     ) => Promise<void>,
   ) {
     this.credential = credential;
@@ -60,11 +65,19 @@ export class PiRuntimeCredentialStore implements CredentialStore {
       } catch (error) {
         const marker = terminalOAuthRefreshErrorMarker(error);
         if (marker && this.retireOAuth) {
-          // The in-flight request is already failing; retire the dead credential
-          // in the background so the next run sees the provider disconnected.
-          void this.retireOAuth("terminal-refresh-failure", marker).catch((retireError) =>
-            getLogger().error("model credential retirement failed", retireError),
-          );
+          // The in-flight request is already failing. Await the retirement so
+          // the delete commits before this error surfaces — a detached delete
+          // could still be observed by a concurrent catalog read or be dropped
+          // by worker shutdown. A retire failure never masks the refresh error.
+          try {
+            await this.retireOAuth(
+              "terminal-refresh-failure",
+              marker,
+              current?.type === "oauth" ? current : undefined,
+            );
+          } catch (retireError) {
+            getLogger().error("model credential retirement failed", retireError);
+          }
         }
         throw error;
       }

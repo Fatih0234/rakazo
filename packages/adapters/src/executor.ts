@@ -15,6 +15,7 @@ import type {
   JobPublisher,
   ManagedConnectorProvider,
   MemoryStore,
+  ModelCredentialFailedState,
   ModelCredentialRetireReason,
   NotificationMessage,
   NotificationProvider,
@@ -247,6 +248,7 @@ import {
 } from "./model-vision.js";
 import { toOAuthCredential } from "./pi-credentials.js";
 import {
+  matchesFailedOAuthSecret,
   parseModelSecret,
   resolveModelAuth,
   secretValuesToRedact,
@@ -5244,7 +5246,11 @@ async function resolveModelKey(
   maxImagesPerPrompt?: number;
   oauth?: AgentModelOAuthCredential;
   persistOAuth?: (credential: AgentModelOAuthCredential) => Promise<void>;
-  retireOAuth?: (reason: ModelCredentialRetireReason, detail?: string) => Promise<void>;
+  retireOAuth?: (
+    reason: ModelCredentialRetireReason,
+    detail?: string,
+    failed?: ModelCredentialFailedState,
+  ) => Promise<void>;
   redact: string[];
 }> {
   if (credential) {
@@ -5274,14 +5280,25 @@ async function resolveModelKey(
           data: { ciphertext: stored.ciphertext },
         });
       };
-      // Retire exactly this credential. The secretId guard inside
-      // retireModelCredential keeps a reconnect that already swapped the
-      // secret from being deleted by a stale failure.
-      const retire = () =>
+      // Retire exactly this credential. Two fences keep a stale failure from
+      // deleting newer material: secretId guards a reconnect that swapped the
+      // secret row, and matchesFailedSecret guards a concurrent successful
+      // refresh that rewrote the same row's ciphertext in place.
+      const retire = (
+        _reason: ModelCredentialRetireReason,
+        _detail: string | undefined,
+        failed?: ModelCredentialFailedState,
+      ) =>
         retireModelCredential(deps.prisma, {
           userId,
           credentialId: credential.id,
           secretId: credential.secretId,
+          matchesFailedSecret: failed
+            ? matchesFailedOAuthSecret(
+                (ciphertext, secretId) => deps.secretStore.load(ciphertext, secretId),
+                failed,
+              )
+            : undefined,
         });
       const resolved = await resolveModelAuth(plaintext, credential.provider, {
         persist,

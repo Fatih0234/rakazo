@@ -168,24 +168,77 @@ describe("terminalOAuthRefreshErrorMarker", () => {
     expect(terminalOAuthRefreshErrorMarker(wrapped)).toBe(marker);
   });
 
+  it.each([400, 401, 403])("matches a marker alongside a %i status", (status) => {
+    const providerError = new Error(
+      `OpenAI Codex token refresh failed (${status}): {"error":"invalid_grant"}`,
+    );
+    expect(terminalOAuthRefreshErrorMarker(providerError)).toBe("invalid_grant");
+  });
+
+  it("matches pi's Kimi Coding unauthorized marker", () => {
+    expect(
+      terminalOAuthRefreshErrorMarker(
+        new Error("Kimi Code token refresh unauthorized (status 401)"),
+      ),
+    ).toBe("Kimi Code token refresh unauthorized");
+    expect(
+      terminalOAuthRefreshErrorMarker(
+        new Error("Kimi Code token refresh unauthorized (status 403): token revoked"),
+      ),
+    ).toBe("Kimi Code token refresh unauthorized");
+  });
+
   it("matches a marker embedded in the outer message", () => {
     expect(
       terminalOAuthRefreshErrorMarker(new Error('token refresh failed (400): "invalid_grant"')),
     ).toBe("invalid_grant");
   });
 
-  it("matches a marker carried by a thrown string", () => {
-    expect(terminalOAuthRefreshErrorMarker("refresh_token_reused")).toBe("refresh_token_reused");
+  it("accepts a marker and a terminal status split across the cause chain", () => {
+    const wrapped = new Error("OAuth refresh failed for xai", {
+      cause: new Error('{"error":"invalid_grant"}', {
+        cause: new Error("xAI OAuth token refresh failed (HTTP 403)"),
+      }),
+    });
+    expect(terminalOAuthRefreshErrorMarker(wrapped)).toBe("invalid_grant");
   });
 
   it.each([
+    [
+      "5xx body quoting a marker",
+      new Error('OpenAI Codex token refresh failed (500): {"error":"invalid_grant"}'),
+    ],
+    [
+      "502 body quoting a marker",
+      new Error(
+        'OpenAI Codex token refresh failed (502): {"error":"invalid_grant","error_description":"gateway"}',
+      ),
+    ],
+    ["marker without a status", new Error('{"error":"invalid_grant"}')],
+    [
+      "marker on a 200 body missing fields",
+      new Error('OpenAI Codex token refresh response missing fields: {"error":"invalid_grant"}'),
+    ],
+    [
+      "marker with a non-terminal 4xx",
+      new Error('OpenAI Codex token refresh failed (404): {"error":"invalid_grant"}'),
+    ],
+    [
+      "marker with an unrelated number",
+      new Error("token refresh failed: invalid_grant (retry after 400 ms)"),
+    ],
+    ["thrown marker string", "refresh_token_reused"],
     ["network failure", new Error("OpenAI Codex token refresh error: fetch failed")],
     ["server error", new Error("OpenAI Codex token refresh failed (503): service unavailable")],
+    [
+      "kimi retryable status",
+      new Error('Kimi Code token refresh failed with status 500: {"error":"invalid_grant"}'),
+    ],
     ["timeout", new Error("The operation timed out")],
     ["malformed body", new Error("OpenAI Codex token refresh response missing fields: {}")],
-    ["lookalike identifier", new Error('{"error":"not_invalid_grant"}')],
-    ["marker prefix only", new Error('{"error":"invalid_granted"}')],
-    ["non-error object", { message: "invalid_grant" }],
+    ["lookalike identifier", new Error('{"error":"not_invalid_grant"} (400)')],
+    ["marker prefix only", new Error('{"error":"invalid_granted"} (400)')],
+    ["non-error object", { message: "invalid_grant (400)" }],
     ["null", null],
     ["undefined", undefined],
   ])("does not classify a %s as terminal", (_label, error) => {
@@ -193,11 +246,11 @@ describe("terminalOAuthRefreshErrorMarker", () => {
   });
 
   it("stops walking after the chain depth limit", () => {
-    let error: Error = new Error('{"error":"invalid_grant"}');
+    let error: Error = new Error('(400) {"error":"invalid_grant"}');
     for (let i = 0; i < 12; i += 1) error = new Error(`layer ${i}`, { cause: error });
     expect(terminalOAuthRefreshErrorMarker(error)).toBeUndefined();
 
-    let shallow: Error = new Error('{"error":"invalid_grant"}');
+    let shallow: Error = new Error('(400) {"error":"invalid_grant"}');
     for (let i = 0; i < 3; i += 1) shallow = new Error(`layer ${i}`, { cause: shallow });
     expect(terminalOAuthRefreshErrorMarker(shallow)).toBe("invalid_grant");
   });
@@ -230,7 +283,12 @@ describe("resolveModelAuth retirement", () => {
     ).rejects.toBe(failure);
 
     expect(retire).toHaveBeenCalledTimes(1);
-    expect(retire).toHaveBeenCalledWith("terminal-refresh-failure", "invalid_grant");
+    expect(retire).toHaveBeenCalledWith(
+      "terminal-refresh-failure",
+      "invalid_grant",
+      // The stored credential state the failed refresh was attempted on.
+      expect.objectContaining({ refresh: "refresh-token", expires: 1 }),
+    );
     expect(persist).not.toHaveBeenCalled();
   });
 
@@ -238,6 +296,7 @@ describe("resolveModelAuth retirement", () => {
     for (const failure of [
       new Error("OpenAI Codex token refresh error: fetch failed"),
       new Error("OpenAI Codex token refresh failed (500): {"),
+      new Error('OpenAI Codex token refresh failed (500): {"error":"invalid_grant"}'),
       new Error("request timed out"),
     ]) {
       const retire = vi.fn(async () => {});
@@ -266,7 +325,11 @@ describe("resolveModelAuth retirement", () => {
         oauth: failingRefresh(failure),
       }),
     ).rejects.toBe(failure);
-    expect(retire).toHaveBeenCalledWith("terminal-refresh-failure", "refresh_token_expired");
+    expect(retire).toHaveBeenCalledWith(
+      "terminal-refresh-failure",
+      "refresh_token_expired",
+      expect.objectContaining({ refresh: "refresh-token", expires: 1 }),
+    );
   });
 
   it("rethrows the refresh error when no retire hook is configured", async () => {
@@ -639,7 +702,9 @@ describe("PiOAuthLogins", () => {
     await expect(finishing).resolves.toEqual({ status: "connected", value: "saved" });
     await cancelling;
     expect(cancellationFinished).toBe(true);
-    expect(persistenceSignal.aborted).toBe(false);
+    // The persist signal is the session's own — cancel never aborted the
+    // in-flight write; teardown aborts it only after the write settled.
+    expect(persistenceSignal.aborted).toBe(true);
   });
 
   it("does not persist after cancellation wins before finalization", async () => {
@@ -1025,9 +1090,50 @@ describe("PiOAuthLogins", () => {
       vi.advanceTimersByTime(61_000);
       expect((await logins.complete(started.loginId, actor)).status).toBe("error");
 
-      // The in-flight persist still completes on its detached signal.
+      // The in-flight persist still completes; a persist that never checks the
+      // session signal is allowed to finish, but its signal is aborted.
       releasePersist();
       await expect(finishing).resolves.toEqual({ status: "connected", value: "saved" });
+    });
+
+    it("fences a detached persist write when the session expires mid-finalization", async () => {
+      vi.useFakeTimers();
+      const logins = new PiOAuthLogins(async (_provider, _type, interaction) => {
+        interaction.notify({
+          type: "device_code",
+          userCode: "FENCE",
+          verificationUri: "https://auth.openai.com/codex/device",
+          expiresInSeconds: 60,
+        });
+        return oauthCred();
+      });
+      const actor = { userId: "u", spaceId: "w" };
+      const started = await logins.begin({ ...actor, provider: CHATGPT_OAUTH_PROVIDER });
+      await flushMicrotasks();
+
+      let releasePersist!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releasePersist = resolve;
+      });
+      let persisted = false;
+      let persistSignal: AbortSignal | undefined;
+      const finishing = logins.finish(started.loginId, actor, async (result) => {
+        persistSignal = result.signal;
+        await gate;
+        // Mirror persistModelCredential: the write is gated on the signal, so a
+        // swept session cannot land after a replacement login starts.
+        if (result.signal.aborted) throw result.signal.reason;
+        persisted = true;
+        return "saved";
+      });
+      await Promise.resolve();
+
+      vi.advanceTimersByTime(61_000);
+      expect(persistSignal?.aborted).toBe(true);
+
+      releasePersist();
+      await expect(finishing).rejects.toThrow(/Sign-in expired/);
+      expect(persisted).toBe(false);
     });
 
     it("clears armed expiry timers when abortAll runs", async () => {
