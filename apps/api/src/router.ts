@@ -862,7 +862,10 @@ export function createRouter(deps: RouterDeps) {
           deps.secrets,
           context.actor,
         );
-        return [...listAvailablePiCatalog(auth.byProvider, auth.byModel), scriptedCatalogEntry];
+        const catalog = listAvailablePiCatalog(auth.byProvider, auth.byModel);
+        // The scripted fixture only exists to drive the scripted runtime; a real
+        // runtime cannot execute it, so it stays out of the user-facing catalog.
+        return deps.env.agentRuntime === "scripted" ? [...catalog, scriptedCatalogEntry] : catalog;
       }),
       credentials: authed.models.credentials.handler(async ({ context }) => {
         const rows = await deps.prisma.userModelCredential.findMany({
@@ -891,6 +894,7 @@ export function createRouter(deps: RouterDeps) {
             ...row,
             isDefault: preference?.isDefault ?? false,
             defaultModel: preference?.modelId ?? null,
+            thinkingLevel: preference?.thinkingLevel ?? null,
           };
           const ciphertext = ciphertextById.get(row.secretId);
           if (!ciphertext) return modelCredentialDto(selected);
@@ -1071,7 +1075,72 @@ export function createRouter(deps: RouterDeps) {
                   message: authFailure ?? UNAVAILABLE_MODEL_FOR_AUTH_MESSAGE,
                 });
               }
-              await selectSpaceModelPreference(tx, context.actor, credentialId, input.modelId);
+              let thinkingLevel = input.thinkingLevel;
+              if (thinkingLevel) {
+                const allowed = await allowedThinkingLevels(
+                  deps,
+                  context.actor,
+                  input.provider,
+                  input.modelId,
+                );
+                if (allowed && !allowed.includes(thinkingLevel)) {
+                  throw new ORPCError("BAD_REQUEST", {
+                    message: `Thinking level must be one of: ${allowed.join(", ")}`,
+                  });
+                }
+              } else if (thinkingLevel === undefined) {
+                // The level belongs to the preference's modelId — keep it only when the
+                // stored choice already names this model.
+                const existing = await tx.spaceModelPreference.findUnique({
+                  where: {
+                    spaceId_userId_credentialId: {
+                      spaceId: context.actor.spaceId,
+                      userId: context.actor.userId,
+                      credentialId,
+                    },
+                  },
+                  select: { modelId: true, thinkingLevel: true },
+                });
+                thinkingLevel =
+                  existing?.modelId === usableModelId(input.modelId)
+                    ? (existing.thinkingLevel as typeof input.thinkingLevel)
+                    : null;
+              }
+              await selectSpaceModelPreference(
+                tx,
+                context.actor,
+                credentialId,
+                input.modelId,
+                thinkingLevel,
+              );
+            },
+            { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+          ),
+        );
+        return { ok: true as const };
+      }),
+      disconnect: authed.models.disconnect.handler(async ({ context, input }) => {
+        await withSerializableRetry(() =>
+          deps.prisma.$transaction(
+            async (tx) => {
+              const existing = await tx.userModelCredential.findMany({
+                where: { userId: context.actor.userId, provider: input.provider },
+              });
+              if (existing.length === 0) return;
+              const ids = existing.map((row) => row.id);
+              await tx.spaceModelPreference.deleteMany({
+                where: { userId: context.actor.userId, credentialId: { in: ids } },
+              });
+              await tx.userModelCredential.deleteMany({
+                where: { userId: context.actor.userId, id: { in: ids } },
+              });
+              for (const row of existing) {
+                await deleteUnreferencedCredentialSecret(tx, {
+                  credentialKind: "model",
+                  credentialId: row.id,
+                  secretId: row.secretId,
+                });
+              }
             },
             { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
           ),
@@ -1202,35 +1271,12 @@ export function createRouter(deps: RouterDeps) {
           const effectiveProvider = provider ?? me.defaultProvider;
           const effectiveModelId = modelId ?? me.defaultModel;
           if (effectiveProvider && effectiveModelId) {
-            const entry = listPiCatalog().find(
-              (item) => item.provider === effectiveProvider && item.id === effectiveModelId,
+            const allowed = await allowedThinkingLevels(
+              deps,
+              context.actor,
+              effectiveProvider,
+              effectiveModelId,
             );
-            let allowed = entry?.thinkingLevels;
-            if (effectiveProvider === OPENAI_COMPATIBLE_PROVIDER_ID) {
-              allowed = ["off"];
-              const credential = await findModelCredential(
-                deps.prisma,
-                context.actor,
-                effectiveProvider,
-              );
-              if (credential && credential.defaultModel === effectiveModelId) {
-                const secret = await deps.prisma.secret.findFirst({
-                  where: { id: credential.secretId, userId: context.actor.userId, spaceId: null },
-                  select: { ciphertext: true },
-                });
-                if (secret) {
-                  try {
-                    allowed =
-                      modelCredentialDto(
-                        credential,
-                        deps.secrets.load(secret.ciphertext, credential.secretId),
-                      ).thinkingLevels ?? allowed;
-                  } catch {
-                    // Unreadable connections must not advertise reasoning support.
-                  }
-                }
-              }
-            }
             if (allowed && !allowed.includes(input.thinkingLevel)) {
               throw new ORPCError("BAD_REQUEST", {
                 message: `Thinking level must be one of: ${allowed.join(", ")}`,
@@ -5129,6 +5175,41 @@ async function modelSetup(deps: RouterDeps, actor: Actor) {
     settings,
     needsModel: deps.env.agentRuntime !== "scripted" && !credential && !hasDeployment,
   };
+}
+
+/**
+ * Thinking levels a caller may set for a provider/model. Catalog models answer from
+ * `thinkingLevels`; unknown catalog ids return undefined (no check). OpenAI-compatible
+ * connections only advertise levels when the stored endpoint's saved model matches.
+ */
+async function allowedThinkingLevels(
+  deps: RouterDeps,
+  actor: Actor,
+  provider: string,
+  modelId: string,
+): Promise<string[] | undefined> {
+  if (provider !== OPENAI_COMPATIBLE_PROVIDER_ID) {
+    return listPiCatalog().find((item) => item.provider === provider && item.id === modelId)
+      ?.thinkingLevels;
+  }
+  let allowed: string[] | undefined = ["off"];
+  const credential = await findModelCredential(deps.prisma, actor, provider);
+  if (credential && credential.defaultModel === modelId) {
+    const secret = await deps.prisma.secret.findFirst({
+      where: { id: credential.secretId, userId: actor.userId, spaceId: null },
+      select: { ciphertext: true },
+    });
+    if (secret) {
+      try {
+        allowed =
+          modelCredentialDto(credential, deps.secrets.load(secret.ciphertext, credential.secretId))
+            .thinkingLevels ?? allowed;
+      } catch {
+        // Unreadable connections must not advertise reasoning support.
+      }
+    }
+  }
+  return allowed;
 }
 
 async function computerStatus(

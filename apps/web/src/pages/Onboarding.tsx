@@ -1,4 +1,4 @@
-import { Trans, useLingui } from "@lingui/react/macro";
+import { Plural, Trans, useLingui } from "@lingui/react/macro";
 import {
   DEFAULT_MODEL_CONTEXT_WINDOW,
   DEFAULT_MODEL_MAX_TOKENS,
@@ -13,7 +13,7 @@ import {
   parseModelMaxTokens,
   type ThinkingLevel,
 } from "@rakazo/contracts";
-import { createModelProbe, initialModelProbeState } from "@rakazo/core";
+import { createModelProbe, initialModelProbeState, pickCatalogModelId } from "@rakazo/core";
 import {
   Button,
   Input,
@@ -24,14 +24,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@rakazo/ui-web";
+import { Check, Copy } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { IntegrationSetup } from "../components/integrations/IntegrationSetup";
+import { useCopyText } from "../lib/copy-text";
 import type { ModelCatalogEntry } from "../lib/model-auth";
+import { thinkingLevelLabel } from "../lib/model-catalog";
 import { rpc } from "../lib/rpc";
 import { useModelOAuthSignIn } from "../lib/use-model-oauth-signin";
 
 const CUSTOM_MODEL_OPTION = "__rakazo_custom_model__";
+const DEFAULT_THINKING_LEVEL_OPTION = "__rakazo_default_thinking__";
 const FIRST_BOT_NAME = "Chief";
 const FIRST_BOT_SPAWN_KEY = "onboarding:first";
 const FIRST_BOT_LOCK = "rakazo:onboarding-first-bot";
@@ -121,21 +125,32 @@ export function OnboardingPage() {
   const [modelProbe] = useState(() => createModelProbe(setProbe));
   const resetOpenAiCompatibleProbe = modelProbe.reset;
   const createStartedRef = useRef(false);
+  const deploymentDefaultModelRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [codeCopied, copyOAuthCode] = useCopyText();
 
   const {
     oauth,
     pasteCode,
     setPasteCode,
     oauthPending,
+    popupBlocked,
     cancelOAuthAttempt,
     startSubscriptionSignIn,
     submitOAuthCode,
   } = useModelOAuthSignIn({
     onClearError: () => setError(null),
     onError: setError,
-    onFinished: () => {
+    onFinished: async () => {
+      // OAuth connect ignores thinkingLevel; persist the staged catalog choice.
+      if (thinkingLevel && provider !== OPENAI_COMPATIBLE_PROVIDER_ID && modelId) {
+        try {
+          await rpc.models.setDefault({ provider, modelId, thinkingLevel });
+        } catch {
+          // The connection itself succeeded; the effort stays adjustable in Models.
+        }
+      }
       setStep(nextStepAfterModel(needsIntegrationSetup));
     },
   });
@@ -149,6 +164,7 @@ export function OnboardingPage() {
       .then(([me, models, integrations]) => {
         setIntegrationSetup(integrations);
         setCatalog(models);
+        deploymentDefaultModelRef.current = me.defaultModel;
         const preferred =
           models.find(
             (entry) => entry.provider === me.defaultProvider && entry.id === me.defaultModel,
@@ -182,6 +198,12 @@ export function OnboardingPage() {
 
   const selected = modelsForProvider.find((entry) => entry.id === modelId) ?? modelsForProvider[0];
   const isOpenAiCompatible = provider === OPENAI_COMPATIBLE_PROVIDER_ID;
+  // Effort levels for the staged catalog model — "off" stays out, matching the
+  // model settings and per-bot Thinking pickers.
+  const catalogThinkingLevels =
+    !isOpenAiCompatible && selected
+      ? (selected.thinkingLevels ?? []).filter((level) => level !== "off")
+      : [];
   const subscriptionSignIn = selected?.signIn !== undefined;
   const acceptsKey = selected?.auth !== "oauth";
   const signInLabel = selected?.oauthLabel ?? t`Sign in`;
@@ -204,6 +226,16 @@ export function OnboardingPage() {
   const modelItems = useMemo(
     () => modelsForProvider.map((entry) => ({ value: entry.id, label: entry.label })),
     [modelsForProvider],
+  );
+  const thinkingLevelItems = useMemo(
+    () => [
+      {
+        value: DEFAULT_THINKING_LEVEL_OPTION,
+        label: t`Default (${thinkingLevelLabel("medium")})`,
+      },
+      ...catalogThinkingLevels.map((level) => ({ value: level, label: thinkingLevelLabel(level) })),
+    ],
+    [catalogThinkingLevels, t],
   );
   const probeModelItems = useMemo(
     () => [
@@ -234,7 +266,7 @@ export function OnboardingPage() {
     setModelId(
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
         ? ""
-        : (catalog.find((item) => item.provider === nextProvider)?.id ?? ""),
+        : pickCatalogModelId(catalog, nextProvider, deploymentDefaultModelRef.current),
     );
     setBaseUrl("");
     setReasoning(false);
@@ -325,6 +357,11 @@ export function OnboardingPage() {
           modelId,
           label: selected?.providerName ?? provider,
         });
+      }
+      // Catalog providers keep the staged effort on the saved model preference;
+      // openai-compatible already stored its level inside the endpoint config.
+      if (thinkingLevel && !isOpenAiCompatible && modelId) {
+        await rpc.models.setDefault({ provider, modelId, thinkingLevel });
       }
       setStep(nextStepAfterModel(needsIntegrationSetup));
     } catch (err) {
@@ -540,6 +577,7 @@ export function OnboardingPage() {
                       if (value === modelId) return;
                       cancelOAuthAttempt();
                       setModelId(value);
+                      setThinkingLevel(null);
                     }}
                     items={modelItems}
                   >
@@ -554,6 +592,37 @@ export function OnboardingPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {catalogThinkingLevels.length ? (
+                    <div className="mt-4 block">
+                      <span className="font-medium">
+                        <Trans>Thinking</Trans>
+                      </span>
+                      <Select
+                        value={thinkingLevel ?? DEFAULT_THINKING_LEVEL_OPTION}
+                        onValueChange={(value) => {
+                          const next = String(value);
+                          setThinkingLevel(
+                            next === DEFAULT_THINKING_LEVEL_OPTION ? null : (next as ThinkingLevel),
+                          );
+                        }}
+                        items={thinkingLevelItems}
+                      >
+                        <SelectTrigger aria-label={t`Thinking`} className="mt-2 w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={DEFAULT_THINKING_LEVEL_OPTION}>
+                            {t`Default (${thinkingLevelLabel("medium")})`}
+                          </SelectItem>
+                          {catalogThinkingLevels.map((level) => (
+                            <SelectItem key={level} value={level}>
+                              {thinkingLevelLabel(level)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>
@@ -564,18 +633,33 @@ export function OnboardingPage() {
                     {oauth.mode === "auth-url" ? (
                       <>
                         <p className="text-sm text-muted-foreground">
-                          <Trans>
-                            Finish signing in at{" "}
-                            <a
-                              href={oauth.verificationUri}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-foreground underline"
-                            >
-                              {new URL(oauth.verificationUri).hostname}
-                            </a>
-                            . The final page may not load; paste its URL or code here.
-                          </Trans>
+                          {popupBlocked ? (
+                            <Trans>
+                              Open{" "}
+                              <a
+                                href={oauth.verificationUri}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-foreground underline"
+                              >
+                                {new URL(oauth.verificationUri).hostname}
+                              </a>{" "}
+                              to finish signing in.
+                            </Trans>
+                          ) : (
+                            <Trans>
+                              Finish signing in at{" "}
+                              <a
+                                href={oauth.verificationUri}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-foreground underline"
+                              >
+                                {new URL(oauth.verificationUri).hostname}
+                              </a>
+                              . The final page may not load; paste its URL or code here.
+                            </Trans>
+                          )}
                         </p>
                         <div className="mt-3 flex items-center gap-2">
                           <Input
@@ -594,32 +678,78 @@ export function OnboardingPage() {
                           </Button>
                         </div>
                         <p className="mt-2 text-sm text-muted-foreground">
-                          <Trans>Waiting for sign-in…</Trans>
+                          <Plural
+                            value={Math.ceil(oauth.expiresInSeconds / 60)}
+                            one="Waiting for sign-in — the link expires in about # minute."
+                            other="Waiting for sign-in — the link expires in about # minutes."
+                          />
                         </p>
                       </>
                     ) : (
                       <>
                         <p className="text-sm text-muted-foreground">
-                          <Trans>
-                            Enter this code at{" "}
-                            <a
-                              href={oauth.verificationUri}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-foreground underline"
-                            >
-                              {oauth.verificationUri.replace(/^https:\/\//, "")}
-                            </a>
-                          </Trans>
+                          {popupBlocked ? (
+                            <Trans>
+                              Open{" "}
+                              <a
+                                href={oauth.verificationUri}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-foreground underline"
+                              >
+                                {oauth.verificationUri.replace(/^https:\/\//, "")}
+                              </a>{" "}
+                              and enter this code:
+                            </Trans>
+                          ) : (
+                            <Trans>
+                              A sign-in tab opened at{" "}
+                              <a
+                                href={oauth.verificationUri}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-foreground underline"
+                              >
+                                {oauth.verificationUri.replace(/^https:\/\//, "")}
+                              </a>
+                              . Enter this code there — this window keeps waiting:
+                            </Trans>
+                          )}
                         </p>
-                        <p className="mt-2 font-mono text-[22px] tracking-[0.2em] text-foreground">
-                          {oauth.userCode}
-                        </p>
+                        <div className="mt-2 flex items-center gap-3">
+                          <p className="font-mono text-[22px] tracking-[0.2em] text-foreground">
+                            {oauth.userCode}
+                          </p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => copyOAuthCode(oauth.userCode)}
+                          >
+                            {codeCopied ? (
+                              <Check size={14} strokeWidth={1.8} aria-hidden="true" />
+                            ) : (
+                              <Copy size={14} strokeWidth={1.8} aria-hidden="true" />
+                            )}
+                            {codeCopied ? <Trans>Copied</Trans> : <Trans>Copy</Trans>}
+                          </Button>
+                        </div>
                         <p className="mt-2 text-sm text-muted-foreground">
-                          <Trans>Waiting for sign-in…</Trans>
+                          <Plural
+                            value={Math.ceil(oauth.expiresInSeconds / 60)}
+                            one="Waiting for sign-in — the code expires in about # minute."
+                            other="Waiting for sign-in — the code expires in about # minutes."
+                          />
                         </p>
                       </>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mt-2 -ml-2 text-muted-foreground"
+                      onClick={() => cancelOAuthAttempt()}
+                    >
+                      <Trans>Cancel</Trans>
+                    </Button>
                   </div>
                 ) : (
                   <Button disabled={oauthPending} onClick={() => beginSelectedSubscriptionSignIn()}>

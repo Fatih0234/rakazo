@@ -892,7 +892,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
       contextWindow: resolved.contextWindow,
       acceptsImages: resolved.acceptsImages,
       maxImagesPerPrompt: resolved.maxImagesPerPrompt,
-      thinkingLevel: resolved.thinkingLevel ?? null,
+      thinkingLevel:
+        ((credential.defaultModel === modelId
+          ? credential.thinkingLevel
+          : null) as AgentRunRequest["model"]["thinkingLevel"]) ??
+        resolved.thinkingLevel ??
+        null,
       oauth: resolved.oauth
         ? { credential: resolved.oauth, persist: resolved.persistOAuth }
         : undefined,

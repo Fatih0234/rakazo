@@ -16,6 +16,7 @@ export async function selectSpaceModelPreference(
   scope: ModelCredentialScope,
   credentialId: string,
   modelId: string | null | undefined,
+  thinkingLevel?: string | null,
 ) {
   const persistedModelId = usableModelId(modelId);
   await prisma.spaceModelPreference.updateMany({
@@ -40,9 +41,16 @@ export async function selectSpaceModelPreference(
       userId: scope.userId,
       credentialId,
       modelId: persistedModelId,
+      thinkingLevel: thinkingLevel ?? null,
       isDefault: true,
     },
-    update: { modelId: persistedModelId, isDefault: true },
+    // Callers that don't manage thinking (connect, OAuth finish) leave a stored
+    // level untouched on update; an explicit null clears it.
+    update: {
+      modelId: persistedModelId,
+      isDefault: true,
+      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+    },
   });
 }
 
@@ -59,12 +67,14 @@ function withModelPreference<
     };
     isDefault: boolean;
     modelId: string | null;
+    thinkingLevel: string | null;
   },
 >(preference: T) {
   return {
     ...preference.credential,
     isDefault: preference.isDefault,
     defaultModel: usableModelId(preference.modelId),
+    thinkingLevel: preference.thinkingLevel,
   };
 }
 
@@ -101,6 +111,7 @@ type OrderedCredential = {
 type OrderedPreference<C extends OrderedCredential> = {
   id: string;
   modelId: string | null;
+  thinkingLevel: string | null;
   isDefault: boolean;
   updatedAt: Date;
   credential: C;
@@ -233,7 +244,7 @@ function credentialFromChoice<
 >(choice: ReturnType<typeof chooseModelCredential<C>>) {
   if (!choice) return null;
   if (choice.source === "preference") return withModelPreference(choice.preference);
-  return { ...choice.credential, isDefault: false, defaultModel: null };
+  return { ...choice.credential, isDefault: false, defaultModel: null, thinkingLevel: null };
 }
 
 export async function findModelCredential(

@@ -1,6 +1,10 @@
 import type { ModelCatalogEntry } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
-import { featuredModelProviders, selectedProviderOutsideSearchResults } from "./model-providers.js";
+import {
+  featuredModelProviders,
+  pickCatalogModelId,
+  selectedProviderOutsideSearchResults,
+} from "./model-providers.js";
 
 function provider(provider: string): ModelCatalogEntry {
   return {
@@ -69,6 +73,44 @@ describe("featuredModelProviders", () => {
       "google",
       "local",
     ]);
+  });
+});
+
+describe("pickCatalogModelId", () => {
+  const catalog = [
+    { provider: "openrouter", id: "openai/gpt-6-luna" },
+    { provider: "openrouter", id: "anthropic/claude-fable-5" },
+    { provider: "openai-codex", id: "gpt-5.3-codex-spark" },
+    { provider: "openai-codex", id: "gpt-6-luna" },
+  ];
+
+  it("returns the provider's first entry without a preferred id", () => {
+    expect(pickCatalogModelId(catalog, "openai-codex", null)).toBe("gpt-5.3-codex-spark");
+    expect(pickCatalogModelId(catalog, "openai-codex")).toBe("gpt-5.3-codex-spark");
+  });
+
+  it("prefers an exact preferred id within the provider", () => {
+    expect(pickCatalogModelId(catalog, "openai-codex", "gpt-6-luna")).toBe("gpt-6-luna");
+    expect(pickCatalogModelId(catalog, "openrouter", "openai/gpt-6-luna")).toBe(
+      "openai/gpt-6-luna",
+    );
+  });
+
+  it("matches the preferred id's basename across vendor prefixes", () => {
+    expect(pickCatalogModelId(catalog, "openai-codex", "openai/gpt-6-luna")).toBe("gpt-6-luna");
+  });
+
+  it("ignores a preferred id that belongs to another provider only", () => {
+    expect(pickCatalogModelId(catalog, "openai-codex", "openai/gpt-6-astra")).toBe(
+      "gpt-5.3-codex-spark",
+    );
+    expect(pickCatalogModelId(catalog, "openai-codex", "anthropic/claude-fable-5")).toBe(
+      "gpt-5.3-codex-spark",
+    );
+  });
+
+  it("returns an empty string for an unknown provider", () => {
+    expect(pickCatalogModelId(catalog, "nope", "openai/gpt-6-luna")).toBe("");
   });
 });
 
