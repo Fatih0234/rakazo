@@ -282,7 +282,7 @@ describe("reliableModelStream idle gating", () => {
     expect(caller.signal.aborted).toBe(false);
   });
 
-  it("re-arms on each attempt's onResponse, bounding headers-then-silence", async () => {
+  it("arms only on successful responses, leaving retry backoff uncovered", async () => {
     vi.useFakeTimers();
     const caller = new AbortController();
     const inner = new AssistantMessageEventStream();
@@ -307,16 +307,18 @@ describe("reliableModelStream idle gating", () => {
     await vi.advanceTimersByTimeAsync(MODEL_STREAM_TIMEOUT_MS + MODEL_STREAM_IDLE_TIMEOUT_MS);
     expect(guardedOptions?.signal?.aborted).toBe(false);
 
-    // A retryable error response's headers re-arm the budget, and the caller's
-    // own onResponse hook still observes the response.
+    // A retryable response's headers must not arm the watchdog: error
+    // responses emit no stream events, and pi's backoff sleep sits outside the
+    // idle bound. The caller's own onResponse still observes every response.
     await guardedOptions?.onResponse?.({ status: 429, headers: {} }, codexModel);
     expect(onResponse).toHaveBeenCalledWith({ status: 429, headers: {} }, codexModel);
-    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS - 1);
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS * 2);
     expect(guardedOptions?.signal?.aborted).toBe(false);
 
-    // The retried attempt's headers reset the countdown to a fresh full
-    // budget; a body that then stays silent aborts at the idle bound.
+    // The retried attempt's 2xx headers arm a fresh full budget; a body that
+    // then stays silent aborts at the idle bound.
     await guardedOptions?.onResponse?.({ status: 200, headers: {} }, codexModel);
+    expect(onResponse).toHaveBeenCalledWith({ status: 200, headers: {} }, codexModel);
     await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS - 1);
     expect(guardedOptions?.signal?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);

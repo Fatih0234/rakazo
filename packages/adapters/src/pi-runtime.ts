@@ -1858,16 +1858,19 @@ export interface StreamIdleWatchdog {
  * aborts, so a connection that goes silent stalls a run forever. The watchdog
  * composes an AbortController into `options.signal` and re-arms the idle
  * bound at two points: `options.onResponse` — pi invokes it inside the retry
- * loop each time an attempt's headers land — and every stream event the agent
- * consumes. `idleTimeoutMs` of silence aborts the request.
+ * loop whenever an attempt's headers land, and only a 2xx status arms here
+ * since error responses go straight to retry/error handling without emitting
+ * stream events — and every stream event the agent consumes. `idleTimeoutMs`
+ * of silence aborts the request.
  *
- * Arming at headers rather than stream creation keeps each attempt's
- * time-to-headers inside its own `timeoutMs` budget: a burnt-out attempt
- * leaves no leftover that could abort a still-valid retry, while a response
- * that sends headers then goes silent is still bounded. pi reports any signal
- * abort as a generic "Request was aborted", so when the watchdog fired the
- * wrapper relabels the terminal error as an idle timeout rather than a caller
- * abort.
+ * Arming only on a successful response — not at stream creation, not on
+ * retryable error headers — keeps each attempt's time-to-headers inside its
+ * own `timeoutMs` budget and each retry backoff outside the idle bound: a
+ * burnt-out or rejected attempt leaves no leftover that could abort a
+ * still-valid retry, while a 2xx response that then goes silent is still
+ * bounded. pi reports any signal abort as a generic "Request was aborted", so
+ * when the watchdog fired the wrapper relabels the terminal error as an idle
+ * timeout rather than a caller abort.
  */
 export function codexStreamIdleWatchdog(
   upstream: AbortSignal | undefined,
@@ -1900,9 +1903,10 @@ export function codexStreamIdleWatchdog(
     upstream?.removeEventListener("abort", onUpstreamAbort);
   };
 
-  // Nothing arms the timer before response headers land: the pre-headers
-  // window is bounded per attempt by timeoutMs, so idle budget must not burn
-  // there and a retry always starts from a fresh full budget.
+  // Nothing arms the timer before a successful response's headers land: the
+  // pre-headers window is bounded per attempt by timeoutMs and retry backoff
+  // by maxRetryDelayMs, so idle budget must not burn there and a retry always
+  // starts from a fresh full budget.
   const ping = () => {
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;
@@ -1965,12 +1969,14 @@ export function reliableModelStream(
               ...options,
               signal: watchdog.signal,
               // pi invokes onResponse inside its retry loop once an attempt's
-              // headers arrive, before the body is consumed — each attempt that
-              // gets this far re-arms a fresh idle budget, so headers-then-silence
-              // is bounded without burning the budget on time-to-headers. A
-              // caller-supplied hook still runs.
+              // headers arrive, before the body is consumed. Only a 2xx arms the
+              // idle bound: error responses are read then retried or thrown —
+              // they emit no stream events — so arming there would let the
+              // backoff sleep burn a still-valid attempt's budget. Each attempt
+              // whose 2xx headers land re-arms a fresh full budget. A
+              // caller-supplied hook still observes every response.
               onResponse: (response, requestModel) => {
-                watchdog.ping();
+                if (response.status >= 200 && response.status < 300) watchdog.ping();
                 return options?.onResponse?.(response, requestModel);
               },
             }
