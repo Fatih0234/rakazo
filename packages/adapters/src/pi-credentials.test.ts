@@ -1,8 +1,13 @@
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import type { ModelCredentialFailedState, ModelCredentialRetireReason } from "@rakazo/adapter-kit";
 import { describe, expect, it, vi } from "vitest";
 import { PiRuntimeCredentialStore } from "./pi-credentials.js";
-import { OAUTH_ACCOUNT_CHANGED_ERROR } from "./pi-oauth.js";
+import {
+  matchesFailedOAuthSecret,
+  OAUTH_ACCOUNT_CHANGED_ERROR,
+  serializeModelSecret,
+} from "./pi-oauth.js";
 
 function credential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
@@ -180,13 +185,48 @@ describe("PiRuntimeCredentialStore", () => {
     expect(retire).toHaveBeenCalledWith(
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
+      // The stored credential state whose refresh produced the foreign account.
+      expect.objectContaining({ refresh: "refresh-token" }),
     );
     // The account-B token is never persisted or adopted in memory.
     expect(persist).not.toHaveBeenCalled();
     expect(await store.read("openai-codex")).toMatchObject({ access: "access-token" });
   });
 
-  it("still fails the refresh when scheduled account-change retirement fails", async () => {
+  it("settles account-change retirement before the error surfaces", async () => {
+    let releaseRetire!: () => void;
+    const retireGate = new Promise<void>((resolve) => {
+      releaseRetire = resolve;
+    });
+    const retire = vi.fn(() => retireGate);
+    const store = new PiRuntimeCredentialStore(
+      "openai-codex",
+      credential({ accountId: "acct-a" }),
+      undefined,
+      retire,
+    );
+
+    let settled = false;
+    const modification = store
+      .modify("openai-codex", async () => credential({ accountId: "acct-b" }))
+      .then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+    // The delete must commit before the account-change failure can be observed.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+
+    releaseRetire();
+    await modification;
+    expect(settled).toBe(true);
+  });
+
+  it("still fails the refresh when the awaited account-change retirement fails", async () => {
     const retire = vi.fn(async () => {
       throw new Error("database gone");
     });
@@ -203,10 +243,42 @@ describe("PiRuntimeCredentialStore", () => {
     expect(retire).toHaveBeenCalledWith(
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
+      expect.objectContaining({ refresh: "refresh-token" }),
     );
-    // Let the detached retirement settle; its failure is logged, not rethrown.
-    await Promise.resolve();
-    await Promise.resolve();
+  });
+
+  it("passes the stored credential state so a stale account-change retire skips a rotated row", async () => {
+    // The caller wires the failed state into a matchesFailedSecret predicate
+    // over the secret row's current ciphertext. The row was rewritten by a
+    // concurrent successful refresh, so the stale account-change failure must
+    // not delete the newer credential — and without the failed state the
+    // fence is absent and the delete would proceed.
+    const stored = credential({ refresh: "refresh-token", expires: 1, accountId: "acct-a" });
+    const rotated = serializeModelSecret({
+      kind: "oauth",
+      credential: credential({
+        refresh: "rotated-refresh",
+        expires: 50_000,
+        accountId: "acct-a",
+      }),
+    });
+    const deleteCredential = vi.fn();
+    const retire = async (
+      _reason: ModelCredentialRetireReason,
+      _detail?: string,
+      failed?: ModelCredentialFailedState,
+    ) => {
+      const matches = failed ? matchesFailedOAuthSecret(() => rotated, failed) : undefined;
+      if (matches && !matches({ id: "secret-codex", ciphertext: "cipher-codex" })) return;
+      deleteCredential();
+    };
+    const store = new PiRuntimeCredentialStore("openai-codex", stored, undefined, retire);
+
+    await expect(
+      store.modify("openai-codex", async () => credential({ accountId: "acct-b" })),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+
+    expect(deleteCredential).not.toHaveBeenCalled();
   });
 
   it("tolerates a missing account id on either side of a mid-run refresh", async () => {

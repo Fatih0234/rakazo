@@ -1,8 +1,10 @@
 import type { Credential, OAuthCredential } from "@earendil-works/pi-ai";
+import type { ModelCredentialFailedState, ModelCredentialRetireReason } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CHATGPT_OAUTH_PROVIDER,
   COPILOT_OAUTH_PROVIDER,
+  matchesFailedOAuthSecret,
   OAUTH_ACCOUNT_CHANGED_ERROR,
   type PiOAuthBegin,
   PiOAuthLogins,
@@ -445,6 +447,23 @@ describe("resolveModelAuth account-change guard", () => {
     toAuth: async (current: OAuthCredential) => ({ apiKey: current.access }),
   });
 
+  // Wire the retire hook the way the executor does around
+  // retireModelCredential: the failed credential state becomes a
+  // matchesFailedOAuthSecret predicate over the secret row's current
+  // ciphertext, and the delete only runs while the row still matches. Without
+  // the failed state there is no fence and the delete proceeds.
+  const fencingRetire =
+    (row: () => string, deleteCredential: () => void) =>
+    async (
+      _reason: ModelCredentialRetireReason,
+      _detail?: string,
+      failed?: ModelCredentialFailedState,
+    ) => {
+      const matches = failed ? matchesFailedOAuthSecret(() => row(), failed) : undefined;
+      if (matches && !matches({ id: "secret-codex", ciphertext: "cipher-codex" })) return;
+      deleteCredential();
+    };
+
   it("persists a refresh that returns the same account", async () => {
     const retire = vi.fn(async () => {});
     const persist = vi.fn(async () => {});
@@ -484,6 +503,8 @@ describe("resolveModelAuth account-change guard", () => {
     expect(retire).toHaveBeenCalledWith(
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
+      // The stored credential state whose refresh produced the foreign account.
+      expect.objectContaining({ refresh: "refresh-token", expires: 1 }),
     );
     // The account-B token is never persisted or used.
     expect(persist).not.toHaveBeenCalled();
@@ -514,6 +535,8 @@ describe("resolveModelAuth account-change guard", () => {
     expect(retire).toHaveBeenCalledWith(
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
+      // The stored credential state whose refresh produced the foreign account.
+      expect.objectContaining({ refresh: "refresh-token", expires: 1 }),
     );
   });
 
@@ -535,6 +558,8 @@ describe("resolveModelAuth account-change guard", () => {
     expect(retire).toHaveBeenCalledWith(
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
+      // The stored credential state whose refresh produced the foreign account.
+      expect.objectContaining({ refresh: "refresh-token", expires: 1 }),
     );
   });
 
@@ -555,7 +580,62 @@ describe("resolveModelAuth account-change guard", () => {
     expect(retire).toHaveBeenCalledWith(
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
+      // The stored credential state whose refresh produced the foreign account.
+      expect.objectContaining({ refresh: "refresh-token", expires: 1 }),
     );
+  });
+
+  it("skips the account-change delete when a concurrent refresh rotated the secret row", async () => {
+    // A sibling run refreshed the ORIGINAL account and rewrote the same secret
+    // row while this refresh was in flight; the stale account-change failure
+    // must not delete the newer credential.
+    const stored = oauthCred({ access: "old", expires: 1, accountId: "acct-a" });
+    let row = serializeModelSecret({ kind: "oauth", credential: stored });
+    const deleteCredential = vi.fn();
+
+    await expect(
+      resolveModelAuth(JSON.stringify(stored), CHATGPT_OAUTH_PROVIDER, {
+        now: 10_000,
+        retire: fencingRetire(() => row, deleteCredential),
+        oauth: {
+          refresh: async () => {
+            row = serializeModelSecret({
+              kind: "oauth",
+              credential: oauthCred({
+                access: "rotated",
+                refresh: "rotated-refresh",
+                expires: 50_000,
+                accountId: "acct-a",
+              }),
+            });
+            return oauthCred({ access: "new", expires: 99_999, accountId: "acct-b" });
+          },
+          toAuth: async (current: OAuthCredential) => ({ apiKey: current.access }),
+        },
+      }),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+
+    expect(deleteCredential).not.toHaveBeenCalled();
+  });
+
+  it("still deletes while the secret row matches the failed account-change state", async () => {
+    // The fence must not block the intended delete: the row still holds the
+    // credential that produced the foreign account, so it goes away.
+    const stored = oauthCred({ access: "old", expires: 1, accountId: "acct-a" });
+    const row = serializeModelSecret({ kind: "oauth", credential: stored });
+    const deleteCredential = vi.fn();
+
+    await expect(
+      resolveModelAuth(JSON.stringify(stored), CHATGPT_OAUTH_PROVIDER, {
+        now: 10_000,
+        retire: fencingRetire(() => row, deleteCredential),
+        oauth: succeedingRefresh(
+          oauthCred({ access: "new", expires: 99_999, accountId: "acct-b" }),
+        ),
+      }),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+
+    expect(deleteCredential).toHaveBeenCalledTimes(1);
   });
 
   it.each([

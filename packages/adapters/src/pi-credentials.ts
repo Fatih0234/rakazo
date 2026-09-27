@@ -93,16 +93,22 @@ export class PiRuntimeCredentialStore implements CredentialStore {
           const refreshedAccountId = oauthCredentialAccountId(next);
           if (storedAccountId && refreshedAccountId && storedAccountId !== refreshedAccountId) {
             // The refresh succeeded but belongs to a different account: retire
-            // the stored credential in the background so the next run sees the
-            // provider disconnected, and fail this run instead of persisting
-            // or using the new token.
+            // the stored credential so the next run sees the provider
+            // disconnected, and fail this run instead of persisting or using
+            // the new token. Await the retirement so the delete commits before
+            // the error surfaces, and fence on the stored credential state so
+            // a concurrent successful refresh is not deleted underneath it. A
+            // retire failure is logged and never masks the account-change error.
             if (this.retireOAuth) {
-              void this.retireOAuth(
-                "account-changed",
-                `stored account ${storedAccountId}, refreshed account ${refreshedAccountId}`,
-              ).catch((retireError) =>
-                getLogger().error("model credential retirement failed", retireError),
-              );
+              try {
+                await this.retireOAuth(
+                  "account-changed",
+                  `stored account ${storedAccountId}, refreshed account ${refreshedAccountId}`,
+                  current?.type === "oauth" ? current : undefined,
+                );
+              } catch (retireError) {
+                getLogger().error("model credential retirement failed", retireError);
+              }
             }
             throw new Error(OAUTH_ACCOUNT_CHANGED_ERROR);
           }

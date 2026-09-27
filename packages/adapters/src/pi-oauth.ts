@@ -499,9 +499,13 @@ export async function resolveModelAuth(
     if (storedAccountId && refreshedAccountId && storedAccountId !== refreshedAccountId) {
       if (opts?.retire) {
         try {
+          // `parsed.credential` is still the stored material whose refresh
+          // produced the foreign account — retirement fences on it so a
+          // concurrently persisted newer credential survives the delete.
           await opts.retire(
             "account-changed",
             `stored account ${storedAccountId}, refreshed account ${refreshedAccountId}`,
+            parsed.credential,
           );
         } catch (retireError) {
           // A retirement failure must never mask the account-change error.
