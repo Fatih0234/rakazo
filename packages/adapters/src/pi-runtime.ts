@@ -1851,15 +1851,20 @@ export interface StreamIdleWatchdog {
 }
 
 /**
- * `timeoutMs` bounds only time-to-headers: once Codex SSE headers arrive, pi
- * consumes the response body until it ends or the request signal aborts, so a
- * connection that goes silent stalls a run forever. pi-ai offers no per-event
- * hook, so the watchdog composes an AbortController into `options.signal` and
- * observes the stream the agent consumes: every delivered event re-arms the
- * timer, and `idleTimeoutMs` of silence aborts the request. pi reports any
- * signal abort as a generic "Request was aborted", so when the watchdog fired
- * the wrapper relabels the terminal error as an idle timeout rather than a
- * caller abort.
+ * `timeoutMs` bounds each attempt's time-to-headers: once Codex SSE headers
+ * arrive, pi consumes the response body until it ends or the request signal
+ * aborts, so a connection that goes silent stalls a run forever. pi-ai offers
+ * no per-event hook, so the watchdog composes an AbortController into
+ * `options.signal` and observes the stream the agent consumes: the first
+ * delivered event arms the timer, every further event re-arms it, and
+ * `idleTimeoutMs` of silence aborts the request.
+ *
+ * Arming on the first event — not at stream creation — keeps each of pi's
+ * header-timeout retries inside its own `timeoutMs` budget. A single budget
+ * armed up front would let a burnt-out attempt's leftover abort a still-valid
+ * retry. pi reports any signal abort as a generic "Request was aborted", so
+ * when the watchdog fired the wrapper relabels the terminal error as an idle
+ * timeout rather than a caller abort.
  */
 export function codexStreamIdleWatchdog(
   upstream: AbortSignal | undefined,
@@ -1892,8 +1897,8 @@ export function codexStreamIdleWatchdog(
     upstream?.removeEventListener("abort", onUpstreamAbort);
   };
 
-  arm();
-
+  // No timer before the first event: the pre-first-event window is bounded by
+  // each attempt's own headers timeout, so idle budget must not burn there.
   const ping = () => {
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;

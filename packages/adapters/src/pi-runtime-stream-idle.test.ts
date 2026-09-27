@@ -57,7 +57,15 @@ describe("Codex stream idle watchdog", () => {
     const inner = new AssistantMessageEventStream();
     const stream = watchdog.wrap(inner);
     const iterator = stream[Symbol.asyncIterator]();
+
+    // No idle budget burns before the first event: the pre-headers window is
+    // bounded per attempt by timeoutMs, so this wait must never abort.
     const pending = iterator.next();
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS * 2);
+    expect(watchdog.signal.aborted).toBe(false);
+
+    inner.push({ type: "start", partial: assistantMessage() });
+    await pending;
 
     await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS - 1);
     expect(watchdog.signal.aborted).toBe(false);
@@ -66,9 +74,10 @@ describe("Codex stream idle watchdog", () => {
     expect(watchdog.signal.reason).toBeInstanceOf(Error);
     expect((watchdog.signal.reason as Error).message).toBe(CODEX_STREAM_IDLE_TIMEOUT_MESSAGE);
 
+    const errored = iterator.next();
     inner.push(abortedByPi());
     inner.end();
-    const { value } = await pending;
+    const { value } = await errored;
     expect(value).toEqual({
       type: "error",
       reason: "error",
@@ -83,6 +92,32 @@ describe("Codex stream idle watchdog", () => {
     });
     await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS * 2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("never aborts a retry that succeeds after an earlier attempt stalled out", async () => {
+    vi.useFakeTimers();
+    const watchdog = codexStreamIdleWatchdog(undefined);
+    const inner = new AssistantMessageEventStream();
+    const stream = watchdog.wrap(inner);
+    const iterator = stream[Symbol.asyncIterator]();
+
+    // Attempt one burns its full headers timeout plus the retry backoff; a
+    // second attempt then needs its own timeoutMs to deliver headers. No
+    // leftover idle budget may kill it.
+    const pending = iterator.next();
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_TIMEOUT_MS + MODEL_STREAM_IDLE_TIMEOUT_MS);
+    expect(watchdog.signal.aborted).toBe(false);
+
+    // The retried attempt's headers arrive: the first event arms the timer.
+    inner.push({ type: "start", partial: assistantMessage() });
+    expect((await pending).value).toMatchObject({ type: "start" });
+    expect(watchdog.signal.aborted).toBe(false);
+
+    const done = iterator.next();
+    inner.push({ type: "done", reason: "stop", message: assistantMessage() });
+    inner.end();
+    expect((await done).value).toMatchObject({ type: "done" });
+    await expect(stream.result()).resolves.toMatchObject({ stopReason: "stop" });
   });
 
   it("re-arms on every delivered event so a busy stream never aborts", async () => {
@@ -197,7 +232,17 @@ describe("reliableModelStream idle gating", () => {
     expect(plainOptions?.signal).toBe(caller.signal);
     expect(plain).toBe(inner);
 
-    // The watchdog aborts only its own request signal, never the caller's.
+    // Before the first event the idle budget stays unarmed, so a headers
+    // timeout leaves a retried attempt its own full timeoutMs.
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS * 2);
+    expect(guardedOptions?.signal?.aborted).toBe(false);
+    expect(caller.signal.aborted).toBe(false);
+
+    // Once events flow, silence is bounded — and the watchdog aborts only its
+    // own request signal, never the caller's.
+    const pending = guarded[Symbol.asyncIterator]().next();
+    inner.push({ type: "start", partial: assistantMessage() });
+    await pending;
     await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS);
     expect(guardedOptions?.signal?.aborted).toBe(true);
     expect(caller.signal.aborted).toBe(false);
