@@ -102,7 +102,10 @@ services:
   api:
     environment:
       SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-docker}
-      SANDBOX_SUPERVISOR_URL: ${SANDBOX_SUPERVISOR_URL:-http://supervisor:7091}
+      # In this topology the supervisor is always the sibling compose service;
+      # hardcoded like docker-compose.images.yml so a copied dev .env
+      # (127.0.0.1) cannot point containers at their own loopback.
+      SANDBOX_SUPERVISOR_URL: http://supervisor:7091
       SANDBOX_SUPERVISOR_TOKEN: ${SANDBOX_SUPERVISOR_TOKEN:?Set SANDBOX_SUPERVISOR_TOKEN in .env}
       SANDBOX_MAX_COMPUTERS_PER_USER: ${SANDBOX_MAX_COMPUTERS_PER_USER:-0}
       SANDBOX_IDLE_MS: ${SANDBOX_IDLE_MS:-600000}
@@ -115,7 +118,7 @@ services:
   worker:
     environment:
       SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-docker}
-      SANDBOX_SUPERVISOR_URL: ${SANDBOX_SUPERVISOR_URL:-http://supervisor:7091}
+      SANDBOX_SUPERVISOR_URL: http://supervisor:7091
       SANDBOX_SUPERVISOR_TOKEN: ${SANDBOX_SUPERVISOR_TOKEN:?Set SANDBOX_SUPERVISOR_TOKEN in .env}
       SANDBOX_MAX_COMPUTERS_PER_USER: ${SANDBOX_MAX_COMPUTERS_PER_USER:-0}
       SANDBOX_IDLE_MS: ${SANDBOX_IDLE_MS:-600000}

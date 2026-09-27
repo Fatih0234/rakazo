@@ -402,6 +402,11 @@ Layer `infra/compose/docker-compose.prod.docker.yml` after the base file in ever
 invocation to run bot computers as local Docker containers instead of a remote provider:
 
 ```bash
+# Pull the registry images first; --pull never fails when they are absent locally.
+docker compose --env-file .env \
+  -f infra/compose/docker-compose.prod.yml \
+  -f infra/compose/docker-compose.prod.docker.yml \
+  pull --ignore-buildable
 docker compose --env-file .env \
   -f infra/compose/docker-compose.prod.yml \
   -f infra/compose/docker-compose.prod.docker.yml \
@@ -422,6 +427,17 @@ updates do not leave the supervisor on the previous app image:
 ```env
 RAKAZO_COMPOSE_FILE=infra/compose/docker-compose.prod.yml:infra/compose/docker-compose.prod.docker.yml
 RAKAZO_UPDATE_SERVICES=supervisor
+```
+
+The updater pulls and recreates services but cannot rebuild the `computer` stub image
+(`pull_policy: build` is not pullable). Rebuild it on the host when the computer image
+should change — for example after updating the checkout:
+
+```bash
+docker compose --env-file .env \
+  -f infra/compose/docker-compose.prod.yml \
+  -f infra/compose/docker-compose.prod.docker.yml \
+  build computer
 ```
 
 ## Restore
