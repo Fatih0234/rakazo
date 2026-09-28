@@ -55,11 +55,13 @@ export type ModelCredentialRetireReason = "terminal-refresh-failure" | "account-
 
 /**
  * Identity of the stored credential material whose refresh attempt triggered
- * retirement. Implementations compare it to the secret still on the credential
- * row so a concurrently persisted newer credential — same row rewritten by a
- * successful refresh, or a reconnect — is not deleted by the stale failure.
+ * retirement. Implementations compare access, refresh, and expiry to the secret
+ * still on the credential row so a concurrently persisted newer credential —
+ * same row rewritten by a successful refresh, or a reconnect — is not deleted
+ * by the stale failure.
  */
 export interface ModelCredentialFailedState {
+  access: string;
   refresh: string;
   expires: number;
 }
