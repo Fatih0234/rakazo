@@ -176,9 +176,8 @@ describe("Docker sandbox", () => {
   });
 
   it("still releases the screen after the run abort signal has fired", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(null, { status: 404 }),
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ error: "computer not found" }, { status: 404 }),
     );
     vi.stubGlobal("fetch", fetchMock);
     const provider = new DockerSandboxProvider("http://supervisor.test", "test-token");
@@ -195,6 +194,31 @@ describe("Docker sandbox", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0]?.[1]?.signal).not.toBe(abort.signal);
     expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+  });
+
+  it("reports a supervisor teardown failure instead of a finished release", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ error: "computer screen failed to stop" }, { status: 500 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new DockerSandboxProvider("http://supervisor.test", "test-token");
+    const computer = {
+      id: "computer",
+      botId: "home-bot",
+      kind: "docker",
+      providerRef: "computer",
+    } as const;
+
+    await expect(provider.releaseScreen(computer, context)).rejects.toThrow(
+      "sandbox screen release failed: 500",
+    );
+
+    fetchMock.mockImplementation(async () =>
+      Response.json({ error: "computer screen failed to stop" }, { status: 404 }),
+    );
+    await expect(provider.releaseScreen(computer, context)).rejects.toThrow(
+      "sandbox screen release failed: 404",
+    );
   });
 
   it("bounds screen release even when fetch ignores cancellation", async () => {

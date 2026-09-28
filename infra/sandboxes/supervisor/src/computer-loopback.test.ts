@@ -767,6 +767,133 @@ describe("space computer limit enforcement", () => {
   });
 });
 
+describe("screen release status", () => {
+  const headers = {
+    authorization: `Bearer ${resolveSupervisorToken(process.env)}`,
+    "content-type": "application/json",
+    "x-rakazo-bot-id": "bot",
+    "x-rakazo-space-id": "space",
+    "x-rakazo-screen-id": "writer",
+  };
+
+  function managedContainer(exec?: ReturnType<typeof vi.fn>) {
+    return {
+      inspect: vi.fn(async () => ({
+        Config: {
+          Labels: { "rakazo.managed": "true", "rakazo.botId": "bot", "rakazo.spaceId": "space" },
+        },
+        HostConfig: { NetworkMode: computerNetworkNameFor("bot") },
+        State: { Running: true },
+        NetworkSettings: {
+          Ports: { "6080/tcp": [{ HostIp: "127.0.0.1", HostPort: screenPort }] },
+        },
+      })),
+      exec:
+        exec ??
+        vi.fn(async () => ({
+          start: async () => Readable.from([]),
+          inspect: async () => ({ ExitCode: 0 }),
+        })),
+    };
+  }
+
+  it("returns 404 only when the computer is already missing", async () => {
+    const { supervisorApp } = await import("./index.js");
+    const missing = {
+      inspect: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error("no such container"), { statusCode: 404 })),
+    };
+    mocks.docker.getContainer.mockReturnValue(missing);
+    const response = await supervisorApp.request("/computers/missing-screen/screen", {
+      method: "DELETE",
+      headers,
+    });
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "computer not found" });
+  });
+
+  it("rejects another computer identity without releasing its screen", async () => {
+    const { supervisorApp } = await import("./index.js");
+    const container = {
+      inspect: vi.fn().mockResolvedValue({
+        Config: {
+          Labels: { "rakazo.managed": "true", "rakazo.botId": "other", "rakazo.spaceId": "other" },
+        },
+      }),
+      exec: vi.fn(),
+    };
+    mocks.docker.getContainer.mockReturnValue(container);
+    const response = await supervisorApp.request("/computers/identity-screen/screen", {
+      method: "DELETE",
+      headers,
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "invalid computer identity" });
+    expect(container.exec).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when tearing down a screen leaves the browser running", async () => {
+    const { supervisorApp } = await import("./index.js");
+    let failStop = false;
+    const container = managedContainer(
+      vi.fn(async (options: { Cmd?: string[] }) => {
+        const command = options.Cmd?.join(" ") ?? "";
+        const code = failStop && command.includes("Browser.close") ? 1 : 0;
+        return {
+          start: async () => Readable.from([]),
+          inspect: async () => ({ ExitCode: code }),
+        };
+      }),
+    );
+    mocks.docker.getContainer.mockReturnValue(container);
+    const opened = await supervisorApp.request("/computers/release-failed/screen-mode", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ interactive: false, revokeControl: false }),
+    });
+    expect(opened.status).toBe(200);
+
+    failStop = true;
+    const released = await supervisorApp.request("/computers/release-failed/screen", {
+      method: "DELETE",
+      headers: { ...headers, "x-rakazo-screen-lease-id": "run-1:1" },
+    });
+    expect(released.status).toBe(500);
+    await expect(released.json()).resolves.toEqual({ error: "computer screen failed to stop" });
+  });
+
+  it("returns 500 when exec.start 404s after the container was found", async () => {
+    const { supervisorApp } = await import("./index.js");
+    let failStart = false;
+    const container = managedContainer(
+      vi.fn(async () => ({
+        start: async () => {
+          if (failStart) throw Object.assign(new Error("no such exec"), { statusCode: 404 });
+          return Readable.from([]);
+        },
+        inspect: async () => ({ ExitCode: 0 }),
+      })),
+    );
+    mocks.docker.getContainer.mockReturnValue(container);
+    const opened = await supervisorApp.request("/computers/exec-start-404/screen-mode", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ interactive: false, revokeControl: false }),
+    });
+    expect(opened.status).toBe(200);
+    expect(container.inspect).toHaveBeenCalled();
+
+    failStart = true;
+    const released = await supervisorApp.request("/computers/exec-start-404/screen", {
+      method: "DELETE",
+      headers: { ...headers, "x-rakazo-screen-lease-id": "run-1:1" },
+    });
+    expect(released.status).toBe(500);
+    await expect(released.json()).resolves.toEqual({ error: "no such exec" });
+  });
+});
+
 describe("screen registry across run boundaries", () => {
   it("does not reset the desktop when a screen is requested after the last one is released", async () => {
     const { supervisorApp } = await import("./index.js");

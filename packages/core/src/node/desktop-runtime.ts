@@ -332,6 +332,11 @@ export function resetDesktopRuntimeCommand(env = DEFAULT_DESKTOP_ENV) {
 
 const TARGETS = "/tmp/rakazo/desktop-targets";
 
+// Menu exec strings run through `/bin/sh -c`, where `#` starts a comment; rgb:a/b/c keeps
+// hex colors intact. infra/sandboxes/computer/fluxbox.menu carries the same entry.
+export const TERMINAL_MENU_COMMAND =
+  "xterm -bg rgb:11/11/13 -fg rgb:e8/e8/ea -cr rgb:e8/e8/ea -title Terminal";
+
 // Keep fixed mapping files present: TokenFile may be reading the directory concurrently.
 function revokeTargetCommand(kind: "view" | "control", display: number | string) {
   return `mkdir -p ${TARGETS}; : >/tmp/rakazo/${kind}-target-next-${display}; mv /tmp/rakazo/${kind}-target-next-${display} ${TARGETS}/${kind}-${display}`;
@@ -462,6 +467,11 @@ function renderEnsureScreenCommand(
           `for i in $(seq 1 100); do xdpyinfo -display ${layout.display} >/dev/null 2>&1 && break; sleep 0.1; done`,
         ]
       : [
+          // A display created before the Terminal entry already answers xdpyinfo, so the
+          // branch below does not run. Rewrite the menu anyway; fluxbox rereads that file,
+          // so leave the display and window manager running.
+          `mkdir -p ${fluxHome}/.fluxbox`,
+          `printf '[begin] (Desktop)\\n[exec] (Browser) {%s}\\n[exec] (Terminal) {%s}\\n[end]\\n' ${browserLauncherPath(layout.displayNumber)} ${shellQuote(TERMINAL_MENU_COMMAND)} >${fluxHome}/.fluxbox/menu`,
           `if ! xdpyinfo -display ${layout.display} >/dev/null 2>&1; then`,
           `  mkdir -p /tmp/rakazo ${fluxHome}/.fluxbox /tmp/.X11-unix`,
           `  rm -f /tmp/.X${layout.displayNumber}-lock /tmp/.X11-unix/X${layout.displayNumber}`,
@@ -470,7 +480,6 @@ function renderEnsureScreenCommand(
           `  xdpyinfo -display ${layout.display} >/dev/null 2>&1 || exit 1`,
           `  if [ -f /etc/rakazo/fluxbox/init ]; then cp /etc/rakazo/fluxbox/init ${fluxHome}/.fluxbox/init; else printf "session.screen0.toolbar.visible: false\\n" >${fluxHome}/.fluxbox/init; fi`,
           `  cp /etc/rakazo/fluxbox/apps ${fluxHome}/.fluxbox/apps 2>/dev/null || true`,
-          `  printf '[begin] (Desktop)\\n[exec] (Browser) {%s}\\n[end]\\n' ${browserLauncherPath(layout.displayNumber)} >${fluxHome}/.fluxbox/menu`,
           `  printf '\\nsession.menuFile: %s\\n' ${fluxHome}/.fluxbox/menu >>${fluxHome}/.fluxbox/init`,
           `  HOME=${shellQuote(env.homeDir)} CHROME_USER_DATA_DIR=${shellQuote(profile)} BROWSER=${browserLauncherPath(layout.displayNumber)} DISPLAY=${layout.display} nohup fluxbox -rc ${fluxHome}/.fluxbox/init 8>&- 9>&- </dev/null >${log}-fluxbox.log 2>&1 &`,
           "fi",
@@ -639,9 +648,14 @@ export function releaseDesktopCommand(
     'index=$(sed -n "1p" "$slot")',
     "flock -u 9; exec 9>&-",
     `bash -eu -c ${shellQuote(renderStopExtraScreenCommand(undefined, screenId, env))} desktop "$index"`,
-    'exec 9>"$dir/.lock"; flock -w 120 9',
-    'rm -f "$slot"',
+    // Chromium has stopped. Publish that before clearing the slot so a later
+    // lock or removal failure is not read as a browser that is still running.
+    // set -e leaves that failure non-zero, and the slot is removed only while
+    // the shared registry lock is held.
     'printf "RAKAZO_DESKTOP_RELEASED=%s\\n" "$index"',
+    'exec 9>"$dir/.lock"',
+    "flock -w 120 9",
+    'rm -f -- "$slot"',
   ].join("\n");
 }
 

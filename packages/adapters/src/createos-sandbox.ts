@@ -16,7 +16,11 @@ import type {
   ScreenSession,
 } from "@rakazo/adapter-kit";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
-import { stopBrowserProfileCommand } from "@rakazo/core/node/desktop-runtime";
+import {
+  browserProfilePathForScreen,
+  DEFAULT_DESKTOP_ENV,
+  quiesceBrowserProfilesCommand,
+} from "@rakazo/core/node/desktop-runtime";
 import { sandboxIdleMs } from "./computer-idle.js";
 import { screenSessionKey } from "./computer-screens.js";
 import {
@@ -34,9 +38,22 @@ import {
 import { readBodyCapped } from "./web-ssrf.js";
 
 const CREATEOS_WORKSPACE = "/home/desktop/rakazo-home";
-const CREATEOS_CHROMIUM_PROFILE = `${CREATEOS_WORKSPACE}/.browser-profiles/chromium`;
-const CREATEOS_FIREFOX_PROFILE = `${CREATEOS_WORKSPACE}/.browser-profiles/firefox`;
-const CREATEOS_CHROMIUM_PID = "/tmp/rakazo/createos-chromium.pid";
+const CREATEOS_BROWSER_PROFILES = `${CREATEOS_WORKSPACE}/.browser-profiles`;
+const CREATEOS_FIREFOX_PROFILE = `${CREATEOS_BROWSER_PROFILES}/firefox`;
+
+function createosDesktopEnv() {
+  return {
+    ...DEFAULT_DESKTOP_ENV,
+    homeDir: "/home/desktop",
+    workspaceDir: CREATEOS_WORKSPACE,
+    browserProfilesDir: CREATEOS_BROWSER_PROFILES,
+  };
+}
+
+/** Same chromium-bot-<hash> directory hard delete removes for this bot. */
+function createosChromiumProfile(screenId: string) {
+  return browserProfilePathForScreen(screenId, createosDesktopEnv());
+}
 const CREATEOS_DRAINING_SCREEN = "draining:";
 const CREATEOS_SCREEN_MAP_PATH = `${CREATEOS_WORKSPACE}/.rakazo/screens.json`;
 export const CREATEOS_SCREEN_MAP_SENTINEL = "RAKAZO_SCREEN_MAP_V1";
@@ -155,6 +172,172 @@ for relative in ("Default/Preferences", "Local State"):
         json.dump(data, handle)
 `;
 
+/** True when this profile's browser is running. Renderers carry --type= and do not count. */
+const CHROME_PROFILE_RUNNING_SCRIPT = `
+import os, sys
+profile = sys.argv[1]
+flag = "--user-data-dir=" + profile
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        raw = open("/proc/" + pid + "/cmdline", "rb").read()
+    except OSError:
+        continue
+    text = raw.replace(b"\\0", b"\\n").decode("utf-8", "replace")
+    args = [line for line in text.split("\\n") if line]
+    joined = " " + text.replace("\\n", " ") + " "
+    if flag not in args and (" " + flag + " ") not in joined:
+        continue
+    if "--type=" in text.replace(flag, ""):
+        continue
+    raise SystemExit(0)
+raise SystemExit(1)
+`;
+
+/** A free loopback debugger port, starting from a stable offset of this profile path. */
+const CHROME_DEBUG_PORT_SCRIPT = `
+import socket, sys
+profile = sys.argv[1]
+digest = 0
+for byte in profile.encode():
+    digest = (digest * 131 + byte) & 0xFFFFFFFF
+span = 65535 - 9222 + 1
+start = digest % span
+for offset in range(span):
+    port = 9222 + ((start + offset) % span)
+    sock = socket.socket()
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError:
+        sock.close()
+        continue
+    sock.close()
+    print(port)
+    raise SystemExit(0)
+raise SystemExit(1)
+`;
+
+/**
+ * Exit 0 when this profile's browser process owns its debugger socket.
+ * argv: profile [port] [proc_root]. An empty port accepts the port on the command line.
+ */
+export const CHROME_OWNS_DEBUG_PORT_SCRIPT = `
+import os, sys
+profile = sys.argv[1]
+expect = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "" else None
+root = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != "" else "/proc"
+flag = "--user-data-dir=" + profile
+try:
+    names = os.listdir(root)
+except OSError:
+    raise SystemExit(1)
+for pid in names:
+    if not pid.isdigit():
+        continue
+    try:
+        raw = open(root + "/" + pid + "/cmdline", "rb").read()
+    except OSError:
+        continue
+    text = raw.replace(b"\\0", b"\\n").decode("utf-8", "replace")
+    args = [line for line in text.split("\\n") if line]
+    joined = " " + text.replace("\\n", " ") + " "
+    if flag not in args and (" " + flag + " ") not in joined:
+        continue
+    stripped = text.replace(flag, "")
+    if "--type=" in stripped:
+        continue
+    found = None
+    for arg in args:
+        if arg.startswith("--remote-debugging-port=") and arg.split("=", 1)[1].isdigit():
+            found = int(arg.split("=", 1)[1])
+            break
+    if found is None:
+        marker = "--remote-debugging-port="
+        start = stripped.rfind(marker)
+        if start >= 0:
+            digits = []
+            index = start + len(marker)
+            while index < len(stripped) and stripped[index].isdigit():
+                digits.append(stripped[index])
+                index += 1
+            if digits:
+                found = int("".join(digits))
+    if found is None or (expect is not None and str(found) != expect):
+        continue
+    hexport = format(found, "X")
+    inodes = set()
+    for net in (root + "/net/tcp", root + "/net/tcp6"):
+        try:
+            handle = open(net, encoding="utf-8")
+        except OSError:
+            continue
+        with handle:
+            next(handle, None)
+            for line in handle:
+                fields = line.split()
+                if len(fields) < 10 or fields[1].rsplit(":", 1)[-1].upper() != hexport:
+                    continue
+                inodes.add(fields[9])
+    try:
+        fds = os.listdir(root + "/" + pid + "/fd")
+    except OSError:
+        continue
+    for name in fds:
+        try:
+            link = os.readlink(root + "/" + pid + "/fd/" + name)
+        except OSError:
+            continue
+        if link.startswith("socket:[") and link[8:-1] in inodes:
+            raise SystemExit(0)
+raise SystemExit(1)
+`;
+
+/** Stop this profile's browser so a failed debugger bind cannot keep the profile. */
+const CHROME_STOP_PROFILE_SCRIPT = `
+import os, signal, sys, time
+profile = sys.argv[1]
+flag = "--user-data-dir=" + profile
+pids = []
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        raw = open("/proc/" + pid + "/cmdline", "rb").read()
+    except OSError:
+        continue
+    text = raw.replace(b"\\0", b"\\n").decode("utf-8", "replace")
+    args = [line for line in text.split("\\n") if line]
+    joined = " " + text.replace("\\n", " ") + " "
+    if flag not in args and (" " + flag + " ") not in joined:
+        continue
+    if "--type=" in text.replace(flag, ""):
+        continue
+    pids.append(int(pid))
+for pid in pids:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+deadline = time.time() + 1
+while time.time() < deadline and pids:
+    alive = []
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            continue
+        alive.append(pid)
+    pids = alive
+    if pids:
+        time.sleep(0.05)
+for pid in pids:
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+`;
+
 export interface CreateOSSandboxProviderOptions {
   apiKey: string;
   baseUrl?: string;
@@ -271,18 +454,19 @@ export class CreateOSSandboxProvider implements SandboxProvider {
   }
 
   async prepare(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    const profile = createosChromiumProfile(screenSessionKey(context));
     await this.executeChecked(
       computer,
       [
         "bash",
         "-lc",
         [
-          `mkdir -p ${shellQuote(CREATEOS_WORKSPACE)} ${shellQuote(CREATEOS_CHROMIUM_PROFILE)} ${shellQuote(CREATEOS_FIREFOX_PROFILE)}`,
+          `mkdir -p ${shellQuote(CREATEOS_WORKSPACE)} ${shellQuote(profile)} ${shellQuote(CREATEOS_FIREFOX_PROFILE)}`,
           "mkdir -p /tmp/runtime-desktop",
           "chmod 700 /tmp/runtime-desktop",
           "mkdir -p /home/desktop/.config",
-          `ln -sfn ${shellQuote(CREATEOS_CHROMIUM_PROFILE)} /home/desktop/.config/google-chrome`,
-          `ln -sfn ${shellQuote(CREATEOS_CHROMIUM_PROFILE)} /home/desktop/.config/chromium`,
+          `ln -sfn ${shellQuote(profile)} /home/desktop/.config/google-chrome`,
+          `ln -sfn ${shellQuote(profile)} /home/desktop/.config/chromium`,
           `ln -sfn ${shellQuote(CREATEOS_FIREFOX_PROFILE)} /home/desktop/.mozilla`,
           `chown -R desktop:desktop ${shellQuote(CREATEOS_WORKSPACE)} /home/desktop/.config /home/desktop/.mozilla /tmp/runtime-desktop`,
         ].join(" && "),
@@ -483,11 +667,11 @@ print(json.dumps(out))
     // Dirty state does not survive a process restart or a second provider
     // instance, and skipping the walk commits an empty checkpoint over the home.
     if (!(await this.hasExportableWorkspaceFiles(computer, "", context))) return;
-    // Preferences and Local State stay in the export. Close Chromium first, the
-    // same way other desktop providers quiesce a profile before copying it.
+    // Preferences and Local State stay in the export. Close every Chromium profile
+    // the walk copies. Browsers outside those directories keep running.
     await this.executeChecked(
       computer,
-      ["bash", "-lc", stopBrowserProfileCommand(CREATEOS_CHROMIUM_PROFILE, CREATEOS_CHROMIUM_PID)],
+      ["bash", "-lc", quiesceBrowserProfilesCommand(createosDesktopEnv())],
       context,
     );
     yield* this.walkWorkspace(computer, "", context);
@@ -944,92 +1128,186 @@ print(json.dumps(out))
     context: AdapterContext,
     options: { settleMs?: number } = {},
   ): Promise<void> {
-    if (await this.openBrowserTab(computer, uri, context)) {
+    const profile = createosChromiumProfile(screenSessionKey(context));
+    if (await this.openBrowserTab(computer, uri, profile, context)) {
       const settleMs = clampRounded(options.settleMs ?? 1_000, 0, 5_000);
       if (settleMs > 0) await delay(settleMs, undefined, { signal: context.signal });
       return;
     }
-    const profile = CREATEOS_CHROMIUM_PROFILE;
     const settleMs = clampRounded(options.settleMs ?? 1_000, 0, 5_000);
+    const profileQuoted = shellQuote(profile);
+    const chromeEnv = [
+      "setsid",
+      "runuser -u desktop --",
+      "nohup",
+      "env",
+      "HOME=/home/desktop",
+      "USER=desktop",
+      "LOGNAME=desktop",
+      "DISPLAY=:0",
+      "XDG_RUNTIME_DIR=/tmp/runtime-desktop",
+      "google-chrome",
+    ];
+    // The port probe closes its socket before Chrome binds it, so two launches can
+    // pick the same port. A loser that stays up must not count as a healthy profile.
+    const launchBrowser = [
+      `if python3 -c ${shellQuote(CHROME_PROFILE_RUNNING_SCRIPT)} ${profileQuoted} && python3 -c ${shellQuote(CHROME_OWNS_DEBUG_PORT_SCRIPT)} ${profileQuoted}; then`,
+      [
+        ...chromeEnv,
+        `--user-data-dir=${profileQuoted}`,
+        "--new-tab",
+        shellQuote(uri),
+        ">/tmp/rakazo-chrome.log 2>&1 </dev/null &",
+      ].join(" "),
+      "else",
+      `python3 -c ${shellQuote(CHROME_STOP_PROFILE_SCRIPT)} ${profileQuoted}`,
+      "&&",
+      [
+        "rm -f",
+        shellQuote(`${profile}/SingletonLock`),
+        shellQuote(`${profile}/SingletonSocket`),
+        shellQuote(`${profile}/SingletonCookie`),
+      ].join(" "),
+      "&&",
+      `python3 -c ${shellQuote(CHROME_CLEAN_EXIT_SCRIPT)} ${profileQuoted}`,
+      "&&",
+      "owned=0",
+      "&&",
+      "attempt=0",
+      "&&",
+      'while [ "$attempt" -lt 2 ]; do',
+      `debug_port=$(python3 -c ${shellQuote(CHROME_DEBUG_PORT_SCRIPT)} ${profileQuoted}) || exit 1`,
+      [
+        ...chromeEnv,
+        "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-crash-reporter",
+        "--disable-session-crashed-bubble",
+        "--disable-infobars",
+        "--disable-gpu",
+        "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=$debug_port",
+        `--user-data-dir=${profileQuoted}`,
+        shellQuote(uri),
+        ">/tmp/rakazo-chrome.log 2>&1 </dev/null &",
+      ].join(" "),
+      "probe=0",
+      'while [ "$probe" -lt 8 ]; do',
+      `if python3 -c ${shellQuote(CHROME_OWNS_DEBUG_PORT_SCRIPT)} ${profileQuoted} "$debug_port"; then owned=1; break; fi`,
+      "sleep 0.25",
+      "probe=$((probe + 1))",
+      "done",
+      'if [ "$owned" = 1 ]; then break; fi',
+      `python3 -c ${shellQuote(CHROME_STOP_PROFILE_SCRIPT)} ${profileQuoted}`,
+      "attempt=$((attempt + 1))",
+      "done",
+      'test "$owned" = 1',
+      "fi",
+    ].reduce((script, part) => {
+      if (part === "&&") return script.replace(/\n?$/, " &&\n");
+      return script ? `${script}\n${part}` : part;
+    }, "");
     await this.executeChecked(
       computer,
       [
         "bash",
         "-lc",
         [
-          `mkdir -p ${shellQuote(profile)} /tmp/runtime-desktop`,
-          `chown -R desktop:desktop ${shellQuote(profile)} /tmp/runtime-desktop`,
+          `mkdir -p ${profileQuoted} /home/desktop/.config /tmp/runtime-desktop`,
+          `ln -sfn ${profileQuoted} /home/desktop/.config/google-chrome`,
+          `ln -sfn ${profileQuoted} /home/desktop/.config/chromium`,
+          `chown -R desktop:desktop ${profileQuoted} /tmp/runtime-desktop`,
           "chmod 700 /tmp/runtime-desktop",
-          [
-            "if pgrep -u desktop -f 'chrome|chromium' >/dev/null; then",
-            [
-              "setsid",
-              "runuser -u desktop --",
-              "nohup",
-              "env",
-              "HOME=/home/desktop",
-              "USER=desktop",
-              "LOGNAME=desktop",
-              "DISPLAY=:0",
-              "XDG_RUNTIME_DIR=/tmp/runtime-desktop",
-              "google-chrome",
-              "--new-tab",
-              shellQuote(uri),
-              ">/tmp/rakazo-chrome.log 2>&1 </dev/null &",
-            ].join(" "),
-            "else",
-            [
-              "rm -f",
-              shellQuote(`${profile}/SingletonLock`),
-              shellQuote(`${profile}/SingletonSocket`),
-              shellQuote(`${profile}/SingletonCookie`),
-            ].join(" "),
-            "&&",
-            ["python3 -c", shellQuote(CHROME_CLEAN_EXIT_SCRIPT), shellQuote(profile)].join(" "),
-            "&&",
-            [
-              "setsid",
-              "runuser -u desktop --",
-              "nohup",
-              "env",
-              "HOME=/home/desktop",
-              "USER=desktop",
-              "LOGNAME=desktop",
-              "DISPLAY=:0",
-              "XDG_RUNTIME_DIR=/tmp/runtime-desktop",
-              "google-chrome",
-              "--disable-dev-shm-usage",
-              "--no-first-run",
-              "--no-default-browser-check",
-              "--disable-crash-reporter",
-              "--disable-session-crashed-bubble",
-              "--disable-infobars",
-              "--disable-gpu",
-              "--remote-debugging-address=127.0.0.1",
-              "--remote-debugging-port=9222",
-              `--user-data-dir=${shellQuote(profile)}`,
-              shellQuote(uri),
-              ">/tmp/rakazo-chrome.log 2>&1 </dev/null &",
-            ].join(" "),
-            "fi",
-          ].join(" "),
+          launchBrowser,
           ...(settleMs > 0 ? [`sleep ${shellQuote(String(settleMs / 1_000))}`] : []),
         ].join(" && "),
       ],
       context,
-      10_000 + settleMs,
+      16_000 + settleMs,
     );
   }
 
   private async openBrowserTab(
     computer: ComputerRef,
     uri: string,
+    profile: string,
     context: AdapterContext,
   ): Promise<boolean> {
     const script = `
-import sys, urllib.parse, urllib.request
-uri = sys.argv[1]
-target = "http://127.0.0.1:9222/json/new?" + urllib.parse.quote(uri, safe="")
+import os, sys, urllib.parse, urllib.request
+uri, profile = sys.argv[1], sys.argv[2]
+flag = "--user-data-dir=" + profile
+port = None
+owner = None
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        raw = open("/proc/" + pid + "/cmdline", "rb").read()
+    except OSError:
+        continue
+    text = raw.replace(b"\\0", b"\\n").decode("utf-8", "replace")
+    args = [line for line in text.split("\\n") if line]
+    joined = " " + text.replace("\\n", " ") + " "
+    if flag not in args and (" " + flag + " ") not in joined:
+        continue
+    stripped = text.replace(flag, "")
+    if "--type=" in stripped:
+        continue
+    found = None
+    for arg in args:
+        if arg.startswith("--remote-debugging-port=") and arg.split("=", 1)[1].isdigit():
+            found = int(arg.split("=", 1)[1])
+            break
+    if found is None:
+        marker = "--remote-debugging-port="
+        start = stripped.rfind(marker)
+        if start >= 0:
+            digits = []
+            index = start + len(marker)
+            while index < len(stripped) and stripped[index].isdigit():
+                digits.append(stripped[index])
+                index += 1
+            if digits:
+                found = int("".join(digits))
+    if found is None:
+        continue
+    port = found
+    owner = pid
+    break
+if port is None or owner is None:
+    raise SystemExit(1)
+hexport = format(port, "X")
+inodes = set()
+for net in ("/proc/net/tcp", "/proc/net/tcp6"):
+    try:
+        handle = open(net, encoding="utf-8")
+    except OSError:
+        continue
+    with handle:
+        next(handle, None)
+        for line in handle:
+            fields = line.split()
+            if len(fields) < 10 or fields[1].rsplit(":", 1)[-1].upper() != hexport:
+                continue
+            inodes.add(fields[9])
+owned = False
+try:
+    names = os.listdir("/proc/" + owner + "/fd")
+except OSError:
+    raise SystemExit(1)
+for name in names:
+    try:
+        link = os.readlink("/proc/" + owner + "/fd/" + name)
+    except OSError:
+        continue
+    if link.startswith("socket:[") and link[8:-1] in inodes:
+        owned = True
+        break
+if not owned:
+    raise SystemExit(1)
+target = "http://127.0.0.1:" + str(port) + "/json/new?" + urllib.parse.quote(uri, safe="")
 for method in ("PUT", "GET"):
     try:
         req = urllib.request.Request(target, method=method)
@@ -1041,7 +1319,7 @@ raise SystemExit(1)
 `;
     const result = await this.runCommand(
       computer,
-      { argv: ["python3", "-c", script, uri] },
+      { argv: ["python3", "-c", script, uri, profile] },
       context,
       3_000,
     );

@@ -80,6 +80,7 @@ import {
   releaseComputerExecutionLease,
   replaceComputer,
   resolveAutoReviewChecker,
+  resolveBotUploadPath,
   resolveBotWorkspacePath,
   sanitizeComposioError,
   savePushToken,
@@ -98,9 +99,20 @@ import {
   verifyMcpInstall,
 } from "@rakazo/adapters";
 import type { Auth } from "@rakazo/auth";
-import type { Actor, Bot, ComputerStatus, McpServer, Me, SpaceNavigation } from "@rakazo/contracts";
+import type {
+  Actor,
+  Bot,
+  ComputerReleaseReason,
+  ComputerStatus,
+  McpServer,
+  Me,
+  SpaceNavigation,
+} from "@rakazo/contracts";
 import {
+  ATTACHMENT_MAX_BYTES,
   appContract,
+  ComputerCommandSchema,
+  foldComputerCommands,
   IntegrationProviderIdSchema,
   OPENAI_COMPATIBLE_PROVIDER_ID,
   usableModelId,
@@ -237,6 +249,8 @@ import {
 } from "./voice.js";
 
 const MAX_COMPUTER_TEXT_FILE_BYTES = 2 * 1024 * 1024;
+/** Each command writes a running and a done event, so this keeps about 100 commands. */
+const COMPUTER_COMMAND_HISTORY_EVENTS = 200;
 const THREAD_MESSAGE_PAGE_SIZE = 100;
 const EXPORT_MESSAGE_PAGE_SIZE = 500;
 
@@ -1565,6 +1579,7 @@ export function createRouter(deps: RouterDeps) {
             traceId: "destroy",
             spaceId: context.actor.spaceId,
             userId: context.actor.userId,
+            botId: bot.id,
             signal: new AbortController().signal,
           },
           { deleteMemories: input.deleteMemories },
@@ -2357,55 +2372,7 @@ export function createRouter(deps: RouterDeps) {
         return { leaseId, expiresAt: expiresAt.toISOString() };
       }),
       release: authed.computer.release.handler(async ({ context, input }) => {
-        const bot = await repos.getBot(context.actor, input.botId);
-        if (!bot.computer) throw new IsolationError();
-        const controlBotId = bot.computer.controlBotId;
-        const controlLeaseId = bot.computer.controlLeaseId;
-        if (bot.computer.controlHolder !== "user" || !controlBotId || controlBotId !== bot.id) {
-          return { ok: true as const };
-        }
-        if (!hasActiveComputerControl(bot.computer) || !controlLeaseId) {
-          // Stale controlHolder=user. Prefer expiry (revokes provider control). If a lease id
-          // remains after a failed revoke, keep it so reconciliation can retry.
-          if (controlLeaseId) {
-            await expireComputerControl(deps, bot.computer.id, controlLeaseId).catch(
-              () => undefined,
-            );
-          } else {
-            await clearInactiveUserComputerControl(deps.prisma, bot.computer.id);
-          }
-          return { ok: true as const };
-        }
-        if (bot.computer.providerRef) {
-          await deps.sandbox.setScreenControl?.(
-            toComputerRef(bot.computer),
-            false,
-            computerContext(context.actor, controlBotId, "screen.release"),
-            controlLeaseId,
-          );
-        }
-
-        const released = await deps.events.finalizeComputerControlRelease({
-          spaceId: context.actor.spaceId,
-          computerId: bot.computer.id,
-          botId: controlBotId,
-          runId: bot.computer.controlRunId,
-          leaseId: controlLeaseId,
-          holder: "bot",
-          reason: input.reason ?? "released",
-        });
-        if (!released) return { ok: true as const };
-        // The lease-specific key makes this cancellation safe after a replacement takeover.
-        await deps.jobs
-          .cancel(computerControlExpireJobKey(bot.computer.id, controlLeaseId))
-          .catch((error) => {
-            // The expired job is harmless after the lease is cleared, so do not report a
-            // failed release after the transaction has committed.
-            getLogger().error("computer control expiry cancellation", error);
-          });
-
-        await enqueueTakeoverContinuation(deps.jobs, released.runId);
-        scheduleComputerSleep(deps.jobs, bot.computer.id);
+        await releaseComputerControl(deps, context.actor, input.botId, input.reason);
         return { ok: true as const };
       }),
       input: authed.computer.input.handler(async ({ context, input }) => {
@@ -2507,6 +2474,86 @@ export function createRouter(deps: RouterDeps) {
           }
         }
         return { path: input.path, content };
+      }),
+      downloadFile: authed.computer.downloadFile.handler(async ({ context, input }) => {
+        const bot = await repos.getBot(context.actor, input.botId);
+        const computer = bot.computer;
+        if (!computer) throw new IsolationError();
+        // The stopped-computer home store is text-only; binary transfer needs the live machine.
+        if (computer.state !== "running" || !computer.providerRef) {
+          throw new ORPCError("CONFLICT", { message: "Start the computer first." });
+        }
+        await keepComputerAwake(deps, computer.id);
+        const storedPath = resolveBotWorkspacePath(
+          parseComputerMode(computer.scope),
+          bot.id,
+          input.path,
+        );
+        const bytes = await deps.sandbox
+          .readFile(
+            toComputerRef(computer),
+            storedPath,
+            computerContext(context.actor, bot.id, "download"),
+            { maxBytes: ATTACHMENT_MAX_BYTES },
+          )
+          .catch((error: unknown) => {
+            if (error instanceof Error && /exceeds|too large/i.test(error.message)) {
+              throw new ORPCError("BAD_REQUEST", { message: "File is too large to download." });
+            }
+            throw error;
+          });
+        return { path: input.path, contentBase64: Buffer.from(bytes).toString("base64") };
+      }),
+      uploadFile: authed.computer.uploadFile.handler(async ({ context, input }) => {
+        let bot = await repos.getBot(context.actor, input.botId);
+        if (await expireStaleComputerControl(deps, bot.computer)) {
+          bot = await repos.getBot(context.actor, input.botId);
+        }
+        const computer = bot.computer;
+        if (!computer) throw new IsolationError();
+        if (computer.state !== "running" || !computer.providerRef) {
+          throw new ORPCError("CONFLICT", { message: "Start the computer first." });
+        }
+        if (!hasActiveComputerControl(computer) || computer.controlBotId !== bot.id) {
+          throw new ORPCError("FORBIDDEN", { message: "Take control first." });
+        }
+        const content = Buffer.from(input.contentBase64, "base64");
+        if (content.byteLength > ATTACHMENT_MAX_BYTES) {
+          throw new ORPCError("BAD_REQUEST", { message: "File is too large to upload." });
+        }
+        await keepComputerAwake(deps, computer.id);
+        let storedPath: string;
+        try {
+          storedPath = resolveBotUploadPath(parseComputerMode(computer.scope), bot.id, input.path);
+        } catch (error) {
+          if (error instanceof Error && /escapes/i.test(error.message)) {
+            throw new ORPCError("BAD_REQUEST", { message: error.message });
+          }
+          throw error;
+        }
+        await deps.sandbox.writeFile(
+          toComputerRef(computer),
+          { path: storedPath, content },
+          computerContext(context.actor, bot.id, "upload"),
+        );
+        return { ok: true as const };
+      }),
+      commands: authed.computer.commands.handler(async ({ context, input }) => {
+        const bot = await repos.getBot(context.actor, input.botId);
+        const events = await deps.prisma.event.findMany({
+          where: { spaceId: context.actor.spaceId, botId: bot.id, type: "computer.command" },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: COMPUTER_COMMAND_HISTORY_EVENTS,
+          select: { payload: true, createdAt: true },
+        });
+        return foldComputerCommands(
+          events.reverse().flatMap((event) => {
+            const parsed = ComputerCommandSchema.safeParse(event.payload);
+            return parsed.success
+              ? [{ ...parsed.data, createdAt: event.createdAt.toISOString() }]
+              : [];
+          }),
+        );
       }),
       screenUrl: authed.computer.screenUrl.handler(async ({ context, input }) => {
         let bot = await repos.getBot(context.actor, input.botId);
@@ -5417,6 +5464,60 @@ async function computerStatus(
   return toComputerStatus(botId, bot.computer, busyBotName);
 }
 
+/** Hand the user's screen control for this bot back, continuing any run waiting on it. */
+async function releaseComputerControl(
+  deps: RouterDeps,
+  actor: Actor,
+  botId: string,
+  reason?: ComputerReleaseReason,
+): Promise<void> {
+  const bot = await createRepos(deps.prisma).getBot(actor, botId);
+  if (!bot.computer) throw new IsolationError();
+  const controlBotId = bot.computer.controlBotId;
+  const controlLeaseId = bot.computer.controlLeaseId;
+  if (bot.computer.controlHolder !== "user" || !controlBotId || controlBotId !== bot.id) return;
+  if (!hasActiveComputerControl(bot.computer) || !controlLeaseId) {
+    // Stale controlHolder=user. Prefer expiry (revokes provider control). If a lease id
+    // remains after a failed revoke, keep it so reconciliation can retry.
+    if (controlLeaseId) {
+      await expireComputerControl(deps, bot.computer.id, controlLeaseId).catch(() => undefined);
+    } else {
+      await clearInactiveUserComputerControl(deps.prisma, bot.computer.id);
+    }
+    return;
+  }
+  if (bot.computer.providerRef) {
+    await deps.sandbox.setScreenControl?.(
+      toComputerRef(bot.computer),
+      false,
+      computerContext(actor, controlBotId, "screen.release"),
+      controlLeaseId,
+    );
+  }
+
+  const released = await deps.events.finalizeComputerControlRelease({
+    spaceId: actor.spaceId,
+    computerId: bot.computer.id,
+    botId: controlBotId,
+    runId: bot.computer.controlRunId,
+    leaseId: controlLeaseId,
+    holder: "bot",
+    reason: reason ?? "released",
+  });
+  if (!released) return;
+  // The lease-specific key makes this cancellation safe after a replacement takeover.
+  await deps.jobs
+    .cancel(computerControlExpireJobKey(bot.computer.id, controlLeaseId))
+    .catch((error) => {
+      // The expired job is harmless after the lease is cleared, so do not report a
+      // failed release after the transaction has committed.
+      getLogger().error("computer control expiry cancellation", error);
+    });
+
+  await enqueueTakeoverContinuation(deps.jobs, released.runId);
+  scheduleComputerSleep(deps.jobs, bot.computer.id);
+}
+
 async function runComputerReplace(
   deps: RouterDeps,
   context: { actor: Actor },
@@ -5447,10 +5548,18 @@ async function runComputerReplace(
     throw error;
   }
   try {
-    await replaceComputer(deps, bot.computer.id, mode, {
-      ...computerContext(context.actor, bot.id, operationId),
-      screenLeaseId: screenLeaseIdForRun(lease, manualRunId),
-    });
+    await replaceComputer(
+      deps,
+      bot.computer.id,
+      mode,
+      {
+        ...computerContext(context.actor, bot.id, operationId),
+        screenLeaseId: screenLeaseIdForRun(lease, manualRunId),
+      },
+      "none",
+      undefined,
+      { handBackIdleTakeover: true },
+    );
     scheduleComputerSleep(deps.jobs, bot.computer.id);
   } catch (error) {
     if (error instanceof ComputerBusyError) {
@@ -5768,6 +5877,14 @@ async function listRoutinesDto(deps: RouterDeps, actor: Actor, botId: string) {
     where: { botId, spaceId: actor.spaceId },
   });
   return rows.map(mapRoutine);
+}
+
+async function keepComputerAwake(deps: RouterDeps, computerId: string) {
+  await deps.prisma.computer.updateMany({
+    where: { id: computerId, state: "running" },
+    data: { updatedAt: new Date() },
+  });
+  scheduleComputerSleep(deps.jobs, computerId);
 }
 
 function withViewOnly(url: string, viewOnly: boolean) {

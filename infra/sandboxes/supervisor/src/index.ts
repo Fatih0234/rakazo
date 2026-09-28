@@ -703,6 +703,8 @@ app.post("/computers/:id/input", async (c) => {
 });
 
 app.delete("/computers/:id/screen", async (c) => {
+  // A later exec 404 ("no such exec") is a failed stop, not a missing computer.
+  let containerFound = false;
   try {
     const id = c.req.param("id");
     const { container } = await managedContainer(
@@ -710,6 +712,7 @@ app.delete("/computers/:id/screen", async (c) => {
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-space-id"),
     );
+    containerFound = true;
     const screenId = c.req.header("x-rakazo-screen-id") || c.req.header("x-rakazo-bot-id") || id;
     const cancelRunWork = c.req.header("x-rakazo-cancel-run-work") === "1";
     const screenLeaseId = c.req.header("x-rakazo-screen-lease-id");
@@ -736,8 +739,18 @@ app.delete("/computers/:id/screen", async (c) => {
     });
     return c.json({ ok: true });
   } catch (error) {
+    if (error instanceof ComputerIdentityError)
+      return c.json({ error: "invalid computer identity" }, 403);
+    if (
+      !containerFound &&
+      error &&
+      typeof error === "object" &&
+      "statusCode" in error &&
+      error.statusCode === 404
+    )
+      return c.json({ error: "computer not found" }, 404);
     const message = error instanceof Error ? error.message : String(error);
-    return c.json({ error: message }, 404);
+    return c.json({ error: message || "computer screen failed to stop" }, 500);
   }
 });
 

@@ -124,12 +124,67 @@ describe("shared Linux desktop lifecycle", () => {
     expect(f.ensure("b").stdout).toContain("RAKAZO_DESKTOP=1:view-b");
   });
 
+  it("keeps the slot when the shared registry lock cannot be reacquired after the browser stops", () => {
+    const f = fixture();
+    expect(f.ensure("a").status).toBe(0);
+    expect(readdirSync(f.root).some((name) => name.endsWith(".slot"))).toBe(true);
+    const script = releaseDesktopCommand("a", "run:1", env)
+      .replaceAll("/tmp/rakazo/desktop-assignments", f.root)
+      .replaceAll("/tmp/rakazo", f.root);
+    const result = spawnSync(
+      "bash",
+      [
+        "-eu",
+        "-c",
+        [
+          "calls=0",
+          "flock() {",
+          '  if [ "$1" = "-u" ]; then return 0; fi',
+          "  calls=$((calls + 1))",
+          '  if [ "$calls" -ge 3 ]; then echo "slot lock failed" >&2; return 1; fi',
+          "  return 0",
+          "}",
+          "bash() { return 0; }",
+          script,
+        ].join("\n"),
+      ],
+      { encoding: "utf8", timeout: 5000 },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain("RAKAZO_DESKTOP_RELEASED=");
+    expect(readdirSync(f.root).some((name) => name.endsWith(".slot"))).toBe(true);
+  });
+
+  it("reports slot removal failure after the browser has stopped", () => {
+    const f = fixture();
+    expect(f.ensure("a").status).toBe(0);
+    const script = releaseDesktopCommand("a", "run:1", env)
+      .replaceAll("/tmp/rakazo/desktop-assignments", f.root)
+      .replaceAll("/tmp/rakazo", f.root);
+    const result = spawnSync(
+      "bash",
+      [
+        "-eu",
+        "-c",
+        ["bash() { return 0; }", "rm() { echo 'slot remove failed' >&2; return 1; }", script].join(
+          "\n",
+        ),
+      ],
+      { encoding: "utf8", timeout: 5000 },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain("RAKAZO_DESKTOP_RELEASED=");
+    expect(readdirSync(f.root).some((name) => name.endsWith(".slot"))).toBe(true);
+  });
+
   it("reserves failed startup and teardown slots until a successful retry", () => {
     const f = fixture();
     expect(f.ensure("a", "run:1", true).status).toBe(1);
     expect(f.ensure("b").stdout).toContain("RAKAZO_DESKTOP=1:view-b");
     expect(f.ensure("a").stdout).toContain("RAKAZO_DESKTOP=0:view-a");
-    expect(f.release("a", "run:1", true).status).toBe(1);
+    const failedRelease = f.release("a", "run:1", true);
+    expect(failedRelease.status).toBe(1);
+    expect(failedRelease.stdout).not.toContain("RAKAZO_DESKTOP_RELEASED=");
     expect(f.ensure("c").stdout).toContain("RAKAZO_DESKTOP=2:view-c");
     expect(f.release("a").status).toBe(0);
     expect(f.ensure("d").stdout).toContain("RAKAZO_DESKTOP=0:view-d");

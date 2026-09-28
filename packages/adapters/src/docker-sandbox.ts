@@ -474,9 +474,12 @@ export class DockerSandboxProvider implements SandboxProvider {
         }),
         deadline.signal,
       );
-      if (!res.ok && res.status !== 404) {
-        throw new Error(`sandbox screen release failed: ${res.status}`);
-      }
+      if (res.ok) return;
+      const body = await safeBody(res, deadline.signal);
+      // 404 is only an already-missing computer. A teardown failure, including
+      // one wrongly labeled 404, must stay a release failure.
+      if (res.status === 404 && body.includes("computer not found")) return;
+      throw new Error(`sandbox screen release failed: ${res.status} ${body}`.trim());
     } finally {
       deadline.dispose();
     }

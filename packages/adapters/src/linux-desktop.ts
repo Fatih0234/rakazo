@@ -21,7 +21,11 @@ import {
   shellQuote,
   stopAllDesktopBrowsersCommand,
 } from "@rakazo/core/node/desktop-runtime";
-import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
+import {
+  BrowserStoppedReleaseError,
+  ComputerScreenUnavailableError,
+  screenSessionKey,
+} from "./computer-screens.js";
 import {
   boundedComputerActions,
   clampRounded,
@@ -180,12 +184,18 @@ export class LinuxDesktop {
 
   async releaseScreen(computer: ComputerRef, context: AdapterContext) {
     const env = await this.host.environment(computer);
-    // A stale release is a successful no-op. All other errors must retain the slot for retry.
+    // A stale release is a successful no-op. A failed stop must retain the slot
+    // for retry. Once the browser has stopped, a later slot-cleanup error must
+    // not look like Chromium is still running.
     const result = await this.host.run(
       computer,
       releaseDesktopCommand(screenSessionKey(context), context.screenLeaseId, env),
       context,
     );
+    if (result.stdout.includes("RAKAZO_DESKTOP_RELEASED=")) {
+      if (result.code !== 0 && result.code !== 75) throw new BrowserStoppedReleaseError();
+      return;
+    }
     if (result.code !== 0 && result.code !== 75)
       throw new Error(result.stderr || "computer desktop failed to stop");
   }
@@ -214,7 +224,7 @@ export const PREPARE_LINUX_DESKTOP = [
   "set -eu",
   'missing=""',
   // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
-  'for pair in python3:python3 flock:util-linux Xvfb:xvfb xdpyinfo:x11-utils x11vnc:x11vnc fluxbox:fluxbox xdotool:xdotool scrot:scrot; do command -v "${pair%%:*}" >/dev/null 2>&1 || missing="$missing ${pair#*:}"; done',
+  'for pair in python3:python3 flock:util-linux Xvfb:xvfb xdpyinfo:x11-utils x11vnc:x11vnc fluxbox:fluxbox xdotool:xdotool scrot:scrot xterm:xterm; do command -v "${pair%%:*}" >/dev/null 2>&1 || missing="$missing ${pair#*:}"; done',
   'if ! command -v websockify >/dev/null 2>&1 && [ ! -x /opt/noVNC/utils/websockify/run ]; then missing="$missing websockify"; fi',
   'if [ ! -d /usr/share/novnc ] && [ ! -d /opt/noVNC ]; then missing="$missing novnc"; fi',
   'if [ -n "$missing" ]; then',
