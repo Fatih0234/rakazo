@@ -13,8 +13,22 @@ import {
   parseModelMaxImagesPerPrompt,
   parseModelMaxTokens,
 } from "@rakazo/contracts";
-import { createModelProbe, initialModelProbeState, pickCatalogModelId } from "@rakazo/core";
 import {
+  COMPATIBLE_THINKING_LEVELS,
+  clampCatalogThinkingLevel,
+  createModelProbe,
+  initialModelProbeState,
+  pickCatalogModelId,
+} from "@rakazo/core";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   Button,
   Dialog,
   DialogClose,
@@ -82,6 +96,7 @@ export function ModelSettingsOverlay({
   const [codeCopied, copyOAuthCode] = useCopyText();
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<"connect" | "default" | "disconnect" | null>(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
@@ -144,14 +159,25 @@ export function ModelSettingsOverlay({
       if (nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID) {
         setBaseUrl(nextCredential?.baseUrl ?? "");
         setReasoning(nextCredential?.reasoning ?? false);
-        setThinkingLevel(nextCredential?.thinkingLevel ?? null);
+        setThinkingLevel(
+          clampCatalogThinkingLevel(
+            nextCredential?.modelId === nextModel ? nextCredential?.thinkingLevel : null,
+            nextCredential?.reasoning ? COMPATIBLE_THINKING_LEVELS : [],
+          ) as ThinkingLevel | null,
+        );
         setContextWindow(String(nextCredential?.contextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW));
         setSupportsImages(nextCredential?.supportsImages ?? false);
         setMaxImagesPerPrompt(String(nextCredential?.maxImagesPerPrompt ?? ""));
       } else {
         // A credential's stored effort is bound to its saved model choice.
+        const nextEntry = nextCatalog.find(
+          (entry) => entry.provider === nextProvider && entry.id === nextModel,
+        );
         setThinkingLevel(
-          nextCredential?.modelId === nextModel ? (nextCredential.thinkingLevel ?? null) : null,
+          clampCatalogThinkingLevel(
+            nextCredential?.modelId === nextModel ? nextCredential.thinkingLevel : null,
+            nextEntry?.thinkingLevels,
+          ) as ThinkingLevel | null,
         );
       }
       setMaxTokens(connectionMaxTokensField(nextProvider, nextCredential?.maxTokens));
@@ -234,6 +260,7 @@ export function ModelSettingsOverlay({
   const modelsForProvider = catalog.filter((entry) => entry.provider === provider);
   const selected = modelsForProvider.find((entry) => entry.id === modelId) ?? modelsForProvider[0];
   selectedLabelRef.current = selected?.label;
+  const disconnectName = selected?.providerName ?? selected?.provider ?? "";
   const isOpenAiCompatible = provider === OPENAI_COMPATIBLE_PROVIDER_ID;
   const credential = credentials.find((entry) => entry.provider === provider);
   const currentEntry = catalog.find(
@@ -285,6 +312,16 @@ export function ModelSettingsOverlay({
     resetOpenAiCompatibleProbe();
   }
 
+  function stageCompatibleModelId(nextModelId: string) {
+    setModelId(nextModelId);
+    setThinkingLevel(
+      clampCatalogThinkingLevel(
+        credential?.modelId === nextModelId ? credential.thinkingLevel : null,
+        reasoning ? COMPATIBLE_THINKING_LEVELS : [],
+      ) as ThinkingLevel | null,
+    );
+  }
+
   function chooseProvider(nextProvider: string) {
     cancelOAuthAttempt();
     selectionRevisionRef.current += 1;
@@ -295,10 +332,18 @@ export function ModelSettingsOverlay({
         : pickCatalogModelId(catalog, nextProvider, nextCredential?.modelId ?? me?.defaultModel);
     setProvider(nextProvider);
     setReasoning(nextCredential?.reasoning ?? false);
+    const nextEntry = catalog.find(
+      (entry) => entry.provider === nextProvider && entry.id === nextModelId,
+    );
     setThinkingLevel(
-      nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID || nextCredential?.modelId === nextModelId
-        ? (nextCredential?.thinkingLevel ?? null)
-        : null,
+      clampCatalogThinkingLevel(
+        nextCredential?.modelId === nextModelId ? nextCredential.thinkingLevel : null,
+        nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
+          ? nextCredential?.reasoning
+            ? COMPATIBLE_THINKING_LEVELS
+            : []
+          : nextEntry?.thinkingLevels,
+      ) as ThinkingLevel | null,
     );
     setMaxTokens(connectionMaxTokensField(nextProvider, nextCredential?.maxTokens));
     setContextWindow(String(nextCredential?.contextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW));
@@ -324,7 +369,9 @@ export function ModelSettingsOverlay({
       apiKey,
       request: rpc.models.probeOpenAiCompatible,
       onSuccess: (models) => {
-        setModelId((current) => current.trim() || models[0] || "");
+        const next = modelId.trim() || models[0] || "";
+        if (next !== modelId) stageCompatibleModelId(next);
+        else setModelId(next);
         setNotice(openAiCompatibleProbeSuccessMessage(models.length));
       },
       onError: (err) =>
@@ -345,7 +392,14 @@ export function ModelSettingsOverlay({
         modelId: activeModelId,
         // Catalog connections keep the space default effort on the preference;
         // openai-compatible still owns its level inside the stored endpoint config.
-        ...(!isOpenAiCompatible ? { thinkingLevel } : {}),
+        ...(!isOpenAiCompatible
+          ? {
+              thinkingLevel: clampCatalogThinkingLevel(
+                thinkingLevel,
+                selected.thinkingLevels,
+              ) as ThinkingLevel | null,
+            }
+          : {}),
       });
       await refresh();
       setNotice(isOpenAiCompatible ? t`Model updated.` : t`Now using ${selected.label}.`);
@@ -359,6 +413,19 @@ export function ModelSettingsOverlay({
   async function connectKey() {
     if (!selected) return;
     const savingLimitOnly = !isOpenAiCompatible && !apiKey.trim();
+    const activeModelId = isOpenAiCompatible ? modelId.trim() : selected.id;
+    const supportedThinking = isOpenAiCompatible
+      ? reasoning
+        ? COMPATIBLE_THINKING_LEVELS
+        : []
+      : selected.thinkingLevels;
+    // The staged effort belongs to the model on screen. Clamp it before connect
+    // or a limit save so a previous model's level cannot stick.
+    const stagedThinking = clampCatalogThinkingLevel(
+      thinkingLevel,
+      supportedThinking,
+    ) as ThinkingLevel | null;
+    const modelChanged = (credential?.modelId ?? null) !== (activeModelId || null);
     if (isOpenAiCompatible) {
       if (!effectiveBaseUrl || !modelId.trim()) return;
     } else if (savingLimitOnly) {
@@ -408,7 +475,7 @@ export function ModelSettingsOverlay({
               baseUrl: effectiveBaseUrl,
               modelId: modelId.trim(),
               reasoning,
-              thinkingLevel: reasoning ? thinkingLevel : null,
+              thinkingLevel: stagedThinking,
               maxTokens: parsedMaxTokens,
               contextWindow: parsedContextWindow,
               supportsImages,
@@ -420,9 +487,10 @@ export function ModelSettingsOverlay({
               provider: selected.provider,
               ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
               modelId: selected.id,
-              // A limits-only save leaves the stored effort alone; a real
-              // connect persists the staged one.
-              ...(!savingLimitOnly ? { thinkingLevel } : {}),
+              // A limits-only save leaves the stored effort alone while the model
+              // stays put. Changing the model sends the clamped level, including
+              // null, so the previous model's effort is not reused.
+              ...(!savingLimitOnly || modelChanged ? { thinkingLevel: stagedThinking } : {}),
               maxTokens: parsedMaxTokens ?? null,
               label: selected.providerName ?? selected.provider,
             },
@@ -473,7 +541,10 @@ export function ModelSettingsOverlay({
     void startSubscriptionSignIn({
       provider: selected.provider,
       modelId: selected.id,
-      thinkingLevel,
+      thinkingLevel: clampCatalogThinkingLevel(
+        thinkingLevel,
+        selected.thinkingLevels,
+      ) as ThinkingLevel | null,
       label: selected.providerName ?? selected.provider,
     });
   }
@@ -532,8 +603,12 @@ export function ModelSettingsOverlay({
               cancelOAuthAttempt();
               selectionRevisionRef.current += 1;
               setModelId(nextModelId);
+              const nextEntry = modelsForProvider.find((entry) => entry.id === nextModelId);
               setThinkingLevel(
-                nextModelId === credential?.modelId ? (credential.thinkingLevel ?? null) : null,
+                clampCatalogThinkingLevel(
+                  nextModelId === credential?.modelId ? credential?.thinkingLevel : null,
+                  nextEntry?.thinkingLevels,
+                ) as ThinkingLevel | null,
               );
               setError(null);
               setNotice(null);
@@ -1000,7 +1075,7 @@ export function ModelSettingsOverlay({
                         onChange={(event) => {
                           cancelOAuthAttempt();
                           selectionRevisionRef.current += 1;
-                          setModelId(event.target.value);
+                          stageCompatibleModelId(event.target.value);
                           setError(null);
                           setNotice(null);
                         }}
@@ -1021,7 +1096,7 @@ export function ModelSettingsOverlay({
                         onChange={(event) => {
                           cancelOAuthAttempt();
                           selectionRevisionRef.current += 1;
-                          setModelId(event.target.value);
+                          stageCompatibleModelId(event.target.value);
                           setError(null);
                           setNotice(null);
                         }}
@@ -1035,7 +1110,7 @@ export function ModelSettingsOverlay({
                         type="button"
                         variant="link"
                         className="mt-2 h-auto px-0 text-[13px] text-muted-foreground underline"
-                        onClick={() => setModelId(probeModels[0] ?? "")}
+                        onClick={() => stageCompatibleModelId(probeModels[0] ?? "")}
                       >
                         <Trans>Use a found model</Trans>
                       </Button>
@@ -1121,7 +1196,7 @@ export function ModelSettingsOverlay({
                       size="sm"
                       className="-mr-2 shrink-0 text-muted-foreground"
                       disabled={busy}
-                      onClick={() => void disconnectCredential()}
+                      onClick={() => setConfirmDisconnect(true)}
                     >
                       {pending === "disconnect" ? (
                         <Trans>Disconnecting…</Trans>
@@ -1155,6 +1230,33 @@ export function ModelSettingsOverlay({
           )}
         </div>
       </div>
+      <AlertDialog open={confirmDisconnect} onOpenChange={setConfirmDisconnect}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              <Trans>Disconnect {disconnectName}?</Trans>
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              <Trans>This removes the connection from every space.</Trans>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              <Trans>Cancel</Trans>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={pending === "disconnect"}
+              onClick={() => {
+                setConfirmDisconnect(false);
+                void disconnectCredential();
+              }}
+            >
+              <Trans>Disconnect</Trans>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 

@@ -1,5 +1,47 @@
 import type { ModelCatalogEntry } from "@rakazo/contracts";
 
+/** Effort choices an OpenAI-compatible endpoint stores when reasoning is enabled. */
+export const COMPATIBLE_THINKING_LEVELS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+const THINKING_LEVELS = ["off", ...COMPATIBLE_THINKING_LEVELS] as const;
+
+/**
+ * Map a staged effort onto the levels a model actually supports.
+ * An exact match is kept. Otherwise the nearest supported effort is used
+ * (higher first, then lower). Models that cannot think, and the "off" level,
+ * reset to null so the runtime default applies.
+ * `supported === undefined` means the model is outside the catalog: a concrete
+ * level is kept because there is no allowance list to clamp against.
+ */
+export function clampCatalogThinkingLevel(
+  level: string | null | undefined,
+  supported: readonly string[] | undefined,
+): string | null {
+  if (!level || level === "off") return null;
+  if (supported === undefined) return level;
+  const available = supported.filter((entry) => entry !== "off");
+  if (available.length === 0) return null;
+  if (available.includes(level)) return level;
+  const requestedIndex = THINKING_LEVELS.indexOf(level as (typeof THINKING_LEVELS)[number]);
+  if (requestedIndex === -1) return null;
+  for (let index = requestedIndex; index < THINKING_LEVELS.length; index++) {
+    const candidate = THINKING_LEVELS[index];
+    if (candidate && candidate !== "off" && available.includes(candidate)) return candidate;
+  }
+  for (let index = requestedIndex - 1; index >= 0; index--) {
+    const candidate = THINKING_LEVELS[index];
+    if (candidate && candidate !== "off" && available.includes(candidate)) return candidate;
+  }
+  return null;
+}
+
 export const POPULAR_MODEL_PROVIDER_IDS = [
   "openrouter",
   "openai-codex",

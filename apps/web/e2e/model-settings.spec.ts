@@ -397,6 +397,11 @@ test("model settings connect, replace, and cancel provider authentication", asyn
   await providerSearch.fill("scripted");
   await page.getByRole("button", { name: /Scripted/ }).click();
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+  const confirmDisconnect = page.getByRole("alertdialog");
+  await expect(
+    confirmDisconnect.getByRole("heading", { name: "Disconnect Scripted?" }),
+  ).toBeVisible();
+  await confirmDisconnect.getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect(page.getByText(/Disconnected Scripted/)).toBeVisible();
   const afterDisconnect = await rpc<Array<{ provider: string }>>(page, "models/credentials", {});
   expect(afterDisconnect.some((entry) => entry.provider === "scripted")).toBe(false);

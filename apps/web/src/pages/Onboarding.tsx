@@ -13,7 +13,13 @@ import {
   parseModelMaxTokens,
   type ThinkingLevel,
 } from "@rakazo/contracts";
-import { createModelProbe, initialModelProbeState, pickCatalogModelId } from "@rakazo/core";
+import {
+  COMPATIBLE_THINKING_LEVELS,
+  clampCatalogThinkingLevel,
+  createModelProbe,
+  initialModelProbeState,
+  pickCatalogModelId,
+} from "@rakazo/core";
 import {
   Button,
   Input,
@@ -144,9 +150,14 @@ export function OnboardingPage() {
     onError: setError,
     onFinished: async () => {
       // OAuth connect ignores thinkingLevel; persist the staged catalog choice.
-      if (thinkingLevel && provider !== OPENAI_COMPATIBLE_PROVIDER_ID && modelId) {
+      const level = clampCatalogThinkingLevel(
+        thinkingLevel,
+        catalog.find((entry) => entry.provider === provider && entry.id === modelId)
+          ?.thinkingLevels,
+      );
+      if (level && provider !== OPENAI_COMPATIBLE_PROVIDER_ID && modelId) {
         try {
-          await rpc.models.setDefault({ provider, modelId, thinkingLevel });
+          await rpc.models.setDefault({ provider, modelId, thinkingLevel: level as ThinkingLevel });
         } catch {
           // The connection itself succeeded; the effort stays adjustable in Models.
         }
@@ -293,6 +304,7 @@ export function OnboardingPage() {
         setModelId((current) => {
           const trimmed = current.trim();
           const next = trimmed || models[0] || "";
+          if (next !== trimmed) setThinkingLevel(null);
           // Stay in manual entry across re-probes so a typed id that matches a
           // discovered model cannot yank the freeform field back to the Select.
           setManualModelId(
@@ -305,6 +317,13 @@ export function OnboardingPage() {
       onError: (err) =>
         setError(err instanceof Error ? err.message : t`Could not reach this model server`),
     });
+  }
+
+  function stagedThinkingLevel(): ThinkingLevel | null {
+    return clampCatalogThinkingLevel(
+      thinkingLevel,
+      isOpenAiCompatible ? (reasoning ? COMPATIBLE_THINKING_LEVELS : []) : selected?.thinkingLevels,
+    ) as ThinkingLevel | null;
   }
 
   async function saveModel() {
@@ -342,7 +361,7 @@ export function OnboardingPage() {
           baseUrl: baseUrl.trim(),
           modelId: modelId.trim(),
           reasoning,
-          thinkingLevel: reasoning ? thinkingLevel : null,
+          thinkingLevel: stagedThinkingLevel(),
           maxTokens: parsedMaxTokens,
           contextWindow: parsedContextWindow,
           supportsImages,
@@ -355,14 +374,15 @@ export function OnboardingPage() {
           provider,
           apiKey,
           modelId,
-          thinkingLevel,
+          thinkingLevel: stagedThinkingLevel(),
           label: selected?.providerName ?? provider,
         });
       }
       // Catalog providers keep the staged effort on the saved model preference;
       // openai-compatible already stored its level inside the endpoint config.
-      if (thinkingLevel && !isOpenAiCompatible && modelId) {
-        await rpc.models.setDefault({ provider, modelId, thinkingLevel });
+      const level = stagedThinkingLevel();
+      if (level && !isOpenAiCompatible && modelId) {
+        await rpc.models.setDefault({ provider, modelId, thinkingLevel: level });
       }
       setStep(nextStepAfterModel(needsIntegrationSetup));
     } catch (err) {
@@ -375,7 +395,10 @@ export function OnboardingPage() {
     void startSubscriptionSignIn({
       provider: selected.provider,
       modelId: selected.id,
-      thinkingLevel,
+      thinkingLevel: clampCatalogThinkingLevel(
+        thinkingLevel,
+        selected.thinkingLevels,
+      ) as ThinkingLevel | null,
       label: selected.providerName ?? selected.provider,
     });
   }

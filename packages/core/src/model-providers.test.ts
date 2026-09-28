@@ -1,6 +1,7 @@
 import type { ModelCatalogEntry } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  clampCatalogThinkingLevel,
   featuredModelProviders,
   pickCatalogModelId,
   selectedProviderOutsideSearchResults,
@@ -129,5 +130,27 @@ describe("selectedProviderOutsideSearchResults", () => {
     expect(
       selectedProviderOutsideSearchResults(providers, providers, "openrouter"),
     ).toBeUndefined();
+  });
+});
+
+describe("clampCatalogThinkingLevel", () => {
+  it("keeps a level the model supports and drops the default", () => {
+    expect(clampCatalogThinkingLevel("high", ["low", "medium", "high"])).toBe("high");
+    expect(clampCatalogThinkingLevel(null, ["high"])).toBeNull();
+    expect(clampCatalogThinkingLevel("off", ["off", "high"])).toBeNull();
+  });
+
+  it("clamps an unsupported level to the nearest supported effort", () => {
+    expect(clampCatalogThinkingLevel("xhigh", ["minimal", "low", "medium", "high"])).toBe("high");
+    expect(clampCatalogThinkingLevel("minimal", ["high", "xhigh"])).toBe("high");
+  });
+
+  it("resets when the model cannot think", () => {
+    expect(clampCatalogThinkingLevel("high", ["off"])).toBeNull();
+    expect(clampCatalogThinkingLevel("high", [])).toBeNull();
+  });
+
+  it("keeps a concrete level when the model is outside the catalog", () => {
+    expect(clampCatalogThinkingLevel("high", undefined)).toBe("high");
   });
 });

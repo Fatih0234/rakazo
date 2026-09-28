@@ -46,8 +46,3 @@ apps/web/src/locales/**/*.mjs
 apps/web/src/locales/**/*.js
 apps/web/scripts/msgids.json
 playwright-report-www
-
-# Local Impeccable skill clone and critique artifacts
-impeccable/
-.impeccable/
-.agents/skills/impeccable

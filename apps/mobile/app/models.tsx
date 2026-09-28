@@ -12,6 +12,8 @@ import {
   parseModelMaxTokens,
 } from "@rakazo/contracts";
 import {
+  COMPATIBLE_THINKING_LEVELS,
+  clampCatalogThinkingLevel,
   createModelProbe,
   featuredModelProviders,
   initialModelProbeState,
@@ -22,6 +24,7 @@ import { useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Pressable,
   ScrollView,
@@ -165,14 +168,25 @@ export default function Models() {
     if (nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID) {
       setBaseUrl(nextCredential?.baseUrl ?? "");
       setReasoning(nextCredential?.reasoning ?? false);
-      setThinkingLevel(nextCredential?.thinkingLevel ?? null);
+      setThinkingLevel(
+        clampCatalogThinkingLevel(
+          nextCredential?.modelId === nextModel ? nextCredential?.thinkingLevel : null,
+          nextCredential?.reasoning ? COMPATIBLE_THINKING_LEVELS : [],
+        ) as ThinkingLevel | null,
+      );
       setContextWindow(String(nextCredential?.contextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW));
       setSupportsImages(nextCredential?.supportsImages ?? false);
       setMaxImagesPerPrompt(String(nextCredential?.maxImagesPerPrompt ?? ""));
     } else {
       // A credential's stored effort is bound to its saved model choice.
+      const nextEntry = nextCatalog.find(
+        (entry) => entry.provider === nextProvider && entry.id === nextModel,
+      );
       setThinkingLevel(
-        nextCredential?.modelId === nextModel ? (nextCredential.thinkingLevel ?? null) : null,
+        clampCatalogThinkingLevel(
+          nextCredential?.modelId === nextModel ? nextCredential.thinkingLevel : null,
+          nextEntry?.thinkingLevels,
+        ) as ThinkingLevel | null,
       );
     }
     setMaxTokens(connectionMaxTokensField(nextProvider, nextCredential?.maxTokens));
@@ -300,10 +314,18 @@ export default function Models() {
         : pickCatalogModelId(catalog, nextProvider, nextCredential?.modelId ?? me?.defaultModel);
     setProvider(nextProvider);
     setReasoning(nextCredential?.reasoning ?? false);
+    const nextEntry = catalog.find(
+      (entry) => entry.provider === nextProvider && entry.id === nextModelId,
+    );
     setThinkingLevel(
-      nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID || nextCredential?.modelId === nextModelId
-        ? (nextCredential?.thinkingLevel ?? null)
-        : null,
+      clampCatalogThinkingLevel(
+        nextCredential?.modelId === nextModelId ? nextCredential.thinkingLevel : null,
+        nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
+          ? nextCredential?.reasoning
+            ? COMPATIBLE_THINKING_LEVELS
+            : []
+          : nextEntry?.thinkingLevels,
+      ) as ThinkingLevel | null,
     );
     setMaxTokens(connectionMaxTokensField(nextProvider, nextCredential?.maxTokens));
     setContextWindow(String(nextCredential?.contextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW));
@@ -328,7 +350,9 @@ export default function Models() {
       apiKey,
       request: (input) => rpc<{ models: string[] }>("models/probeOpenAiCompatible", input),
       onSuccess: (models) => {
-        setModelId((current) => current.trim() || models[0] || "");
+        const next = modelId.trim() || models[0] || "";
+        if (next !== modelId) stageCompatibleModelId(next);
+        else setModelId(next);
         setNotice(
           models.length === 0
             ? t("Server found. Enter a model name.")
@@ -355,7 +379,14 @@ export default function Models() {
         modelId: activeModelId,
         // Catalog connections keep the space default effort on the preference;
         // openai-compatible still owns its level inside the stored endpoint config.
-        ...(!isOpenAiCompatible ? { thinkingLevel } : {}),
+        ...(!isOpenAiCompatible
+          ? {
+              thinkingLevel: clampCatalogThinkingLevel(
+                thinkingLevel,
+                selected.thinkingLevels,
+              ) as ThinkingLevel | null,
+            }
+          : {}),
       });
       await load({ provider, modelId: activeModelId });
       setNotice(
@@ -391,9 +422,30 @@ export default function Models() {
     }
   }
 
+  function stageCompatibleModelId(nextModelId: string) {
+    setModelId(nextModelId);
+    setThinkingLevel(
+      clampCatalogThinkingLevel(
+        credential?.modelId === nextModelId ? credential.thinkingLevel : null,
+        reasoning ? COMPATIBLE_THINKING_LEVELS : [],
+      ) as ThinkingLevel | null,
+    );
+  }
+
   async function connectKey() {
     if (!selected) return;
     const savingLimitOnly = !isOpenAiCompatible && !apiKey.trim();
+    const activeModelId = isOpenAiCompatible ? modelId.trim() : selected.id;
+    const supportedThinking = isOpenAiCompatible
+      ? reasoning
+        ? COMPATIBLE_THINKING_LEVELS
+        : []
+      : selected.thinkingLevels;
+    const stagedThinking = clampCatalogThinkingLevel(
+      thinkingLevel,
+      supportedThinking,
+    ) as ThinkingLevel | null;
+    const modelChanged = (credential?.modelId ?? null) !== (activeModelId || null);
     if (isOpenAiCompatible) {
       if (!effectiveBaseUrl || !modelId.trim()) return;
     } else if (savingLimitOnly) {
@@ -448,7 +500,7 @@ export default function Models() {
               baseUrl: effectiveBaseUrl,
               modelId: modelId.trim(),
               reasoning,
-              thinkingLevel: reasoning ? thinkingLevel : null,
+              thinkingLevel: stagedThinking,
               maxTokens: parsedMaxTokens,
               contextWindow: parsedContextWindow,
               supportsImages,
@@ -460,9 +512,10 @@ export default function Models() {
               provider: selected.provider,
               ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
               modelId: selected.id,
-              // A limits-only save leaves the stored effort alone; a real
-              // connect persists the staged one.
-              ...(!savingLimitOnly ? { thinkingLevel } : {}),
+              // A limits-only save leaves the stored effort alone while the model
+              // stays put. Changing the model sends the clamped level, including
+              // null, so the previous model's effort is not reused.
+              ...(!savingLimitOnly || modelChanged ? { thinkingLevel: stagedThinking } : {}),
               maxTokens: parsedMaxTokens ?? null,
               label: selected.providerName ?? selected.provider,
             },
@@ -507,7 +560,10 @@ export default function Models() {
         {
           provider: selected.provider,
           modelId: selected.id,
-          thinkingLevel,
+          thinkingLevel: clampCatalogThinkingLevel(
+            thinkingLevel,
+            selected.thinkingLevels,
+          ) as ThinkingLevel | null,
           label: selected.providerName ?? selected.provider,
         },
         { signal: controller.signal },
@@ -617,7 +673,7 @@ export default function Models() {
               accessibilityRole="radio"
               accessibilityState={{ selected: entry === modelId }}
               disabled={probing}
-              onPress={() => setModelId(entry)}
+              onPress={() => stageCompatibleModelId(entry)}
               style={({ pressed }) => [
                 styles.modelRow,
                 entry === modelId && styles.selectedRow,
@@ -635,7 +691,7 @@ export default function Models() {
             accessibilityRole="radio"
             accessibilityState={{ selected: false }}
             disabled={probing}
-            onPress={() => setModelId("")}
+            onPress={() => stageCompatibleModelId("")}
             style={({ pressed }) => [
               styles.modelRow,
               probing && styles.disabled,
@@ -653,14 +709,17 @@ export default function Models() {
             autoCapitalize="none"
             autoCorrect={false}
             editable={!busy && !probing}
-            onChangeText={setModelId}
+            onChangeText={stageCompatibleModelId}
             placeholder={t("exact-model-id")}
             placeholderTextColor={native.tertiaryLabel}
             style={styles.keyInput}
             value={modelId}
           />
           {probeModels.length ? (
-            <Pressable accessibilityRole="button" onPress={() => setModelId(probeModels[0] ?? "")}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => stageCompatibleModelId(probeModels[0] ?? "")}
+            >
               <Text style={styles.helpLabel}>{t("Use a found model")}</Text>
             </Pressable>
           ) : null}
@@ -841,7 +900,10 @@ export default function Models() {
                 cancelOAuth();
                 setModelId(entry.id);
                 setThinkingLevel(
-                  entry.id === credential?.modelId ? (credential.thinkingLevel ?? null) : null,
+                  clampCatalogThinkingLevel(
+                    entry.id === credential?.modelId ? credential?.thinkingLevel : null,
+                    entry.thinkingLevels,
+                  ) as ThinkingLevel | null,
                 );
                 setError(null);
                 setNotice(null);
@@ -1112,7 +1174,21 @@ export default function Models() {
       <Pressable
         accessibilityRole="button"
         disabled={busy}
-        onPress={() => void disconnectCredential()}
+        onPress={() => {
+          const name = selected?.providerName ?? selected?.provider ?? "";
+          Alert.alert(
+            t("Disconnect {name}?", { name }),
+            t("This removes the connection from every space."),
+            [
+              { text: t("Cancel"), style: "cancel" },
+              {
+                text: t("Disconnect"),
+                style: "destructive",
+                onPress: () => void disconnectCredential(),
+              },
+            ],
+          );
+        }}
         style={({ pressed }) => [pressed && styles.pressed, busy && styles.disabled]}
       >
         <Text style={styles.disconnectLabel}>

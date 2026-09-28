@@ -20,6 +20,7 @@ import type {
 import {
   applyMessagingOutboundStatus,
   ChatSdkMessagingSurface,
+  CodexCatalogCache,
   ComposioConnector,
   createBackgroundJobHandlers,
   createCloudAgentConnection,
@@ -379,9 +380,13 @@ export async function createApp(
     CLOUD_AGENT_SPACE_ID: env.cloudAgentSpaceId,
   });
   const shutdown = new AbortController();
+  // One cache serves models.list, selection validation, and run-time model
+  // resolution alike, so a list call warms the run path in this process.
+  const codexCatalog = new CodexCatalogCache();
   const executor = createRunExecutor({
     prisma,
     runtime,
+    codexCatalog,
     sandbox,
     memory,
     memoryProviders,
@@ -450,6 +455,7 @@ export async function createApp(
 
   const router = createRouter({
     cloudAgent,
+    codexCatalog,
     prisma,
     events,
     auth,
