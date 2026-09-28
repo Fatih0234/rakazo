@@ -14,6 +14,7 @@ import { getLogger } from "@rakazo/logging";
 import {
   OAUTH_ACCOUNT_CHANGED_ERROR,
   oauthCredentialAccountId,
+  RetiredModelCredentialError,
   terminalOAuthRefreshErrorMarker,
 } from "./pi-oauth.js";
 
@@ -119,7 +120,7 @@ export class PiRuntimeCredentialStore implements CredentialStore {
                 getLogger().error("model credential retirement failed", retireError);
               }
             }
-            throw new Error(OAUTH_ACCOUNT_CHANGED_ERROR);
+            throw new RetiredModelCredentialError(OAUTH_ACCOUNT_CHANGED_ERROR);
           }
           await this.persistOAuth?.(next);
         }

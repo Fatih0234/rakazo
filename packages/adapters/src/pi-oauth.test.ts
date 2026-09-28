@@ -5,12 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CHATGPT_OAUTH_PROVIDER,
   COPILOT_OAUTH_PROVIDER,
+  isRetiredModelCredentialError,
   kickModelCredentialRefresh,
   matchesFailedOAuthSecret,
   OAUTH_ACCOUNT_CHANGED_ERROR,
   type PiOAuthBegin,
   PiOAuthLogins,
   parseModelSecret,
+  RetiredModelCredentialError,
   refreshExpiredModelCredential,
   resolveModelApiKey,
   resolveModelAuth,
@@ -399,6 +401,7 @@ describe("resolveModelAuth retirement", () => {
       expect.objectContaining({ access: "old", refresh: "refresh-token", expires: 1 }),
     );
     expect(persist).not.toHaveBeenCalled();
+    expect(isRetiredModelCredentialError(failure)).toBe(true);
   });
 
   it("does not retire on transient refresh failures", async () => {
@@ -417,6 +420,7 @@ describe("resolveModelAuth retirement", () => {
         }),
       ).rejects.toBe(failure);
       expect(retire).not.toHaveBeenCalled();
+      expect(isRetiredModelCredentialError(failure)).toBe(false);
     }
   });
 
@@ -531,7 +535,11 @@ describe("resolveModelAuth account-change guard", () => {
           toAuth,
         },
       }),
-    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof RetiredModelCredentialError &&
+        error.message === OAUTH_ACCOUNT_CHANGED_ERROR,
+    );
 
     expect(retire).toHaveBeenCalledTimes(1);
     expect(retire).toHaveBeenCalledWith(
@@ -1748,6 +1756,47 @@ describe("PiOAuthLogins", () => {
       await expect(finishing).resolves.toEqual({ status: "connected", value: "saved-original" });
       expect(persistedAccess).toBe("access-1");
       await expect(replacement).resolves.toMatchObject({ userCode: "CODE-2" });
+      expect(startedCount).toBe(2);
+      logins.abortAll();
+    });
+
+    it("drops a session whose save fails after expiry instead of restoring it", async () => {
+      vi.useFakeTimers();
+      const actor = { userId: "u", spaceId: "w" };
+      let startedCount = 0;
+      const logins = new PiOAuthLogins(async (_provider, _type, interaction) => {
+        startedCount += 1;
+        interaction.notify({
+          type: "device_code",
+          userCode: `CODE-${startedCount}`,
+          verificationUri: "https://auth.openai.com/codex/device",
+          expiresInSeconds: 60,
+        });
+        return oauthCred();
+      });
+      const started = await logins.begin({ ...actor, provider: CHATGPT_OAUTH_PROVIDER });
+      await flushMicrotasks();
+
+      let releasePersist!: (error?: unknown) => void;
+      const gate = new Promise<void>((resolve, reject) => {
+        releasePersist = (error) => (error ? reject(error) : resolve());
+      });
+      const failure = new Error("persistence failed");
+      const finishing = logins.finish(started.loginId, actor, async () => {
+        await gate;
+        return "saved";
+      });
+      await Promise.resolve();
+
+      vi.advanceTimersByTime(61_000);
+      expect((await logins.complete(started.loginId, actor)).status).toBe("pending");
+
+      releasePersist(failure);
+      await expect(finishing).rejects.toBe(failure);
+      expect((await logins.complete(started.loginId, actor)).status).toBe("error");
+
+      const replacement = await logins.begin({ ...actor, provider: CHATGPT_OAUTH_PROVIDER });
+      expect(deviceCodeResult(replacement).userCode).toBe("CODE-2");
       expect(startedCount).toBe(2);
       logins.abortAll();
     });

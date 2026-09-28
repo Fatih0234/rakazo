@@ -206,6 +206,31 @@ export function oauthCredentialAccountId(credential: OAuthCredential): string | 
   }
 }
 
+const retiredCredentialErrors = new WeakSet<object>();
+
+/**
+ * A credential was deleted before the model started. Account-change throws this
+ * directly. A terminal refresh keeps its original provider error and is recorded
+ * in `retiredCredentialErrors` so callers can still see that error object.
+ */
+export class RetiredModelCredentialError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RetiredModelCredentialError";
+  }
+}
+
+export function markRetiredModelCredentialError(error: unknown): void {
+  if (typeof error === "object" && error !== null) retiredCredentialErrors.add(error);
+}
+
+export function isRetiredModelCredentialError(error: unknown): boolean {
+  return (
+    error instanceof RetiredModelCredentialError ||
+    (typeof error === "object" && error !== null && retiredCredentialErrors.has(error))
+  );
+}
+
 export type StoredModelSecret =
   | { kind: "api_key"; key: string; maxTokens?: number }
   | { kind: "oauth"; credential: OAuthCredential; maxTokens?: number }
@@ -270,6 +295,8 @@ type Session = {
   submitCode?: (input: string) => void;
   codeSubmitted?: boolean;
   expiresTimer?: ReturnType<typeof setTimeout>;
+  /** The expiry timer fired while finish() was still persisting. */
+  expired?: boolean;
 };
 
 function isOAuthCredential(value: Credential): value is OAuthCredential {
@@ -527,6 +554,9 @@ export async function resolveModelAuth(
           // A retirement failure must never mask the refresh error the caller sees.
           getLogger().error("model credential retirement failed", retireError);
         }
+        // The original refresh error still propagates. Mark it so a run can fail
+        // once instead of retrying a credential this call already deleted.
+        markRetiredModelCredentialError(error);
       }
       throw error;
     }
@@ -552,7 +582,7 @@ export async function resolveModelAuth(
           getLogger().error("model credential retirement failed", retireError);
         }
       }
-      throw new Error(OAUTH_ACCOUNT_CHANGED_ERROR);
+      throw new RetiredModelCredentialError(OAUTH_ACCOUNT_CHANGED_ERROR);
     }
     await opts?.persist?.(
       serializeModelSecret({
@@ -846,11 +876,14 @@ export class PiOAuthLogins {
       input.signal?.removeEventListener("abort", abortFromRequest);
       if (abort.signal.aborted) throw abort.signal.reason ?? new Error("Sign-in cancelled.");
       session.expiresTimer = setTimeout(() => {
-        // Leave a finalizing session alone. Removing it would free the scope
+        // Leave a finalizing session in place. Removing it would free the scope
         // for a replacement login whose credential the in-flight persist can
-        // then overwrite. finish() owns the session until it settles;
-        // retireActiveSession waits on that write.
-        if (session.state === "finalizing") return;
+        // then overwrite. Remember that expiry already fired so a failed save
+        // is dropped instead of coming back as a ready session with no timer.
+        if (session.state === "finalizing") {
+          session.expired = true;
+          return;
+        }
         session.abort.abort(new Error("Sign-in expired."));
         this.removeSession(session);
       }, started.expiresInSeconds * 1000);
@@ -937,7 +970,14 @@ export class PiOAuthLogins {
       session.abort.abort();
       return { status: "connected", value };
     } catch (error) {
-      if (this.pending.get(loginId) === session) session.state = "ready";
+      if (this.pending.get(loginId) === session) {
+        if (session.expired) {
+          session.abort.abort(new Error("Sign-in expired."));
+          this.removeSession(session);
+        } else {
+          session.state = "ready";
+        }
+      }
       throw error;
     } finally {
       if (this.pending.get(loginId) === session) session.finishing = undefined;

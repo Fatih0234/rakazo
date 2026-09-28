@@ -6,6 +6,7 @@ import { PiRuntimeCredentialStore } from "./pi-credentials.js";
 import {
   matchesFailedOAuthSecret,
   OAUTH_ACCOUNT_CHANGED_ERROR,
+  RetiredModelCredentialError,
   serializeModelSecret,
 } from "./pi-oauth.js";
 
@@ -185,7 +186,11 @@ describe("PiRuntimeCredentialStore", () => {
       store.modify("openai-codex", async () =>
         credential({ access: "new-access", accountId: "acct-b" }),
       ),
-    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof RetiredModelCredentialError &&
+        error.message === OAUTH_ACCOUNT_CHANGED_ERROR,
+    );
 
     expect(retire).toHaveBeenCalledTimes(1);
     expect(retire).toHaveBeenCalledWith(
