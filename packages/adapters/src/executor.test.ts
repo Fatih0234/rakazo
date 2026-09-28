@@ -6,7 +6,7 @@ import {
   appendToolCompletionAudit,
   createRunExecutor,
   createRunWorkspaceCheckpoint,
-  dockerComputerPackageInstruction,
+  dockerComputerToolInstruction,
   loadCurrentTurnImages,
   missingTurnImagesInstruction,
   parseUpdateBotPatch,
@@ -1071,12 +1071,28 @@ describe("userTurnInstructions", () => {
   });
 });
 
-describe("dockerComputerPackageInstruction", () => {
+describe("dockerComputerToolInstruction", () => {
   it("documents rootless Python tool installation only for Docker images", () => {
-    expect(dockerComputerPackageInstruction("docker")).toContain("uv tool install <package>");
-    expect(dockerComputerPackageInstruction("docker")).toContain("without sudo");
-    expect(dockerComputerPackageInstruction("desktop")).toBeUndefined();
-    expect(dockerComputerPackageInstruction("e2b")).toBeUndefined();
+    expect(dockerComputerToolInstruction("docker")).toContain("uv tool install <package>");
+    expect(dockerComputerToolInstruction("docker")).toContain("without sudo");
+    expect(dockerComputerToolInstruction("desktop")).toBeUndefined();
+    expect(dockerComputerToolInstruction("e2b")).toBeUndefined();
+  });
+
+  it("documents gh CLI device-flow login without token injection", () => {
+    const instruction = dockerComputerToolInstruction("docker");
+    expect(instruction).toContain("gh auth login");
+    expect(instruction).toContain("script -qec");
+    expect(instruction).toContain("mktemp /tmp/gh-login.XXXXXX");
+    expect(instruction).toContain('echo "$LOG"');
+    expect(instruction).toContain("https://github.com/login/device");
+    expect(instruction).toContain("request_takeover");
+    expect(instruction).toContain("--with-token");
+    expect(instruction).not.toMatch(/GH_TOKEN|GITHUB_TOKEN/);
+    expect(instruction).toMatch(/authenticate `gh`/);
+    expect(instruction).toMatch(/credential under the persistent home/);
+    expect(instruction).not.toMatch(/no token ever/i);
+    expect(instruction).not.toMatch(/sign (?:this computer's |the )?(?:desktop )?browser into/i);
   });
 });
 

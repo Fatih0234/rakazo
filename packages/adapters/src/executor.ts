@@ -1699,9 +1699,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
             : graphical
               ? `You have a persistent computer filesystem and shell. ${MODEL_CANNOT_SEE_MESSAGE} Desktop observe and act tools are unavailable until a vision-capable model is selected. Use the file tools and shell.`
               : "You have a persistent sandbox filesystem and shell. This backend does not provide model-visible graphical control, so use the file tools and shell.";
-        const dockerPackageInstruction = dockerComputerPackageInstruction(computer.kind);
-        const computerInstruction = dockerPackageInstruction
-          ? `${baseComputerInstruction} ${dockerPackageInstruction}`
+        const dockerToolInstruction = dockerComputerToolInstruction(computer.kind);
+        const computerInstruction = dockerToolInstruction
+          ? `${baseComputerInstruction} ${dockerToolInstruction}`
           : baseComputerInstruction;
         const workspaceInstruction =
           computerMode === "team"
@@ -4906,9 +4906,9 @@ export function filterPageBrowserTools<T extends { name: string }>(
   return tools.filter((tool) => !PAGE_BROWSER_TOOL_NAMES.has(tool.name));
 }
 
-export function dockerComputerPackageInstruction(computerKind: string): string | undefined {
+export function dockerComputerToolInstruction(computerKind: string): string | undefined {
   if (computerKind !== "docker") return undefined;
-  return "For Python CLI tools, use `uv tool install <package>`; it installs without sudo and keeps tools under this computer's persistent home.";
+  return "For Python CLI tools, use `uv tool install <package>`; it installs without sudo and keeps tools under this computer's persistent home. GitHub's `gh` CLI is installed. To authenticate `gh`, run `LOG=$(mktemp /tmp/gh-login.XXXXXX); nohup script -qec 'gh auth login --hostname github.com --web --git-protocol https' \"$LOG\" >/dev/null 2>&1 & echo \"$LOG\"` — keep that printed path, read the one-time code from it, browser_navigate to https://github.com/login/device, and browser_act the code. Completing that page authorizes the CLI OAuth app and stores the credential under the persistent home; it does not by itself create a Chromium github.com session. If the desktop browser is not already signed into GitHub, request_takeover so the user can finish that web login. Never use `--with-token` or inject a token through the environment.";
 }
 
 // Ordering matters: stable blocks first, volatile ones last, so the prefix stays cacheable.
