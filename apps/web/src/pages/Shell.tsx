@@ -1,7 +1,7 @@
 import { i18n } from "@lingui/core";
 import { t } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
-import { ChatMarkdown } from "@rakazo/chat-ui/web";
+import { ChatMarkdown, LinkifiedText } from "@rakazo/chat-ui/web";
 import type {
   AgentSkillCatalogEntry,
   Bot,
@@ -3310,48 +3310,51 @@ export function ShellPage() {
         </Popover>
       </aside>
 
-      <button
-        type="button"
-        data-testid="bots-sidebar-edge"
-        aria-label={botsSidebarCollapsed ? t`Show bots` : t`Hide bots`}
-        aria-pressed={!botsSidebarCollapsed}
-        className={`absolute inset-y-0 z-50 hidden w-2 cursor-ew-resize touch-none border-0 bg-transparent p-0 md:block ${
-          botsSidebarCollapsed ? "start-0" : "start-[308px]"
-        }`}
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId);
-          botsSidebarEdgeDragRef.current = {
-            startX: event.clientX,
-            mode: botsSidebarCollapsed ? "expand" : "collapse",
-          };
-        }}
-        onPointerMove={(event) => {
-          const drag = botsSidebarEdgeDragRef.current;
-          if (!drag) return;
-          const rtl =
-            typeof document !== "undefined" &&
-            document.documentElement.getAttribute("dir") === "rtl";
-          const delta = rtl ? drag.startX - event.clientX : event.clientX - drag.startX;
-          if (drag.mode === "expand" && delta >= BOTS_SIDEBAR_EDGE_DRAG_PX) {
+      {/* The full-screen computer covers the sidebar, so its edge must not catch clicks there. */}
+      {computerOpen || booting ? null : (
+        <button
+          type="button"
+          data-testid="bots-sidebar-edge"
+          aria-label={botsSidebarCollapsed ? t`Show bots` : t`Hide bots`}
+          aria-pressed={!botsSidebarCollapsed}
+          className={`absolute inset-y-0 z-50 hidden w-2 cursor-ew-resize touch-none border-0 bg-transparent p-0 md:block ${
+            botsSidebarCollapsed ? "start-0" : "start-[308px]"
+          }`}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            botsSidebarEdgeDragRef.current = {
+              startX: event.clientX,
+              mode: botsSidebarCollapsed ? "expand" : "collapse",
+            };
+          }}
+          onPointerMove={(event) => {
+            const drag = botsSidebarEdgeDragRef.current;
+            if (!drag) return;
+            const rtl =
+              typeof document !== "undefined" &&
+              document.documentElement.getAttribute("dir") === "rtl";
+            const delta = rtl ? drag.startX - event.clientX : event.clientX - drag.startX;
+            if (drag.mode === "expand" && delta >= BOTS_SIDEBAR_EDGE_DRAG_PX) {
+              botsSidebarEdgeDragRef.current = null;
+              setBotsSidebarCollapsedPref(false);
+            } else if (drag.mode === "collapse" && delta <= -BOTS_SIDEBAR_EDGE_DRAG_PX) {
+              botsSidebarEdgeDragRef.current = null;
+              setBotsSidebarCollapsedPref(true);
+            }
+          }}
+          onPointerUp={(event) => {
+            const drag = botsSidebarEdgeDragRef.current;
             botsSidebarEdgeDragRef.current = null;
-            setBotsSidebarCollapsedPref(false);
-          } else if (drag.mode === "collapse" && delta <= -BOTS_SIDEBAR_EDGE_DRAG_PX) {
+            if (!drag) return;
+            if (Math.abs(event.clientX - drag.startX) < BOTS_SIDEBAR_EDGE_DRAG_PX) {
+              setBotsSidebarCollapsedPref(!botsSidebarCollapsed);
+            }
+          }}
+          onPointerCancel={() => {
             botsSidebarEdgeDragRef.current = null;
-            setBotsSidebarCollapsedPref(true);
-          }
-        }}
-        onPointerUp={(event) => {
-          const drag = botsSidebarEdgeDragRef.current;
-          botsSidebarEdgeDragRef.current = null;
-          if (!drag) return;
-          if (Math.abs(event.clientX - drag.startX) < BOTS_SIDEBAR_EDGE_DRAG_PX) {
-            setBotsSidebarCollapsedPref(!botsSidebarCollapsed);
-          }
-        }}
-        onPointerCancel={() => {
-          botsSidebarEdgeDragRef.current = null;
-        }}
-      />
+          }}
+        />
+      )}
 
       <main
         aria-hidden={mobileSidebarOpen || undefined}
@@ -6368,6 +6371,9 @@ const MessageView = memo(function MessageView({
           );
         }
         if (block.kind === "text" && message.role === "user") {
+          // User bubbles stay literal text on web and mobile. Only explicit URLs
+          // and email addresses are links, so a sent address is tappable without
+          // formatting bold or headings.
           return (
             <div key={i} className="flex w-fit max-w-full justify-end [@media(hover:none)]:w-full">
               <div
@@ -6376,7 +6382,7 @@ const MessageView = memo(function MessageView({
                 className="max-w-full whitespace-pre-wrap wrap-anywhere rounded-[20px] bg-chat-user px-[18px] py-3 text-[15.5px] leading-[1.45] text-chat-user-foreground"
                 dir="auto"
               >
-                {block.text}
+                <LinkifiedText>{block.text}</LinkifiedText>
               </div>
             </div>
           );
