@@ -392,7 +392,7 @@ export interface AgentRunModel {
       reason: ModelCredentialRetireReason,
       detail?: string,
       failed?: ModelCredentialFailedState,
-    ) => Promise<void>;
+    ) => Promise<boolean | undefined>;
   };
 }
 

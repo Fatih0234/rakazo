@@ -45,7 +45,7 @@ describe("PiRuntimeCredentialStore", () => {
   });
 
   it("retires once when a mid-run refresh is terminally rejected", async () => {
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => undefined);
     const store = new PiRuntimeCredentialStore("openai-codex", credential(), undefined, retire);
     const failure = new Error("OAuth refresh failed for openai-codex", {
       cause: new Error('OpenAI Codex token refresh failed (400): {"error":"invalid_grant"}'),
@@ -73,8 +73,8 @@ describe("PiRuntimeCredentialStore", () => {
 
   it("settles retirement before the refresh error surfaces", async () => {
     let releaseRetire!: () => void;
-    const retireGate = new Promise<void>((resolve) => {
-      releaseRetire = resolve;
+    const retireGate = new Promise<undefined>((resolve) => {
+      releaseRetire = () => resolve(undefined);
     });
     const retire = vi.fn(() => retireGate);
     const store = new PiRuntimeCredentialStore("openai-codex", credential(), undefined, retire);
@@ -105,7 +105,7 @@ describe("PiRuntimeCredentialStore", () => {
   });
 
   it("does not retire on transient mid-run refresh failures", async () => {
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => undefined);
     const store = new PiRuntimeCredentialStore("openai-codex", credential(), undefined, retire);
 
     for (const failure of [

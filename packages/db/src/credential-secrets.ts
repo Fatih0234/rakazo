@@ -58,21 +58,21 @@ export async function retireModelCredential(
     secretId?: string;
     matchesFailedSecret?: (secret: { id: string; ciphertext: string }) => boolean;
   },
-): Promise<void> {
-  if (!input.credentialId) return;
-  await withTransactionRetry(() =>
+): Promise<boolean> {
+  if (!input.credentialId) return false;
+  return withTransactionRetry(() =>
     prisma.$transaction(
       async (tx) => {
         const credential = await tx.userModelCredential.findFirst({
           where: { id: input.credentialId, userId: input.userId },
         });
-        if (!credential || (input.secretId && credential.secretId !== input.secretId)) return;
+        if (!credential || (input.secretId && credential.secretId !== input.secretId)) return false;
         if (input.matchesFailedSecret) {
           const secret = await tx.secret.findFirst({
             where: { id: credential.secretId },
             select: { id: true, ciphertext: true },
           });
-          if (secret && !input.matchesFailedSecret(secret)) return;
+          if (secret && !input.matchesFailedSecret(secret)) return false;
         }
         await tx.spaceModelPreference.deleteMany({
           where: { userId: input.userId, credentialId: credential.id },
@@ -83,6 +83,7 @@ export async function retireModelCredential(
           credentialId: credential.id,
           secretId: credential.secretId,
         });
+        return true;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     ),
