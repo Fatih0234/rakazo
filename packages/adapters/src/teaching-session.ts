@@ -54,6 +54,7 @@ export type TeachComputerInput = (
   | { kind: "scroll"; direction: "up" | "down"; amount?: number }
 ) & {
   sensitive?: boolean;
+  skillId?: string;
 };
 
 export interface TeachingSessionDeps {
@@ -523,11 +524,19 @@ export async function applyTeachingDesktopInput(
     );
     return;
   }
+  const { skillId: _skillId, ...desktop } = mapped;
   const input: ComputerInput =
-    mapped.kind === "key" && mapped.key && !mapped.modifiers?.length
-      ? computerInputForDomKey(mapped.key)
-      : mapped;
+    desktop.kind === "key" && desktop.key && !desktop.modifiers?.length
+      ? computerInputForDomKey(desktop.key)
+      : desktop;
   await sandbox.sendInput(toComputerRef(computer), input, lease, context);
+}
+
+function protectedInputMissesRecording(
+  mapped: TeachComputerInput,
+  activeSkillId: string | undefined,
+): boolean {
+  return mapped.sensitive === true && Boolean(mapped.skillId) && activeSkillId !== mapped.skillId;
 }
 
 export async function recordTeachingInputEvent(
@@ -537,6 +546,8 @@ export async function recordTeachingInputEvent(
   mapped: TeachComputerInput,
 ): Promise<"recorded" | "idle" | "stale"> {
   const skill = await getActiveTeachingSession(deps.prisma, actor.spaceId, botId, actor.userId);
+  // Protected input names the recording it was queued for, so a later one cannot receive it.
+  if (protectedInputMissesRecording(mapped, skill?.id)) return "stale";
   if (!skill) return "idle";
   if (skill.expiresAt && skill.expiresAt.getTime() <= Date.now()) {
     await expireTaughtSkillTeaching(deps, skill.id);
@@ -578,6 +589,9 @@ export async function recordTeachingInputEvent(
   }
   if (prepared.kind === "stale") return "stale";
   if (prepared.computer?.providerRef) {
+    const active = await getActiveTeachingSession(deps.prisma, actor.spaceId, botId, actor.userId);
+    // The row lock above does not cover sandbox IO. Skip if recording switched before typing.
+    if (protectedInputMissesRecording(mapped, active?.id)) return "stale";
     await applyTeachingDesktopInput(
       deps.sandbox,
       prepared.computer,

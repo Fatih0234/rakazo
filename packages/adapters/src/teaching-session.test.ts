@@ -381,6 +381,52 @@ describe("recordTeachingInputEvent", () => {
     expect(current().recording.events).toHaveLength(0);
   });
 
+  it("does not apply protected input into a different active recording", async () => {
+    const { deps, current, tx } = recordingDeps(skillRow({ id: "skill-b" }));
+    const computer = {
+      id: "computer-1",
+      homeKey: "bot-1",
+      kind: "e2b",
+      providerRef: "box-1",
+      controlHolder: "user",
+      controlBotId: "bot-1",
+      controlLeaseId: "lease-1",
+    };
+    tx.bot.findUnique = vi.fn(async () => ({ id: "bot-1", computer }));
+    const actor = { spaceId: "workspace-1", userId: "user-1" } as never;
+    await expect(
+      recordTeachingInputEvent(deps as never, actor, "bot-1", {
+        kind: "clipboard",
+        text: "hunter2",
+        sensitive: true,
+        skillId: "skill-a",
+      }),
+    ).resolves.toBe("stale");
+    expect(deps.sandbox.sendInput).not.toHaveBeenCalled();
+    expect(current().recording.events).toHaveLength(0);
+    expect(JSON.stringify(current().recording)).not.toContain("hunter2");
+
+    await expect(
+      recordTeachingInputEvent(deps as never, actor, "bot-1", {
+        kind: "clipboard",
+        text: "hunter2",
+        sensitive: true,
+        skillId: "skill-b",
+      }),
+    ).resolves.toBe("recorded");
+    expect(deps.sandbox.sendInput).toHaveBeenCalledTimes(1);
+    expect(deps.sandbox.sendInput).toHaveBeenCalledWith(
+      expect.anything(),
+      { kind: "clipboard", text: "hunter2", sensitive: true },
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(current().recording.events).toEqual([
+      { at: expect.any(String), kind: "clipboard", sensitive: true },
+    ]);
+    expect(JSON.stringify(current().recording)).not.toContain("hunter2");
+  });
+
   it("still types protected input into the sandbox but stores only a marker", async () => {
     const { deps, current, tx } = recordingDeps(skillRow());
     const computer = {

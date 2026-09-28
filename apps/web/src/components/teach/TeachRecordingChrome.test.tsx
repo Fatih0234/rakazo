@@ -155,7 +155,7 @@ it("clears protected input after the sandbox accepts it", async () => {
     expect(computerInput).toHaveBeenCalledWith({
       botId: "bot-ok",
       kind: "clipboard",
-      payload: { text: "pw-fixture", sensitive: true },
+      payload: { text: "pw-fixture", sensitive: true, skillId: "skill-ok" },
     });
     expect(field(view.container).value).toBe("");
   } finally {
@@ -213,7 +213,7 @@ it("drops a queued protected submit when recording ends or the skill changes", a
     expect(computerInput).toHaveBeenCalledWith({
       botId,
       kind: "clipboard",
-      payload: { text: "next-fixture", sensitive: true },
+      payload: { text: "next-fixture", sensitive: true, skillId: "skill-b" },
     });
   } finally {
     release();

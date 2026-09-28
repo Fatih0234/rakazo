@@ -2311,8 +2311,12 @@ export function createRouter(deps: RouterDeps) {
         }
         if (!computer.providerRef) return { ok: true as const };
         const sensitive = input.payload.sensitive === true;
-        const mapped =
-          input.kind === "key"
+        const skillId =
+          sensitive && typeof input.payload.skillId === "string" && input.payload.skillId
+            ? input.payload.skillId
+            : undefined;
+        const mapped = {
+          ...(input.kind === "key"
             ? { kind: "key" as const, key: String(input.payload.key ?? ""), sensitive }
             : input.kind === "clipboard"
               ? {
@@ -2337,7 +2341,9 @@ export function createRouter(deps: RouterDeps) {
                       (input.payload.type as "move" | "down" | "up" | "click" | undefined) ??
                       "click",
                     sensitive,
-                  };
+                  }),
+          ...(skillId ? { skillId } : {}),
+        };
         const outcome = await taughtSkills.recordInput(context.actor, bot.id, mapped);
         if (outcome === "stale") return { ok: true as const };
         if (outcome !== "recorded") {
