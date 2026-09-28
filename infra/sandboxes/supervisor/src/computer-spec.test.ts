@@ -413,7 +413,10 @@ describe("graphical computer spec", () => {
       mkdirSync(bin);
       mkdirSync(path.dirname(liveBin));
       mkdirSync(path.dirname(prefsPath), { recursive: true });
-      writeFileSync(path.join(bin, "chromium"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$RAKAZO_TEST_ARGS"\n');
+      writeFileSync(
+        path.join(bin, "chromium"),
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$RAKAZO_TEST_ARGS"\n',
+      );
       chmodSync(path.join(bin, "chromium"), 0o755);
       const source = path.join(temp, "pause.c");
       writeFileSync(source, "#include <unistd.h>\nint main(void) { for (;;) pause(); }\n");
