@@ -68,7 +68,10 @@ describe("PiRuntimeCredentialStore", () => {
       "terminal-refresh-failure",
       "invalid_grant",
       // The credential state the failed refresh was attempted on.
-      expect.objectContaining({ refresh: "refresh-token" }),
+      expect.objectContaining({
+        access: "access-token",
+        refresh: "refresh-token",
+      }),
     );
     // The failed refresh must not clear the in-memory credential itself.
     expect(await store.list()).toEqual([{ providerId: "openai-codex", type: "oauth" }]);
@@ -113,7 +116,7 @@ describe("PiRuntimeCredentialStore", () => {
 
     for (const failure of [
       new Error("OAuth refresh failed for openai-codex", {
-        cause: new Error("OpenAI Codex token refresh failed (500): upstream"),
+        cause: new Error('OpenAI Codex token refresh failed (500): {"error":"invalid_grant"}'),
       }),
       new Error("OpenAI Codex token refresh error: socket hang up"),
     ]) {
@@ -141,7 +144,10 @@ describe("PiRuntimeCredentialStore", () => {
     expect(retire).toHaveBeenCalledWith(
       "terminal-refresh-failure",
       "refresh_token_reused",
-      expect.objectContaining({ refresh: "refresh-token" }),
+      expect.objectContaining({
+        access: "access-token",
+        refresh: "refresh-token",
+      }),
     );
   });
 
@@ -186,7 +192,7 @@ describe("PiRuntimeCredentialStore", () => {
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
       // The stored credential state whose refresh produced the foreign account.
-      expect.objectContaining({ refresh: "refresh-token" }),
+      expect.objectContaining({ access: "access-token", refresh: "refresh-token" }),
     );
     // The account-B token is never persisted or adopted in memory.
     expect(persist).not.toHaveBeenCalled();
@@ -243,7 +249,7 @@ describe("PiRuntimeCredentialStore", () => {
     expect(retire).toHaveBeenCalledWith(
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
-      expect.objectContaining({ refresh: "refresh-token" }),
+      expect.objectContaining({ access: "access-token", refresh: "refresh-token" }),
     );
   });
 
@@ -259,6 +265,41 @@ describe("PiRuntimeCredentialStore", () => {
       credential: credential({
         refresh: "rotated-refresh",
         expires: 50_000,
+        accountId: "acct-a",
+      }),
+    });
+    const deleteCredential = vi.fn();
+    const retire = async (
+      _reason: ModelCredentialRetireReason,
+      _detail?: string,
+      failed?: ModelCredentialFailedState,
+    ) => {
+      const matches = failed ? matchesFailedOAuthSecret(() => rotated, failed) : undefined;
+      if (matches && !matches({ id: "secret-codex", ciphertext: "cipher-codex" })) return;
+      deleteCredential();
+    };
+    const store = new PiRuntimeCredentialStore("openai-codex", stored, undefined, retire);
+
+    await expect(
+      store.modify("openai-codex", async () => credential({ accountId: "acct-b" })),
+    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+
+    expect(deleteCredential).not.toHaveBeenCalled();
+  });
+
+  it("skips an account-change delete when another worker rotated only the access token", async () => {
+    const stored = credential({
+      access: "old-access",
+      refresh: "same-refresh",
+      expires: 1,
+      accountId: "acct-a",
+    });
+    const rotated = serializeModelSecret({
+      kind: "oauth",
+      credential: credential({
+        access: "rotated-access",
+        refresh: "same-refresh",
+        expires: 1,
         accountId: "acct-a",
       }),
     });

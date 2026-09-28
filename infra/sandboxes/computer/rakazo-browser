@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 RAKAZO_HOME="${HOME:-/home/rakazo}"
+# start.sh exports the session bus for the whole desktop; the supervisor may
+# launch this script with a minimal environment, so recover the bus address.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -r /tmp/rakazo/dbus-session ]; then
+  . /tmp/rakazo/dbus-session
+fi
 # Page-browser tools and desktop launchers share the assigned display profile.
 DISPLAY_NUM="${DISPLAY:-:1}"
 DISPLAY_NUM="${DISPLAY_NUM#:}"
