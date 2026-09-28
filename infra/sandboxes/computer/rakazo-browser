@@ -91,15 +91,16 @@ profile_lock_pid() {
   printf '%s\n' "$pid"
 }
 
-# This script is a shell whose argv names rakazo-browser. A browser binary is
-# not that script, even when --user-data-dir ends in /rakazo-browser.
+# This script is a shell whose argv names rakazo-browser, including a relative
+# path such as ./rakazo-browser. A browser binary is not that script. A flag
+# assignment (--user-data-dir=.../rakazo-browser) is not the script path either.
 is_wrapper_pid() {
   pid=$1
   exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
   case "${exe##*/}" in
     chromium|chromium-browser|chrome|google-chrome|google-chrome-stable) return 1 ;;
   esac
-  cmdline_text "$pid" | grep -qE '^(/.*/)?rakazo-browser$'
+  cmdline_text "$pid" | grep -qE '^([^=]*/)?rakazo-browser$'
 }
 
 profile_lock_is_live() {
