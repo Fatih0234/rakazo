@@ -150,7 +150,12 @@ const CONTROL_MAX_TIMEOUT_MS = 60_000;
 // control.py waits this long for one focus wrapper (FOCUS_COMPLETION_SEC).
 const FOCUS_ACTION_BUDGET_MS = 13_400;
 
-/** Bound the HTTP control deadline by focus steps, mapped waits, and settle time. */
+/**
+ * HTTP deadline for one control request.
+ * Focus and wait steps run one after another under the display lock. A batch of
+ * 24 focus steps would need minutes, so an over-budget batch is rejected instead
+ * of raising the 60s ceiling or aborting a later step. Each focus step stays 13.4s.
+ */
 export function computerControlTimeoutMs(
   actions: Array<z.infer<typeof computerActionSchema>>,
   settleMs = 0,
@@ -161,13 +166,17 @@ export function computerControlTimeoutMs(
     if (action.kind === "wait") waits += Math.min(Math.max(action.ms, 0), 5_000);
     else if (action.kind === "focus") focusSteps += 1;
   }
-  return Math.min(
-    CONTROL_MAX_TIMEOUT_MS,
+  const budget =
     CONTROL_BASE_TIMEOUT_MS +
-      waits +
-      focusSteps * FOCUS_ACTION_BUDGET_MS +
-      Math.min(Math.max(settleMs, 0), 5_000),
-  );
+    waits +
+    focusSteps * FOCUS_ACTION_BUDGET_MS +
+    Math.min(Math.max(settleMs, 0), 5_000);
+  if (budget > CONTROL_MAX_TIMEOUT_MS) {
+    throw new Error(
+      "computer action batch exceeds the control deadline; split focus and wait steps",
+    );
+  }
+  return budget;
 }
 
 export function toSandboxInput(input: {

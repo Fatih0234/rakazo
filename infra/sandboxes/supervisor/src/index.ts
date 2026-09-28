@@ -470,6 +470,9 @@ app.post("/computers/:id/actions", async (c) => {
     })
     .parse(await c.req.json());
   try {
+    // Reject before the HTTP call or the docker-exec fallback, so neither path
+    // starts a batch the 60s deadline cannot finish.
+    computerControlTimeoutMs(body.actions, body.settleMs ?? 0);
     const { container, info, layout, browserProfile } = await managedScreen(
       c.req.param("id"),
       c.req.header("x-rakazo-bot-id"),
