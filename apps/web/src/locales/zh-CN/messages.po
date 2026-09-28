@@ -2641,7 +2641,7 @@ msgstr "无认证"
 
 #: src/components/computer/TerminalApp.tsx:49
 msgid "No bot activity yet."
-msgstr ""
+msgstr "还没有机器人活动。"
 
 #: src/pages/shell/command-palette.tsx:107
 msgid "No bots"
