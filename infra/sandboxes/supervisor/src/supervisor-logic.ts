@@ -147,19 +147,26 @@ export function shouldReplayComputerActions(attempt: ComputerControlAttempt<unkn
 
 const CONTROL_BASE_TIMEOUT_MS = 15_000;
 const CONTROL_MAX_TIMEOUT_MS = 60_000;
+// control.py waits this long for one focus wrapper (FOCUS_COMPLETION_SEC).
+const FOCUS_ACTION_BUDGET_MS = 13_400;
 
-/** Bound the HTTP control deadline by mapped waits and settle time. */
+/** Bound the HTTP control deadline by focus steps, mapped waits, and settle time. */
 export function computerControlTimeoutMs(
   actions: Array<z.infer<typeof computerActionSchema>>,
   settleMs = 0,
 ) {
   let waits = 0;
+  let focusSteps = 0;
   for (const action of actions) {
     if (action.kind === "wait") waits += Math.min(Math.max(action.ms, 0), 5_000);
+    else if (action.kind === "focus") focusSteps += 1;
   }
   return Math.min(
     CONTROL_MAX_TIMEOUT_MS,
-    CONTROL_BASE_TIMEOUT_MS + waits + Math.min(Math.max(settleMs, 0), 5_000),
+    CONTROL_BASE_TIMEOUT_MS +
+      waits +
+      focusSteps * FOCUS_ACTION_BUDGET_MS +
+      Math.min(Math.max(settleMs, 0), 5_000),
   );
 }
 

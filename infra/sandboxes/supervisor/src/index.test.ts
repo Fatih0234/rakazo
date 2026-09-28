@@ -482,9 +482,15 @@ describe("sandbox supervisor input containment", () => {
     expect(shouldReplayComputerActions(reset)).toBe(false);
   });
 
-  it("extends the computer control deadline for mapped waits", () => {
+  it("extends the computer control deadline for mapped waits and focus steps", () => {
     expect(computerControlTimeoutMs([])).toBe(15_000);
     expect(computerControlTimeoutMs([{ kind: "wait", ms: 5_000 }], 5_000)).toBe(25_000);
+    const focus = { kind: "focus" as const, application: "xterm" };
+    expect(computerControlTimeoutMs([focus])).toBe(15_000 + 13_400);
+    expect(computerControlTimeoutMs([focus, { kind: "wait", ms: 1_000 }], 500)).toBe(
+      15_000 + 13_400 + 1_000 + 500,
+    );
+    expect(computerControlTimeoutMs(Array.from({ length: 5 }, () => focus))).toBe(60_000);
     expect(
       computerControlTimeoutMs(
         [

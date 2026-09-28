@@ -196,6 +196,7 @@ def allowed_control_argv(argv, display):
 
 # The wrapper bounds each wmctrl call at 5s and may also wait out a browser
 # forward. Wait for it to exit so a slow listing is not reported as success.
+# computerControlTimeoutMs adds this per focus step on top of its 15s base.
 FOCUS_COMPLETION_SEC = 5 + BROWSER_OPEN_POLL_SEC + 5 + 1
 
 

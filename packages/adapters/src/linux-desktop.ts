@@ -210,7 +210,7 @@ function browserActionCommand(
     const command = focusOrLaunchActionCommand(action, layout);
     // The browser launcher is absolute. Other apps and URIs are workspace-relative,
     // same as the launch path below.
-    if (BROWSER_APPLICATIONS.has(action.application.toLowerCase())) return command;
+    if (isChromiumBrowser(action.application)) return command;
     return `cd ${shellQuote(env.workspaceDir)}\n${command}`;
   }
   const browser =
@@ -229,6 +229,25 @@ function browserActionCommand(
 // Chrome-family WM_CLASS components. Matched whole, so "xterm" does not raise "uxterm".
 const CHROME_WM_CLASSES = "chromium|chromium-browser|google-chrome|google-chrome-stable|chrome";
 
+// Firefox is a browser alias, but its window class is Navigator and the
+// Chromium launcher cannot raise or replace it.
+function isChromiumBrowser(application: string) {
+  const normalized = application.toLowerCase();
+  return normalized !== "firefox" && BROWSER_APPLICATIONS.has(normalized);
+}
+
+// Same 0.2s quick-failure window as rakazo-focus-or-launch. A GUI that stays
+// up is success; an immediate non-zero exit fails the focus before the old
+// window is raised.
+const FOCUS_URI_PROBE = [
+  "import subprocess,sys",
+  "try:",
+  " code=subprocess.Popen(sys.argv[1:],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).wait(timeout=0.2)",
+  "except subprocess.TimeoutExpired:",
+  " raise SystemExit(0)",
+  "raise SystemExit(code)",
+].join("\n");
+
 /**
  * Raise an app's existing window by WM_CLASS, else spawn it — the focus primitive
  * rakazo-focus-or-launch provides inside the computer image, inline for provider desktops.
@@ -239,15 +258,18 @@ function focusOrLaunchActionCommand(
   action: Extract<ComputerAction, { kind: "focus" }>,
   layout: Parameters<typeof extraDisplayActionCommand>[0],
 ) {
-  const browser = BROWSER_APPLICATIONS.has(action.application.toLowerCase());
+  const browser = isChromiumBrowser(action.application);
   const binary = (action.application.split("/").pop() ?? "").replaceAll(/[^A-Za-z0-9_-]/g, "");
   const quotedApp = shellQuote(action.application);
   const quotedArg = action.uri === undefined ? "" : ` ${shellQuote(action.uri)}`;
   const foreground = browser
     ? `nohup ${browserLauncherPath(layout.displayNumber)} ${shellQuote(action.uri ?? "about:blank")} </dev/null >/tmp/rakazo/browser-open-${layout.displayNumber}.log 2>&1 &`
     : `DISPLAY=${layout.display} ${quotedApp}${quotedArg}`;
-  // A GUI that stays in the foreground must not delay wmctrl -ia.
-  const background = browser ? foreground : `${foreground} >/dev/null 2>&1 &`;
+  // A GUI that stays in the foreground must not delay wmctrl -ia. A non-browser
+  // URI still has to surface a launcher that exits immediately.
+  const background = browser
+    ? foreground
+    : `DISPLAY=${layout.display} python3 -c ${shellQuote(FOCUS_URI_PROBE)} ${quotedApp}${quotedArg} || exit $?`;
   if (!browser && !binary) return foreground;
   const classCase = browser ? CHROME_WM_CLASSES : binary.toLowerCase();
   return [
