@@ -82,6 +82,7 @@ import {
   resolveAutoReviewChecker,
   resolveBotUploadPath,
   resolveBotWorkspacePath,
+  revokeScreenControl,
   sanitizeComposioError,
   savePushToken,
   scheduleComputerControlExpiry,
@@ -2025,8 +2026,13 @@ export function createRouter(deps: RouterDeps) {
           if (bot.computer.providerRef) {
             const ctx = computerContext(context.actor, bot.id, "stop");
             const ref = toComputerRef(bot.computer);
-            await checkpointAndRecordComputerWorkspace(deps, bot.computer, ref, ctx);
-            await deps.sandbox.stop(ref, ctx);
+            try {
+              await checkpointAndRecordComputerWorkspace(deps, bot.computer, ref, ctx);
+              await deps.sandbox.stop(ref, ctx);
+            } catch (error) {
+              // The sandbox is already gone: nothing left to checkpoint or stop.
+              if (!isSandboxGoneError(error)) throw error;
+            }
           }
           await deps.prisma.computer.update({
             where: { id: bot.computer.id },
@@ -2175,9 +2181,9 @@ export function createRouter(deps: RouterDeps) {
         }
         if (hasActiveComputerControl(bot.computer) && bot.computer.controlBotId !== bot.id) {
           const previousBotId = bot.computer.controlBotId!;
-          await deps.sandbox.setScreenControl?.(
-            toComputerRef(bot.computer),
-            false,
+          await revokeScreenControl(
+            deps,
+            bot.computer,
             computerContext(context.actor, previousBotId, "screen.release"),
             bot.computer.controlLeaseId ?? undefined,
           );
@@ -5378,14 +5384,12 @@ async function releaseComputerControl(
     }
     return;
   }
-  if (bot.computer.providerRef) {
-    await deps.sandbox.setScreenControl?.(
-      toComputerRef(bot.computer),
-      false,
-      computerContext(actor, controlBotId, "screen.release"),
-      controlLeaseId,
-    );
-  }
+  await revokeScreenControl(
+    deps,
+    bot.computer,
+    computerContext(actor, controlBotId, "screen.release"),
+    controlLeaseId,
+  );
 
   const released = await deps.events.finalizeComputerControlRelease({
     spaceId: actor.spaceId,
@@ -5475,7 +5479,17 @@ async function expireStaleComputerControl(
     | undefined,
 ): Promise<boolean> {
   if (!computer || hasActiveComputerControl(computer)) return false;
-  if (computer.controlHolder !== "user") return false;
+  if (computer.controlHolder !== "user") {
+    // Holder "none" with a surviving lease id is a revoke that failed mid-expiry;
+    // retry it so the row does not sit busy forever.
+    if (computer.controlLeaseId) {
+      await expireComputerControl(deps, computer.id, computer.controlLeaseId).catch(
+        () => undefined,
+      );
+      return true;
+    }
+    return false;
+  }
   const leaseId = computer.controlLeaseId;
   // Keep a failed revoke's lease id so reconciliation can retry provider shutdown.
   if (leaseId) {

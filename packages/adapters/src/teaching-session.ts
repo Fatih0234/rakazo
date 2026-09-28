@@ -22,6 +22,7 @@ import {
   type PrismaClient,
   type ThreadEvents,
 } from "@rakazo/db";
+import { revokeScreenControl } from "./computer-control.js";
 import { scheduleComputerSleep } from "./computer-idle.js";
 import { toComputerRef } from "./computer-support.js";
 
@@ -286,6 +287,8 @@ async function releaseTeachingComputerControl(
     id: string;
     computer: {
       id: string;
+      homeKey: string;
+      kind: string;
       providerRef: string | null;
       controlHolder: string;
       controlBotId: string | null;
@@ -305,14 +308,12 @@ async function releaseTeachingComputerControl(
   }
   if (!expectedLeaseId || computer.controlLeaseId !== expectedLeaseId) return;
   const leaseId = computer.controlLeaseId;
-  if (computer.providerRef) {
-    await deps.sandbox.setScreenControl?.(
-      toComputerRef(computer as never),
-      false,
-      computerContext(actor, bot.id, "skills.release"),
-      leaseId,
-    );
-  }
+  await revokeScreenControl(
+    deps,
+    computer,
+    computerContext(actor, bot.id, "skills.release"),
+    leaseId,
+  );
   await deps.jobs.cancel(computerControlExpireJobKey(computer.id, leaseId));
   await deps.events.finalizeComputerControlRelease({
     spaceId: actor.spaceId,

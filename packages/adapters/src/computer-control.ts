@@ -8,6 +8,7 @@ import {
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { toComputerRef } from "./computer-support.js";
+import { isSandboxGoneError } from "./e2b-sandbox.js";
 
 export const DEFAULT_TAKEOVER_LEASE_MS = 15 * 60 * 1000;
 
@@ -141,6 +142,35 @@ export async function clearInactiveUserComputerControl(
   return cleared.count === 1;
 }
 
+/**
+ * Revoke this computer's screen control at the provider. A sandbox that is
+ * already gone has nothing left to release: count the revoke as done and drop
+ * the stranded providerRef — the same reconciliation the screen-url endpoint
+ * applies — so later calls can offer a boot instead of throwing forever.
+ * Callers mid-replacement pass clearGoneRef: false: their activation compare
+ * still names the dead ref, and the replacement overwrites it.
+ */
+export async function revokeScreenControl(
+  deps: { prisma: PrismaClient; sandbox: SandboxProvider | undefined },
+  computer: { id: string; homeKey: string; kind: string; providerRef: string | null },
+  context: AdapterContext,
+  leaseId: string | undefined,
+  opts?: { clearGoneRef?: boolean },
+): Promise<void> {
+  if (!computer.providerRef) return;
+  try {
+    await deps.sandbox?.setScreenControl?.(toComputerRef(computer), false, context, leaseId);
+  } catch (error) {
+    if (!isSandboxGoneError(error)) throw error;
+    if (opts?.clearGoneRef === false) return;
+    getLogger().error(`computer ${computer.id} sandbox ${computer.providerRef} is gone`, error);
+    await deps.prisma.computer.updateMany({
+      where: { id: computer.id, providerRef: computer.providerRef },
+      data: { state: "stopped", providerRef: null },
+    });
+  }
+}
+
 export async function expireComputerControl(
   deps: {
     prisma: PrismaClient;
@@ -178,7 +208,7 @@ export async function expireComputerControl(
         signal: new AbortController().signal,
       };
       try {
-        await deps.sandbox.setScreenControl?.(toComputerRef(computer), false, context, leaseId);
+        await revokeScreenControl(deps, computer, context, leaseId);
       } catch {
         // Keep the lease id and try to reschedule so reconciler/status can retry.
         try {
@@ -234,7 +264,7 @@ export async function expireComputerControl(
       botId,
       signal: new AbortController().signal,
     };
-    await deps.sandbox.setScreenControl?.(toComputerRef(computer), false, context, leaseId);
+    await revokeScreenControl(deps, computer, context, leaseId);
   }
 
   const released = await deps.events.finalizeComputerControlRelease({
