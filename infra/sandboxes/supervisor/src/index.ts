@@ -1300,18 +1300,11 @@ async function rekeyRestrictedBotNetwork(name: string, botId: string) {
       () => true,
       () => false,
     );
-    // Fail closed: attaching the computer to a network the host ruleset does
-    // not match would silently grant unrestricted egress under restricted mode.
-    // Reattach first so a failed rekey does not strand a running computer
-    // without connectivity.
+    // Fail closed. This bridge is outside the host ruleset, so reconnecting
+    // would restore access to the host, private networks, and metadata.
+    // Stop this bot's containers in case disconnect left one running there.
     if (!removed) {
-      await Promise.all(
-        containerIds.map((containerId) =>
-          network.connect({ Container: containerId }).catch((error) => {
-            if (!/already exists|already connected/i.test(String(error))) throw error;
-          }),
-        ),
-      );
+      await stopBotContainers(containerIds, botId);
       throw new Error(`cannot restrict egress: failed to replace unrestricted network ${name}`);
     }
   }
@@ -1323,6 +1316,19 @@ async function rekeyRestrictedBotNetwork(name: string, botId: string) {
   if (!hasNamedBridge(await inspect())) {
     throw new Error(`cannot restrict egress: network ${name} is missing the named bridge`);
   }
+}
+
+async function stopBotContainers(containerIds: string[], botId: string) {
+  await Promise.all(
+    containerIds.map(async (containerId) => {
+      const container = docker.getContainer(containerId);
+      const labels = (await container.inspect().catch(() => undefined))?.Config.Labels ?? {};
+      if (labels["rakazo.botId"] !== botId) return;
+      await container.stop({ t: 1 }).catch(async () => {
+        await container.kill().catch(() => undefined);
+      });
+    }),
+  );
 }
 
 async function removeBotNetwork(botId: string) {

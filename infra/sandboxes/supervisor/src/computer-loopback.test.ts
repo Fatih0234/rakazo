@@ -579,10 +579,19 @@ describe("restricted egress rekeying", () => {
     expect(mocks.docker.createNetwork).not.toHaveBeenCalled();
   });
 
-  it("reattaches endpoints when rekey network removal fails", async () => {
+  it("stops the computer instead of restoring unrestricted egress when rekey removal fails", async () => {
     vi.stubEnv("SANDBOX_COMPUTER_EGRESS", "restricted");
     const botNet = computerNetworkNameFor("bot");
-    setupExisting(botNet);
+    const { existing } = setupExisting(botNet);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const kill = vi.fn().mockResolvedValue(undefined);
+    Object.assign(existing, { stop, kill });
+    const peer = {
+      inspect: vi.fn().mockResolvedValue({ Config: { Labels: { "rakazo.botId": "other" } } }),
+      stop: vi.fn().mockResolvedValue(undefined),
+      kill: vi.fn().mockResolvedValue(undefined),
+    };
+    mocks.docker.getContainer.mockImplementation((id: string) => (id === "peer" ? peer : existing));
     const network = {
       inspect: vi.fn().mockResolvedValue({
         Options: {},
@@ -597,10 +606,17 @@ describe("restricted egress rekeying", () => {
 
     const response = await provision();
     expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: expect.stringContaining("failed to replace unrestricted network"),
+    });
     for (const id of ["existing", "peer"]) {
       expect(network.disconnect).toHaveBeenCalledWith({ Container: id, Force: true });
-      expect(network.connect).toHaveBeenCalledWith({ Container: id });
     }
+    expect(network.connect).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledWith({ t: 1 });
+    expect(peer.stop).not.toHaveBeenCalled();
+    expect(existing.remove).not.toHaveBeenCalled();
+    expect(existing.start).not.toHaveBeenCalled();
   });
 });
 
