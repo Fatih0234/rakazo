@@ -350,6 +350,55 @@ describe("graphical computer spec", () => {
     },
   );
 
+  it.skipIf(process.platform !== "linux")(
+    "spawns Chromium when the caller passes the profile and debug flags itself",
+    () => {
+      const root = path.resolve(import.meta.dirname, "../../computer");
+      const temp = mkdtempSync(path.join(tmpdir(), "rakazo-browser-self-"));
+      const bin = path.join(temp, "bin");
+      const capture = path.join(temp, "args");
+      const home = path.join(temp, "home");
+      const chromium = path.join(bin, "chromium");
+      mkdirSync(bin);
+      writeFileSync(chromium, '#!/bin/sh\nprintf "%s\\n" "$@" > "$RAKAZO_TEST_ARGS"\n');
+      chmodSync(chromium, 0o755);
+
+      // browser-launch-N execs this wrapper with --user-data-dir and
+      // --remote-debugging-port already set, so the live-browser scan must not
+      // match the wrapper's own argv and take the reuse path instead of
+      // spawning.
+      const profile = path.join(home, ".browser-profiles", "chromium-bot-screen");
+      mkdirSync(profile, { recursive: true });
+
+      try {
+        const result = spawnSync(
+          "sh",
+          [
+            path.join(root, "rakazo-browser"),
+            `--user-data-dir=${profile}`,
+            "--remote-debugging-port=9222",
+          ],
+          {
+            env: {
+              ...process.env,
+              DISPLAY: ":1",
+              HOME: home,
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              RAKAZO_TEST_ARGS: capture,
+            },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+        const args = readFileSync(capture, "utf8");
+        expect(args).toContain(`--user-data-dir=${profile}`);
+        expect(args).toContain("--remote-debugging-port=9222");
+      } finally {
+        rmSync(temp, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "clears crashed state from Chromium preferences and Local State",
     () => {
