@@ -57,7 +57,16 @@ describe("Codex stream idle watchdog", () => {
     const inner = new AssistantMessageEventStream();
     const stream = watchdog.wrap(inner);
     const iterator = stream[Symbol.asyncIterator]();
+
+    // No idle budget burns before response headers land: the pre-headers
+    // window is bounded per attempt by timeoutMs, so this wait must never
+    // abort.
     const pending = iterator.next();
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS * 2);
+    expect(watchdog.signal.aborted).toBe(false);
+
+    inner.push({ type: "start", partial: assistantMessage() });
+    await pending;
 
     await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS - 1);
     expect(watchdog.signal.aborted).toBe(false);
@@ -66,9 +75,10 @@ describe("Codex stream idle watchdog", () => {
     expect(watchdog.signal.reason).toBeInstanceOf(Error);
     expect((watchdog.signal.reason as Error).message).toBe(CODEX_STREAM_IDLE_TIMEOUT_MESSAGE);
 
+    const errored = iterator.next();
     inner.push(abortedByPi());
     inner.end();
-    const { value } = await pending;
+    const { value } = await errored;
     expect(value).toEqual({
       type: "error",
       reason: "error",
@@ -83,6 +93,65 @@ describe("Codex stream idle watchdog", () => {
     });
     await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS * 2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds silence once response headers land, even before the first event", async () => {
+    vi.useFakeTimers();
+    const watchdog = codexStreamIdleWatchdog(undefined);
+    const inner = new AssistantMessageEventStream();
+    const stream = watchdog.wrap(inner);
+    const iterator = stream[Symbol.asyncIterator]();
+    const pending = iterator.next();
+
+    // Pre-headers wait consumes no idle budget.
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS * 2);
+    expect(watchdog.signal.aborted).toBe(false);
+
+    // Headers landed — pi's onResponse seam pings the watchdog — but the body
+    // then stays silent: the idle bound applies from here.
+    watchdog.ping();
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS - 1);
+    expect(watchdog.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(watchdog.signal.aborted).toBe(true);
+    expect((watchdog.signal.reason as Error).message).toBe(CODEX_STREAM_IDLE_TIMEOUT_MESSAGE);
+
+    inner.push(abortedByPi());
+    inner.end();
+    expect((await pending).value).toMatchObject({
+      reason: "error",
+      error: { errorMessage: CODEX_STREAM_IDLE_TIMEOUT_MESSAGE },
+    });
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: CODEX_STREAM_IDLE_TIMEOUT_MESSAGE,
+    });
+  });
+
+  it("never aborts a retry that succeeds after an earlier attempt stalled out", async () => {
+    vi.useFakeTimers();
+    const watchdog = codexStreamIdleWatchdog(undefined);
+    const inner = new AssistantMessageEventStream();
+    const stream = watchdog.wrap(inner);
+    const iterator = stream[Symbol.asyncIterator]();
+
+    // Attempt one burns its full headers timeout plus the retry backoff; a
+    // second attempt then needs its own timeoutMs to deliver headers. No
+    // leftover idle budget may kill it.
+    const pending = iterator.next();
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_TIMEOUT_MS + MODEL_STREAM_IDLE_TIMEOUT_MS);
+    expect(watchdog.signal.aborted).toBe(false);
+
+    // The retried attempt's headers arrive: the first event arms the timer.
+    inner.push({ type: "start", partial: assistantMessage() });
+    expect((await pending).value).toMatchObject({ type: "start" });
+    expect(watchdog.signal.aborted).toBe(false);
+
+    const done = iterator.next();
+    inner.push({ type: "done", reason: "stop", message: assistantMessage() });
+    inner.end();
+    expect((await done).value).toMatchObject({ type: "done" });
+    await expect(stream.result()).resolves.toMatchObject({ stopReason: "stop" });
   });
 
   it("re-arms on every delivered event so a busy stream never aborts", async () => {
@@ -182,11 +251,13 @@ describe("reliableModelStream idle gating", () => {
     );
     const models = { streamSimple } as unknown as Models;
     const other = { provider: "openrouter", api: "openai-completions" } as Model<Api>;
-    const options: SimpleStreamOptions = { signal: caller.signal };
+    const callerFetch = vi.fn<NonNullable<SimpleStreamOptions["fetch"]>>();
+    const options: SimpleStreamOptions = { signal: caller.signal, fetch: callerFetch };
 
     const guarded = reliableModelStream(models, codexModel, context, options, undefined);
     const guardedOptions = streamSimple.mock.calls[0]?.[2];
     expect(guardedOptions?.signal).not.toBe(caller.signal);
+    expect(guardedOptions?.fetch).not.toBe(callerFetch);
     expect(guardedOptions?.timeoutMs).toBe(MODEL_STREAM_TIMEOUT_MS);
     expect(guardedOptions?.transport).toBe("sse");
     expect(guarded).not.toBe(inner);
@@ -195,11 +266,152 @@ describe("reliableModelStream idle gating", () => {
     const plain = reliableModelStream(models, other, context, options, undefined);
     const plainOptions = streamSimple.mock.calls[1]?.[2];
     expect(plainOptions?.signal).toBe(caller.signal);
+    expect(plainOptions?.fetch).toBe(callerFetch);
     expect(plain).toBe(inner);
 
-    // The watchdog aborts only its own request signal, never the caller's.
+    // Before the first event the idle budget stays unarmed, so a headers
+    // timeout leaves a retried attempt its own full timeoutMs.
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS * 2);
+    expect(guardedOptions?.signal?.aborted).toBe(false);
+    expect(caller.signal.aborted).toBe(false);
+
+    // Once events flow, silence is bounded — and the watchdog aborts only its
+    // own request signal, never the caller's.
+    const pending = guarded[Symbol.asyncIterator]().next();
+    inner.push({ type: "start", partial: assistantMessage() });
+    await pending;
     await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS);
     expect(guardedOptions?.signal?.aborted).toBe(true);
+    expect(caller.signal.aborted).toBe(false);
+  });
+
+  it("arms only on successful responses, leaving retry backoff uncovered", async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    const inner = new AssistantMessageEventStream();
+    const streamSimple = vi.fn(
+      (_model: Model<Api>, _context: Context, _options?: SimpleStreamOptions) => inner,
+    );
+    const models = { streamSimple } as unknown as Models;
+    const onResponse = vi.fn();
+
+    reliableModelStream(
+      models,
+      codexModel,
+      context,
+      { signal: caller.signal, onResponse },
+      undefined,
+    );
+    const guardedOptions = streamSimple.mock.calls[0]?.[2];
+    expect(guardedOptions?.onResponse).not.toBe(onResponse);
+
+    // Attempt 1 stalls until its headers timeout and pi retries: no response
+    // callback has fired, so no idle budget has been spent.
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_TIMEOUT_MS + MODEL_STREAM_IDLE_TIMEOUT_MS);
+    expect(guardedOptions?.signal?.aborted).toBe(false);
+
+    // A retryable response's headers must not arm the watchdog: error
+    // responses emit no stream events, and pi's backoff sleep sits outside the
+    // idle bound. The caller's own onResponse still observes every response.
+    await guardedOptions?.onResponse?.({ status: 429, headers: {} }, codexModel);
+    expect(onResponse).toHaveBeenCalledWith({ status: 429, headers: {} }, codexModel);
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS * 2);
+    expect(guardedOptions?.signal?.aborted).toBe(false);
+
+    // The retried attempt's 2xx headers arm a fresh full budget; a body that
+    // then stays silent aborts at the idle bound.
+    await guardedOptions?.onResponse?.({ status: 200, headers: {} }, codexModel);
+    expect(onResponse).toHaveBeenCalledWith({ status: 200, headers: {} }, codexModel);
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS - 1);
+    expect(guardedOptions?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(guardedOptions?.signal?.aborted).toBe(true);
+    expect(caller.signal.aborted).toBe(false);
+  });
+
+  it("fails a stalled retryable error body without aborting the request", async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    const inner = new AssistantMessageEventStream();
+    const callerFetch = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            pull: () => new Promise<void>(() => undefined),
+          }),
+          { status: 429, headers: { "retry-after": "30" } },
+        ),
+    );
+    const streamSimple = vi.fn(
+      (_model: Model<Api>, _context: Context, _options?: SimpleStreamOptions) => inner,
+    );
+    reliableModelStream(
+      { streamSimple } as unknown as Models,
+      codexModel,
+      context,
+      { signal: caller.signal, fetch: callerFetch },
+      undefined,
+    );
+    const guardedOptions = streamSimple.mock.calls[0]?.[2];
+    const response = await guardedOptions!.fetch!("https://example.test/codex", { method: "POST" });
+    expect(callerFetch).toHaveBeenCalledOnce();
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("30");
+
+    let settled = false;
+    const outcome = response.text().then(
+      (text) => {
+        settled = true;
+        return { text };
+      },
+      (error: unknown) => {
+        settled = true;
+        return { error };
+      },
+    );
+    await vi.advanceTimersByTimeAsync(MODEL_STREAM_IDLE_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    expect(guardedOptions?.signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    await expect(outcome).resolves.toEqual({
+      error: expect.objectContaining({ message: CODEX_STREAM_IDLE_TIMEOUT_MESSAGE }),
+    });
+    expect(guardedOptions?.signal?.aborted).toBe(false);
+    expect(caller.signal.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("returns a finished error body and leaves successful responses unwrapped", async () => {
+    const caller = new AbortController();
+    const inner = new AssistantMessageEventStream();
+    const ok = new Response("event: done\n\n", { status: 200 });
+    const callerFetch = vi
+      .fn<NonNullable<SimpleStreamOptions["fetch"]>>()
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: { "retry-after": "2" } }),
+      )
+      .mockResolvedValueOnce(ok);
+    const streamSimple = vi.fn(
+      (_model: Model<Api>, _context: Context, _options?: SimpleStreamOptions) => inner,
+    );
+    reliableModelStream(
+      { streamSimple } as unknown as Models,
+      codexModel,
+      context,
+      { signal: caller.signal, fetch: callerFetch },
+      undefined,
+    );
+    const guardedOptions = streamSimple.mock.calls[0]?.[2];
+    const retryable = await guardedOptions!.fetch!("https://example.test/codex", {});
+    expect(retryable.status).toBe(429);
+    expect(retryable.headers.get("retry-after")).toBe("2");
+    await expect(retryable.text()).resolves.toBe("slow down");
+
+    const succeeded = await guardedOptions!.fetch!("https://example.test/codex", {});
+    expect(succeeded).toBe(ok);
+    expect(guardedOptions?.signal?.aborted).toBe(false);
     expect(caller.signal.aborted).toBe(false);
   });
 
