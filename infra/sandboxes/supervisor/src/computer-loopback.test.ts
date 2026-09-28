@@ -8,6 +8,7 @@ import {
   COMPUTER_IMAGE,
   computerBridgeNameFor,
   computerNetworkNameFor,
+  containerNameFor,
   hostComputerUser,
 } from "./computer-spec.js";
 
@@ -617,6 +618,46 @@ describe("restricted egress rekeying", () => {
     expect(peer.stop).not.toHaveBeenCalled();
     expect(existing.remove).not.toHaveBeenCalled();
     expect(existing.start).not.toHaveBeenCalled();
+  });
+
+  it("stops the named computer when endpoint inspection fails during rekey", async () => {
+    vi.stubEnv("SANDBOX_COMPUTER_EGRESS", "restricted");
+    const botNet = computerNetworkNameFor("bot");
+    const { existing } = setupExisting(botNet);
+    const info = await existing.inspect();
+    let seen = 0;
+    existing.inspect.mockImplementation(async () => {
+      seen += 1;
+      if (seen > 2) throw new Error("inspect failed");
+      return info;
+    });
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const kill = vi.fn().mockResolvedValue(undefined);
+    Object.assign(existing, { stop, kill });
+    const peer = {
+      inspect: vi.fn().mockResolvedValue({ Config: { Labels: { "rakazo.botId": "other" } } }),
+      stop: vi.fn().mockResolvedValue(undefined),
+      kill: vi.fn().mockResolvedValue(undefined),
+    };
+    mocks.docker.getContainer.mockImplementation((id: string) => (id === "peer" ? peer : existing));
+    const network = {
+      inspect: vi.fn().mockResolvedValue({
+        Options: {},
+        Containers: { existing: {}, peer: {} },
+      }),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      connect: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockRejectedValue(new Error("network has active endpoints")),
+    };
+    mocks.docker.getNetwork.mockReturnValue(network);
+    mocks.docker.createNetwork.mockRejectedValue(new Error("network already exists"));
+
+    const response = await provision();
+    expect(response.status).toBe(500);
+    expect(network.connect).not.toHaveBeenCalled();
+    expect(mocks.docker.getContainer).toHaveBeenCalledWith(containerNameFor("bot"));
+    expect(stop).toHaveBeenCalledWith({ t: 1 });
+    expect(peer.stop).not.toHaveBeenCalled();
   });
 });
 

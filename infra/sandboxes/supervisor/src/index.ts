@@ -1318,17 +1318,33 @@ async function rekeyRestrictedBotNetwork(name: string, botId: string) {
   }
 }
 
+async function stopContainer(container: Docker.Container) {
+  await container.stop({ t: 1 }).catch(async () => {
+    await container.kill().catch(() => undefined);
+  });
+}
+
 async function stopBotContainers(containerIds: string[], botId: string) {
+  const stoppedIds = new Set<string>();
   await Promise.all(
     containerIds.map(async (containerId) => {
       const container = docker.getContainer(containerId);
-      const labels = (await container.inspect().catch(() => undefined))?.Config.Labels ?? {};
-      if (labels["rakazo.botId"] !== botId) return;
-      await container.stop({ t: 1 }).catch(async () => {
-        await container.kill().catch(() => undefined);
-      });
+      const inspected = await container.inspect().catch(() => undefined);
+      // A failed inspect is not proof this endpoint belongs to someone else.
+      // Only a successful inspect of a different bot may skip the stop.
+      if (inspected && inspected.Config.Labels?.["rakazo.botId"] !== botId) return;
+      if (!inspected) return;
+      await stopContainer(container);
+      stoppedIds.add(containerId);
+      if (inspected.Id) stoppedIds.add(inspected.Id);
     }),
   );
+  // The computer's name does not depend on reading the endpoint. Stop it even
+  // when inspect failed, so a failed disconnect cannot leave it running.
+  const named = docker.getContainer(containerNameFor(botId));
+  const namedInfo = await named.inspect().catch(() => undefined);
+  if (namedInfo?.Id && stoppedIds.has(namedInfo.Id)) return;
+  await stopContainer(named);
 }
 
 async function removeBotNetwork(botId: string) {

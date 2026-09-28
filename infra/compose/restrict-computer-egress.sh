@@ -111,21 +111,104 @@ wait_for_docker_user() {
   done
 }
 
-# Insert each missing rule at the top of its chain so a broader operator rule
-# cannot shadow the block. Iterating in reverse preserves the documented order
-# (INPUT: ESTABLISHED accept ahead of the drop). Existing rules are left in
-# place wherever they already sit, so repeat runs are idempotent.
+# Canonical form so iptables -S reordering (-d before -i, ctstate sorted) still
+# matches the spec. Comparison is only used to skip a rewrite.
+normalize_rule() {
+  local spec="$1"
+  local -a toks
+  read -ra toks <<<"$spec"
+  local in="" out="" dest="" jump="" ct="" i=0
+  while ((i < ${#toks[@]})); do
+    case "${toks[i]}" in
+      -i) in="${toks[i + 1]}"; i+=2 ;;
+      -o) out="${toks[i + 1]}"; i+=2 ;;
+      -d) dest="${toks[i + 1]}"; i+=2 ;;
+      -j) jump="${toks[i + 1]}"; i+=2 ;;
+      -m) i+=2 ;;
+      --ctstate) ct="${toks[i + 1]}"; i+=2 ;;
+      *) i+=1 ;;
+    esac
+  done
+  if [[ -n $ct ]]; then
+    ct="$(printf '%s\n' "$ct" | tr ',' '\n' | LC_ALL=C sort | paste -sd, -)"
+  fi
+  printf 'in=%s out=%s dest=%s ct=%s jump=%s' "$in" "$out" "$dest" "$ct" "$jump"
+}
+
+# True when this chain already begins with the managed rules, in order, above
+# anything an operator or another firewall manager inserted later.
+chain_has_prefix() {
+  local cmd="$1" chain="$2"
+  shift 2
+  local -a wanted=("$@") current=()
+  local line
+  while IFS= read -r line; do
+    [[ "$line" == "-A $chain "* ]] || continue
+    current+=("${line#-A $chain }")
+  done < <("$cmd" -S "$chain" 2>/dev/null || true)
+  ((${#current[@]} >= ${#wanted[@]})) || return 1
+  local i
+  for ((i = 0; i < ${#wanted[@]}; i++)); do
+    [[ "$(normalize_rule "${current[i]}")" == "$(normalize_rule "${wanted[i]}")" ]] || return 1
+  done
+}
+
+# Insert each chain's rules at its head so a broader accept cannot shadow the
+# drops. Same-bridge RETURN stays above the drops, and the INPUT established
+# accept stays above the catch-all drop. A chain that already has that prefix
+# is left alone. Otherwise the managed rules are removed wherever they sit and
+# inserted again, so a later accept cannot stay above them.
 apply_family() {
-  local cmd="$1" rules=() line chain i
+  local cmd="$1" rules=() line chain
   command -v "$cmd" >/dev/null 2>&1 || return 0
   wait_for_docker_user "$cmd"
   mapfile -t rules < <("$2")
+  local -a chain_names=()
+  local -A seen=()
+  for line in "${rules[@]}"; do
+    chain="${line%% *}"
+    if [[ -z ${seen[$chain]+x} ]]; then
+      seen[$chain]=1
+      chain_names+=("$chain")
+    fi
+  done
+  local -A rewrite=()
+  local chain_needs=0
+  for chain in "${chain_names[@]}"; do
+    local -a wanted=()
+    for line in "${rules[@]}"; do
+      [[ "${line%% *}" == "$chain" ]] || continue
+      wanted+=("${line#* }")
+    done
+    if chain_has_prefix "$cmd" "$chain" "${wanted[@]}"; then
+      continue
+    fi
+    rewrite[$chain]=1
+    chain_needs=1
+  done
+  if ((chain_needs == 0)); then
+    return 0
+  fi
+  # One reverse pass matches --print and real per-chain inserts: each -I 1
+  # leaves the documented order at the head (RETURN above drops, established
+  # accept above the INPUT drop).
+  local i
+  local -a args
+  for ((i = 0; i < ${#rules[@]}; i++)); do
+    line="${rules[i]}"
+    chain="${line%% *}"
+    [[ -n ${rewrite[$chain]+x} ]] || continue
+    read -ra args <<<"${line#* }"
+    while "$cmd" -C "$chain" "${args[@]}" 2>/dev/null; do
+      "$cmd" -D "$chain" "${args[@]}"
+    done
+  done
   for ((i = ${#rules[@]} - 1; i >= 0; i--)); do
     line="${rules[i]}"
     chain="${line%% *}"
-    local -a args
+    [[ -n ${rewrite[$chain]+x} ]] || continue
     read -ra args <<<"${line#* }"
-    "$cmd" -C "$chain" "${args[@]}" 2>/dev/null || "$cmd" -I "$chain" 1 "${args[@]}"
+    "$cmd" -I "$chain" 1 "${args[@]}"
   done
 }
 

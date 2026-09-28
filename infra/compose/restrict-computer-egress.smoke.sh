@@ -58,6 +58,16 @@ printf '%s\n' "$*" >>"$STUB_DIR/$(basename "$0").calls"
 op="$1"; shift || true
 case "$op" in
   -L) exit 0 ;;
+  -S)
+    chain="$1"
+    printf '%s\n' "-N $chain"
+    if [[ -f $state ]]; then
+      while IFS= read -r row; do
+        [[ "$row" == "$chain "* ]] || continue
+        printf '%s\n' "-A $row"
+      done <"$state"
+    fi
+    ;;
   -C) grep -qxF -- "$*" "$state" 2>/dev/null ;;
   # -I CHAIN 1 inserts at the top: model it as a prepend so the state file
   # mirrors real chain order (top to bottom).
@@ -85,13 +95,14 @@ grep -qxF 'DOCKER-USER -i rakazo-c+ -d 169.254.0.0/16 -j DROP' "$v4_state" ||
 grep -qxF 'DOCKER-USER -i rakazo-c+ -o rakazo-c+ -j RETURN' "$v4_state" ||
   fail "same-bridge RETURN missing after apply"
 
-# Reverse iteration puts the INPUT drop in first so the accept ends up above it.
-drop_i="$(grep -n -- '-I INPUT 1 -i rakazo-c+ -j DROP' "$v4_calls" | head -1 | cut -d: -f1)"
-acc_i="$(grep -n -- 'ESTABLISHED,RELATED -j ACCEPT' "$v4_calls" | head -1 | cut -d: -f1)"
-[[ -n "$drop_i" && -n "$acc_i" && "$drop_i" -lt "$acc_i" ]] ||
-  fail "apply must insert the INPUT drop before the established accept"
+# The established accept must end up above the INPUT drop. Call order is not
+# the chain: a prefix check may probe the accept before the drop is inserted.
+acc_at="$(grep -nxF 'INPUT -i rakazo-c+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT' "$v4_state" | head -1 | cut -d: -f1)"
+drop_at="$(grep -nxF 'INPUT -i rakazo-c+ -j DROP' "$v4_state" | head -1 | cut -d: -f1)"
+[[ -n "$acc_at" && -n "$drop_at" && "$acc_at" -lt "$drop_at" ]] ||
+  fail "established accept must sit above the INPUT drop"
 
-# Second apply inserts nothing.
+# Second apply inserts nothing when the managed rules are already the prefix.
 RAKAZO_IPTABLES="$bin/iptables" RAKAZO_IP6TABLES="$bin/ip6tables" bash "$script" --apply
 [[ "$(grep -c '^-I ' "$v4_calls")" == 14 ]] ||
   fail "rules re-inserted on repeat apply"
@@ -121,6 +132,19 @@ diff "$v4_state" "$replay_dir/iptables.state" >/dev/null ||
   fail "--print replay does not reproduce the applied IPv4 chain"
 diff "$v6_state" "$replay_dir/ip6tables.state" >/dev/null ||
   fail "--print replay does not reproduce the applied IPv6 chain"
+
+# An ACCEPT inserted above the drops must not survive --apply. The managed
+# rules return to the head of DOCKER-USER and the foreign accept falls below.
+{ printf '%s\n' 'DOCKER-USER -j ACCEPT'; cat "$v4_state"; } >"$v4_state.tmp"
+mv "$v4_state.tmp" "$v4_state"
+RAKAZO_IPTABLES="$bin/iptables" RAKAZO_IP6TABLES="$bin/ip6tables" bash "$script" --apply
+first="$(head -1 "$v4_state")"
+[[ "$first" == 'DOCKER-USER -i rakazo-c+ -o rakazo-c+ -j RETURN' ]] ||
+  fail "same-bridge RETURN was not restored to the head, got: $first"
+accept_at="$(grep -nxF 'DOCKER-USER -j ACCEPT' "$v4_state" | head -1 | cut -d: -f1)"
+meta_at="$(grep -nxF 'DOCKER-USER -i rakazo-c+ -d 169.254.0.0/16 -j DROP' "$v4_state" | head -1 | cut -d: -f1)"
+[[ -n "$accept_at" && -n "$meta_at" && "$meta_at" -lt "$accept_at" ]] ||
+  fail "metadata drop is not above the foreign ACCEPT"
 
 # Without ip6tables on PATH the IPv6 family is skipped only when the host has
 # no global IPv6 (loopback scope 10). On a dual-stack host (scope 00) the same
