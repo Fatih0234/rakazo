@@ -250,6 +250,7 @@ import type { CodexLiveCatalog } from "./pi-codex-catalog.js";
 import { codexLiveListsModel } from "./pi-codex-catalog.js";
 import { toOAuthCredential } from "./pi-credentials.js";
 import {
+  isRetiredModelCredentialError,
   matchesFailedOAuthSecret,
   parseModelSecret,
   persistStoredModelSecret,
@@ -1518,8 +1519,17 @@ export function createRunExecutor(deps: ExecutorDeps) {
             (values) => runSecrets.push(...values),
           );
         } catch (error) {
-          if (!(error instanceof UnavailableModelForAuthError)) throw error;
-          await failRunBeforeModel(error.message);
+          // A dead or account-switched credential is already deleted. Retrying
+          // setup would requeue the run and might fall back to another model.
+          if (
+            !(error instanceof UnavailableModelForAuthError) &&
+            !isRetiredModelCredentialError(error)
+          ) {
+            throw error;
+          }
+          await failRunBeforeModel(
+            error instanceof Error ? error.message : "Connect the provider again.",
+          );
           return;
         }
         runSecrets.push(...resolved.redact);
