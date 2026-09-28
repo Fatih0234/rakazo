@@ -399,6 +399,70 @@ describe("graphical computer spec", () => {
     },
   );
 
+  it.skipIf(process.platform !== "linux")(
+    "keeps a live browser when its profile directory is named rakazo-browser",
+    () => {
+      const root = path.resolve(import.meta.dirname, "../../computer");
+      const temp = mkdtempSync(path.join(tmpdir(), "rakazo-browser-named-"));
+      const bin = path.join(temp, "bin");
+      const capture = path.join(temp, "args");
+      const home = path.join(temp, "home");
+      const profile = path.join(temp, "rakazo-browser");
+      const prefsPath = path.join(profile, "Default", "Preferences");
+      const liveBin = path.join(temp, "live", "chromium");
+      mkdirSync(bin);
+      mkdirSync(path.dirname(liveBin));
+      mkdirSync(path.dirname(prefsPath), { recursive: true });
+      writeFileSync(path.join(bin, "chromium"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$RAKAZO_TEST_ARGS"\n');
+      chmodSync(path.join(bin, "chromium"), 0o755);
+      const source = path.join(temp, "pause.c");
+      writeFileSync(source, "#include <unistd.h>\nint main(void) { for (;;) pause(); }\n");
+      const compiled = spawnSync("gcc", ["-o", liveBin, source]);
+      expect(compiled.status, compiled.stderr?.toString()).toBe(0);
+      writeFileSync(prefsPath, '{\n  "profile": {\n    "exit_type": "Crashed"\n  }\n}\n');
+      const browser = spawn(
+        liveBin,
+        [`--user-data-dir=${profile}`, "--remote-debugging-port=9", "--user-data-dir", profile],
+        { stdio: "ignore", detached: true },
+      );
+      const liveLock = path.join(profile, "SingletonLock");
+      symlinkSync(`testhost-${browser.pid}`, liveLock);
+      try {
+        const result = spawnSync(
+          "sh",
+          [
+            path.join(root, "rakazo-browser"),
+            `--user-data-dir=${profile}`,
+            "--remote-debugging-port=9222",
+          ],
+          {
+            env: {
+              ...process.env,
+              DISPLAY: ":1",
+              HOME: home,
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              RAKAZO_TEST_ARGS: capture,
+            },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+        expect(readlinkSync(liveLock)).toBe(`testhost-${browser.pid}`);
+        expect(readFileSync(prefsPath, "utf8")).toContain('"exit_type": "Crashed"');
+        expect(readFileSync(capture, "utf8")).toContain(`--user-data-dir=${profile}`);
+      } finally {
+        if (browser.pid) {
+          try {
+            process.kill(-browser.pid, "SIGKILL");
+          } catch {
+            browser.kill("SIGKILL");
+          }
+        }
+        rmSync(temp, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "clears crashed state from Chromium preferences and Local State",
     () => {
