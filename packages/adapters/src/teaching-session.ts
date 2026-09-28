@@ -53,7 +53,6 @@ export type TeachComputerInput = (
   | ComputerInput
   | { kind: "scroll"; direction: "up" | "down"; amount?: number }
 ) & {
-  /** The value was entered into a protected field; record the event without its payload. */
   sensitive?: boolean;
 };
 

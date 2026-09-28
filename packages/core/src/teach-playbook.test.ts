@@ -102,7 +102,6 @@ describe("buildPlaybookFromRecording", () => {
   });
 
   it("never renders the payload of a protected event", () => {
-    // A stored event carrying both the marker and a value must still redact.
     const playbook = buildPlaybookFromRecording("Sign in", [
       { at: "2026-01-01T00:00:00.000Z", kind: "key", key: "x", sensitive: true },
       { at: "2026-01-01T00:00:00.100Z", kind: "clipboard", text: "hunter2", sensitive: true },

@@ -8,14 +8,9 @@ export type TeachRecordingEvent = {
   key?: string;
   text?: string;
   summary?: string;
-  /** Input captured from a protected field; `key`/`text` are never stored on it. */
   sensitive?: boolean;
 };
 
-/**
- * A sensitive event must never carry the captured value, wherever it was recorded from.
- * Strip the input payload so a stored recording cannot hold the typed text.
- */
 export function sanitizeTeachRecordingEvent(event: TeachRecordingEvent): TeachRecordingEvent {
   if (!event.sensitive) return event;
   const sanitized = { ...event };
@@ -87,7 +82,6 @@ export function buildPlaybookFromRecording(
 ): SkillPlaybook {
   const steps: string[] = [];
   let typed = "";
-  // Consecutive sensitive inputs collapse into one redacted step; the value was never stored.
   let typedSensitive = false;
   let drag: { button: string; fromX: number; fromY: number; toX: number; toY: number } | null =
     null;
@@ -124,7 +118,6 @@ export function buildPlaybookFromRecording(
   for (const event of events) {
     if (event.kind === "key") {
       if (event.sensitive) {
-        // Pending ordinary text belongs before the protected run, which keeps collapsing.
         flushDrag();
         flushTyped();
         typedSensitive = true;
@@ -134,7 +127,6 @@ export function buildPlaybookFromRecording(
       if (!key) continue;
       flushDrag();
       if (isTypedCharacter(key)) {
-        // A protected run ends when ordinary typing resumes; emit its step first.
         flushSensitiveTyped();
         typed += key;
         continue;

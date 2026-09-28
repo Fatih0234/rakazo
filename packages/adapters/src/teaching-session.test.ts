@@ -401,14 +401,12 @@ describe("recordTeachingInputEvent", () => {
         { kind: "clipboard", text: "hunter2", sensitive: true },
       ),
     ).resolves.toBe("recorded");
-    // The real value reaches the sandbox…
     expect(deps.sandbox.sendInput).toHaveBeenCalledWith(
       expect.anything(),
       { kind: "clipboard", text: "hunter2", sensitive: true },
       expect.anything(),
       expect.anything(),
     );
-    // …but the recording keeps only that a protected input happened.
     expect(current().recording.events).toEqual([
       { at: expect.any(String), kind: "clipboard", sensitive: true },
     ]);

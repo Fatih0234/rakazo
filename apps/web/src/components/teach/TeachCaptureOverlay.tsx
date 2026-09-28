@@ -1,11 +1,8 @@
-import { useLingui } from "@lingui/react/macro";
 import type { TaughtSkill } from "@rakazo/contracts";
 import { DEFAULT_COMPUTER_SCREEN, mapTeachPointer, teachCaptureKey } from "@rakazo/core";
-import { Button, Input } from "@rakazo/ui-web";
-import { CornerDownLeft } from "lucide-react";
-import type { FormEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { rpc } from "../../lib/rpc";
+import { enqueueTeachComputerInput } from "./teach-computer-input-chain";
 
 export function TeachCaptureOverlay({
   botId,
@@ -20,11 +17,7 @@ export function TeachCaptureOverlay({
   screenWidth?: number;
   screenHeight?: number;
 }) {
-  const { t } = useLingui();
   const rootRef = useRef<HTMLDivElement>(null);
-  const inputChainRef = useRef(Promise.resolve());
-  const protectedInputRef = useRef<HTMLInputElement>(null);
-  const [protectedText, setProtectedText] = useState("");
   const width = screenWidth ?? DEFAULT_COMPUTER_SCREEN.width;
   const height = screenHeight ?? DEFAULT_COMPUTER_SCREEN.height;
 
@@ -35,7 +28,7 @@ export function TeachCaptureOverlay({
     const target: HTMLDivElement = overlay;
 
     function enqueueInput(task: () => Promise<void>) {
-      inputChainRef.current = inputChainRef.current.then(task).catch(() => undefined);
+      void enqueueTeachComputerInput(botId, task);
     }
 
     function pointerAt(event: PointerEvent) {
@@ -167,66 +160,14 @@ export function TeachCaptureOverlay({
     };
   }, [botId, enabled, height, skill, width]);
 
-  // The field keeps no value between sessions.
-  useEffect(() => {
-    if (!enabled || !skill || skill.status !== "recording") setProtectedText("");
-  }, [enabled, skill]);
-
-  function submitProtectedInput(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const text = protectedText;
-    if (!text) return;
-    setProtectedText("");
-    // Share the serialized input chain so the value lands after the click that focused
-    // the remote field. It is typed into the sandbox but recorded only as a marker.
-    inputChainRef.current = inputChainRef.current
-      .then(async () => {
-        await rpc.computer.input({
-          botId,
-          kind: "clipboard",
-          payload: { text, sensitive: true },
-        });
-      })
-      .catch(() => undefined);
-    protectedInputRef.current?.blur();
-  }
-
   if (!enabled || !skill || skill.status !== "recording") return null;
 
   return (
-    <>
-      <div
-        ref={rootRef}
-        data-testid="teach-capture-overlay"
-        role="presentation"
-        className="absolute inset-0 z-10 cursor-crosshair bg-transparent"
-      />
-      <form
-        data-testid="teach-protected-input"
-        className="absolute bottom-4 left-1/2 z-20 flex w-[min(320px,calc(100%-2rem))] -translate-x-1/2 items-center gap-1 rounded-xl border border-border bg-card/95 p-1 shadow-lg backdrop-blur"
-        onSubmit={submitProtectedInput}
-      >
-        <Input
-          ref={protectedInputRef}
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          value={protectedText}
-          onChange={(event) => setProtectedText(event.target.value)}
-          placeholder={t`Protected input`}
-          aria-label={t`Protected input`}
-          className="h-8 border-0 bg-transparent shadow-none focus-visible:ring-0"
-        />
-        <Button
-          type="submit"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t`Type into the demo without recording the value`}
-          disabled={!protectedText}
-        >
-          <CornerDownLeft size={16} strokeWidth={1.8} />
-        </Button>
-      </form>
-    </>
+    <div
+      ref={rootRef}
+      data-testid="teach-capture-overlay"
+      role="presentation"
+      className="absolute inset-0 z-10 cursor-crosshair bg-transparent"
+    />
   );
 }
