@@ -123,6 +123,20 @@ describe("appendRecordingEvent", () => {
     await appendRecordingEvent(deps as never, "skill-1", event);
     expect(current().recording.events).toHaveLength(1);
   });
+
+  it("never stores the payload of an event marked protected", async () => {
+    const { deps, current } = recordingDeps(skillRow());
+    await appendRecordingEvent(deps as never, "skill-1", {
+      at: "2026-01-01T00:00:00.000Z",
+      kind: "clipboard",
+      text: "hunter2",
+      sensitive: true,
+    });
+    expect(current().recording.events).toEqual([
+      { at: "2026-01-01T00:00:00.000Z", kind: "clipboard", sensitive: true },
+    ]);
+    expect(JSON.stringify(current().recording)).not.toContain("hunter2");
+  });
 });
 
 describe("expireTaughtSkillTeaching", () => {
@@ -365,6 +379,85 @@ describe("recordTeachingInputEvent", () => {
       ),
     ).rejects.toThrow("sandbox unavailable");
     expect(current().recording.events).toHaveLength(0);
+  });
+
+  it("still types protected input into the sandbox but stores only a marker", async () => {
+    const { deps, current, tx } = recordingDeps(skillRow());
+    const computer = {
+      id: "computer-1",
+      homeKey: "bot-1",
+      kind: "e2b",
+      providerRef: "box-1",
+      controlHolder: "user",
+      controlBotId: "bot-1",
+      controlLeaseId: "lease-1",
+    };
+    tx.bot.findUnique = vi.fn(async () => ({ id: "bot-1", computer }));
+    await expect(
+      recordTeachingInputEvent(
+        deps as never,
+        { spaceId: "workspace-1", userId: "user-1" } as never,
+        "bot-1",
+        { kind: "clipboard", text: "hunter2", sensitive: true },
+      ),
+    ).resolves.toBe("recorded");
+    // The real value reaches the sandbox…
+    expect(deps.sandbox.sendInput).toHaveBeenCalledWith(
+      expect.anything(),
+      { kind: "clipboard", text: "hunter2", sensitive: true },
+      expect.anything(),
+      expect.anything(),
+    );
+    // …but the recording keeps only that a protected input happened.
+    expect(current().recording.events).toEqual([
+      { at: expect.any(String), kind: "clipboard", sensitive: true },
+    ]);
+    expect(JSON.stringify(current().recording)).not.toContain("hunter2");
+  });
+
+  it("stores a protected keystroke without its key", async () => {
+    const { deps, current, tx } = recordingDeps(skillRow());
+    tx.bot.findUnique = vi.fn(async () => ({ id: "bot-1", computer: null }));
+    await expect(
+      recordTeachingInputEvent(
+        deps as never,
+        { spaceId: "workspace-1", userId: "user-1" } as never,
+        "bot-1",
+        { kind: "key", key: "x", sensitive: true },
+      ),
+    ).resolves.toBe("recorded");
+    expect(current().recording.events).toEqual([
+      { at: expect.any(String), kind: "key", sensitive: true },
+    ]);
+  });
+
+  it("keeps protected input out of the generated playbook", async () => {
+    const { deps, current, tx } = recordingDeps(skillRow());
+    const bot = { id: "bot-1", thread: { id: "thread-1" }, computer: null };
+    tx.bot.findUnique = vi.fn(async () => bot);
+    deps.prisma.bot.findUnique = vi.fn().mockResolvedValue(bot);
+    await recordTeachingInputEvent(
+      deps as never,
+      { spaceId: "workspace-1", userId: "user-1" } as never,
+      "bot-1",
+      { kind: "clipboard", text: "hunter2", sensitive: true },
+    );
+    await recordTeachingInputEvent(
+      deps as never,
+      { spaceId: "workspace-1", userId: "user-1" } as never,
+      "bot-1",
+      { kind: "key", key: "Enter" },
+    );
+    await completeTeachingSession(
+      deps as never,
+      { spaceId: "workspace-1", userId: "user-1" } as never,
+      "skill-1",
+      "stopped",
+    );
+    const playbook = current().playbook as { steps: string[] };
+    expect(JSON.stringify(playbook)).not.toContain("hunter2");
+    expect(playbook.steps.join(" ")).toContain("[redacted input]");
+    expect(playbook.steps.join(" ")).toContain("Enter");
   });
 });
 

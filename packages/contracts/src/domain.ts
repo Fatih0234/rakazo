@@ -460,6 +460,8 @@ export const TeachRecordingEventSchema = z.object({
   key: z.string().optional(),
   text: z.string().optional(),
   summary: z.string().optional(),
+  /** The input was entered into a protected field; the captured value is never stored. */
+  sensitive: z.boolean().optional(),
 });
 export type TeachRecordingEvent = z.infer<typeof TeachRecordingEventSchema>;
 

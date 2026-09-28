@@ -11,6 +11,7 @@ import {
   buildPlaybookFromRecording,
   computerInputForDomKey,
   type SkillPlaybook,
+  sanitizeTeachRecordingEvent,
   type TeachRecordingEvent,
   type TeachSnapshot,
 } from "@rakazo/core";
@@ -48,9 +49,13 @@ type TeachRecording = {
   controlLeaseId?: string;
 };
 
-export type TeachComputerInput =
+export type TeachComputerInput = (
   | ComputerInput
-  | { kind: "scroll"; direction: "up" | "down"; amount?: number };
+  | { kind: "scroll"; direction: "up" | "down"; amount?: number }
+) & {
+  /** The value was entered into a protected field; record the event without its payload. */
+  sensitive?: boolean;
+};
 
 export interface TeachingSessionDeps {
   prisma: PrismaClient;
@@ -254,11 +259,12 @@ export async function appendRecordingEvent(
     deps,
     skillId,
     (recording) => {
-      const key = recordingEventKey(event);
+      const stored = sanitizeTeachRecordingEvent(event);
+      const key = recordingEventKey(stored);
       if (recording.events.some((existing) => recordingEventKey(existing) === key)) {
         return { recording, changed: false };
       }
-      recording.events.push(event);
+      recording.events.push(stored);
       return { recording, changed: true };
     },
     options,
@@ -537,9 +543,10 @@ export async function recordTeachingInputEvent(
     await expireTaughtSkillTeaching(deps, skill.id);
     return "stale";
   }
-  const event: TeachRecordingEvent = {
+  const event = sanitizeTeachRecordingEvent({
     at: new Date().toISOString(),
     kind: mapped.kind === "scroll" ? "scroll" : mapped.kind,
+    ...(mapped.sensitive ? { sensitive: true as const } : {}),
     ...(mapped.kind === "key"
       ? { key: mapped.key }
       : mapped.kind === "clipboard"
@@ -552,7 +559,7 @@ export async function recordTeachingInputEvent(
               button: mapped.button,
               type: mapped.type,
             }),
-  };
+  });
   const prepared = await deps.prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT id FROM taught_skills WHERE id = ${skill.id} FOR UPDATE`;
     const current = await tx.taughtSkill.findUniqueOrThrow({ where: { id: skill.id } });
