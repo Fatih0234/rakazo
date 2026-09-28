@@ -39,6 +39,7 @@ import {
   clampMentionHighlightIndex,
   cronFromPreset,
   groupBotsForSidebar,
+  groupVoiceChats,
   inferAttachmentMimeType,
   isActive,
   isPeerReceiptBlocks,
@@ -143,6 +144,8 @@ import {
   computersAreUnavailable,
 } from "../components/ComputersUnavailableHint";
 import { ComputerUpdateProgress } from "../components/ComputerUpdateProgress";
+import { CallCard } from "../components/call/CallCard";
+import { VoiceChatCard } from "../components/call/VoiceChatCard";
 import { ComputerWorkspace } from "../components/computer/ComputerWorkspace";
 import { MessageHoverMetadata } from "../components/MessageHoverMetadata";
 import { SkillDraftCard } from "../components/teach/SkillDraftCard";
@@ -163,6 +166,7 @@ import {
   requestBrowserNotificationPermission,
   shouldNotifyBrowser,
 } from "../lib/browser-notifications";
+import { startCall, useCallSession } from "../lib/call-session";
 import { newClientId } from "../lib/client-id";
 import {
   embeddableScreenUrl,
@@ -266,7 +270,6 @@ const PluginsOverlay = lazy(() =>
 const McpServersOverlay = lazy(() =>
   import("./McpServersOverlay").then((module) => ({ default: module.McpServersOverlay })),
 );
-const CallView = lazy(() => import("./CallView").then((module) => ({ default: module.CallView })));
 
 type Panel =
   | "computer"
@@ -411,6 +414,7 @@ export function ShellPage() {
   const [replyTarget, setReplyTarget] = useState<ThreadMessage | null>(null);
   const [replyQuote, setReplyQuote] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -499,7 +503,7 @@ export function ShellPage() {
     SpaceMemoryConfig | null | undefined
   >(undefined);
   const memoryProviderConfigRevision = useRef(0);
-  const [callOpen, setCallOpen] = useState(false);
+  const call = useCallSession();
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [dismissedRunErrorIds, setDismissedRunErrorIds] =
@@ -1189,7 +1193,7 @@ export function ShellPage() {
       autoSpoken.current = lastBot?.id ?? null;
       return;
     }
-    if (callOpen || !active.autoSpeak) {
+    if (call?.botId === active.id || !active.autoSpeak) {
       autoSpoken.current = lastBot?.id ?? null;
       return;
     }
@@ -1205,7 +1209,7 @@ export function ShellPage() {
     snapshot?.botId,
     active?.autoSpeak,
     active?.id,
-    callOpen,
+    call?.botId,
   ]);
 
   useEffect(() => {
@@ -2041,6 +2045,7 @@ export function ShellPage() {
         if (permissionRequest) void permissionRequest.then(flushPendingBrowserNotifications);
       }
       const trimmed = plan.trimmed;
+      sendingRef.current = true;
       setSending(true);
       setSendError(null);
       const dropDelayedSetup = () => {
@@ -2154,6 +2159,7 @@ export function ShellPage() {
           setSendError(error instanceof Error ? error.message : t`Failed to send message`);
         }
       } finally {
+        sendingRef.current = false;
         setSending(false);
       }
     },
@@ -2168,14 +2174,9 @@ export function ShellPage() {
       t,
     ],
   );
-  const followUpMessage = useCallback(async (text: string) => {
-    const id = activeBotId.current;
-    if (!id) return;
-    await rpc.threads.followUp({ botId: id, text });
-    await refreshThreadRef.current(id);
-  }, []);
   const stopRun = useCallback(async () => {
     if (sending) return;
+    sendingRef.current = true;
     setSending(true);
     try {
       const botTarget = activeBotId.current;
@@ -2223,6 +2224,7 @@ export function ShellPage() {
       }
       await refreshThreadRef.current(botTarget).catch(() => undefined);
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   }, [sending, t]);
@@ -2348,6 +2350,7 @@ export function ShellPage() {
     void scheduleFocusPrompt({
       immediate: isFirstBot,
       signal: controller.signal,
+      shouldSkip: () => sendingRef.current,
       prompt: async () => {
         if (focusPromptBotIdRef.current !== bot.id || activeBotId.current !== bot.id) return;
         await rpc.onboarding.promptFocus({ botId: bot.id }).catch(() => undefined);
@@ -3512,7 +3515,12 @@ export function ShellPage() {
                       openSettings("voice");
                       return;
                     }
-                    setCallOpen(true);
+                    startCall({
+                      botId: active.id,
+                      botName: active.name,
+                      botColor: active.color,
+                      transcribe: Boolean(voiceStatus?.transcribe),
+                    });
                   }
                 : undefined
             }
@@ -3543,6 +3551,8 @@ export function ShellPage() {
           />
         ) : null}
       </main>
+
+      <CallCard onSettings={() => openSettings("voice")} />
 
       <aside
         data-testid="side-panel"
@@ -4301,7 +4311,7 @@ export function ShellPage() {
                   await Promise.race([rpc.voice.status(), voiceStatusRefreshTimeout()]),
                 );
               } catch {
-                // Prefer reopening Voice settings over CallView with stale readiness.
+                // Prefer reopening Voice settings over starting a call with stale readiness.
                 setVoiceStatus(null);
               }
             }}
@@ -4322,18 +4332,6 @@ export function ShellPage() {
               resolveTranscriptBot(peerConversation.peerBotId)?.color ?? FALLBACK_BOT_COLOR
             }
             onClose={() => setPeerConversation(null)}
-          />
-        ) : null}
-        {callOpen && active ? (
-          <CallView
-            botId={active.id}
-            botName={active.name}
-            transcribe={Boolean(voiceStatus?.transcribe)}
-            snapshot={activeSnapshot}
-            onSend={sendMessage}
-            onFollowUp={followUpMessage}
-            onAnswer={answerMessage}
-            onClose={() => setCallOpen(false)}
           />
         ) : null}
       </Suspense>
@@ -4817,7 +4815,17 @@ const Transcript = memo(function Transcript({
             {loadingOlder ? t`Loading…` : t`Load earlier messages`}
           </button>
         ) : null}
-        {reactionView.visibleMessages.map((message) => {
+        {groupVoiceChats(reactionView.visibleMessages).map((item) => {
+          if (item.kind === "voiceChat") {
+            return (
+              <VoiceChatCard
+                key={item.key}
+                group={item}
+                revealMessageId={scrollRequest?.messageId}
+              />
+            );
+          }
+          const message = item.message;
           if (!message.blocks.some((block) => !isToolActivityBlock(block))) return null;
           const peerReceipt = isPeerReceiptBlocks(message.blocks);
           const messageReactions = reactionView.reactions.get(message.id);
@@ -5708,7 +5716,7 @@ const Composer = memo(function Composer({
             className="max-h-32 min-h-[24px] min-w-[8rem] flex-1 resize-none overflow-y-auto bg-transparent py-0.5 text-[15.5px] leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-40"
           />
         </div>
-        {onVoice ? (
+        {onVoice && draft.trim().length === 0 ? (
           <Button
             variant="outline"
             size="icon"
