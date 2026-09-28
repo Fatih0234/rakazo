@@ -22,7 +22,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assertVolumeSubpathSupport,
   COMPUTER_IMAGE,
+  computerBridgeNameFor,
   computerHomeStorage,
+  computerNetworkCreateOptions,
   computerNetworkNameFor,
   computerNetworkNamesForCleanup,
   containerCreateOptions,
@@ -34,6 +36,7 @@ import {
   parseMemoryBytes,
   publishedLoopbackControlHostPort,
   resolveComputerControlEndpoint,
+  resolveComputerEgressMode,
   resolveScreenNetworkMode,
   resolveScreenPublishTarget,
   resolveSpaceComputerLimit,
@@ -135,6 +138,44 @@ describe("graphical computer spec", () => {
   it("keeps sanitized network names unique when botIds only differ by stripped characters", () => {
     expect(computerNetworkNameFor("a/b")).not.toBe(computerNetworkNameFor("ab"));
     expect(computerNetworkNameFor("a/b")).toBe(computerNetworkNameFor("a/b"));
+  });
+
+  it("parses the computer egress mode with an open default", () => {
+    expect(resolveComputerEgressMode(undefined)).toBe("open");
+    expect(resolveComputerEgressMode("")).toBe("open");
+    expect(resolveComputerEgressMode("open")).toBe("open");
+    expect(resolveComputerEgressMode("restricted")).toBe("restricted");
+    for (const value of ["blocked", "RESTRICTED", "0"])
+      expect(() => resolveComputerEgressMode(value)).toThrow(/SANDBOX_COMPUTER_EGRESS/);
+  });
+
+  it("derives deterministic host bridge names within the 15-byte interface limit", () => {
+    for (const botId of ["bot", "a/b", "bot with spaces", "x".repeat(80)]) {
+      const name = computerBridgeNameFor(botId);
+      expect(name).toMatch(/^rakazo-c[0-9a-f]{7}$/);
+      expect(Buffer.byteLength(name)).toBeLessThanOrEqual(15);
+      expect(computerBridgeNameFor(botId)).toBe(name);
+    }
+    expect(computerBridgeNameFor("a/b")).not.toBe(computerBridgeNameFor("ab"));
+  });
+
+  it("names the bridge only when egress is restricted", () => {
+    const open = computerNetworkCreateOptions("bot_1", "open");
+    expect(open).toEqual({
+      Name: computerNetworkNameFor("bot_1"),
+      Driver: "bridge",
+      CheckDuplicate: true,
+    });
+    expect(open).not.toHaveProperty("Options");
+
+    const restricted = computerNetworkCreateOptions("bot_1", "restricted");
+    expect(restricted.Options).toEqual({
+      "com.docker.network.bridge.name": computerBridgeNameFor("bot_1"),
+    });
+    expect(computerNetworkCreateOptions("bot_1")).toEqual(open);
+    // The bridge name differs from the network name so `docker network` output
+    // still shows the readable rakazo-computer-* name while iptables matches the interface.
+    expect(restricted.Options?.["com.docker.network.bridge.name"]).not.toBe(restricted.Name);
   });
 
   it("lists prior network name variants for cleanup", () => {
