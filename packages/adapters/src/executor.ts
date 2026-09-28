@@ -1673,9 +1673,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
             : graphical
               ? `You have a persistent computer filesystem and shell. ${MODEL_CANNOT_SEE_MESSAGE} Desktop observe and act tools are unavailable until a vision-capable model is selected. Use the file tools and shell.`
               : "You have a persistent sandbox filesystem and shell. This backend does not provide model-visible graphical control, so use the file tools and shell.";
-        const dockerPackageInstruction = dockerComputerPackageInstruction(computer.kind);
-        const computerInstruction = dockerPackageInstruction
-          ? `${baseComputerInstruction} ${dockerPackageInstruction}`
+        const dockerToolInstruction = dockerComputerToolInstruction(computer.kind);
+        const computerInstruction = dockerToolInstruction
+          ? `${baseComputerInstruction} ${dockerToolInstruction}`
           : baseComputerInstruction;
         const workspaceInstruction =
           computerMode === "team"
@@ -4792,9 +4792,9 @@ export function filterPageBrowserTools<T extends { name: string }>(
   return tools.filter((tool) => !PAGE_BROWSER_TOOL_NAMES.has(tool.name));
 }
 
-export function dockerComputerPackageInstruction(computerKind: string): string | undefined {
+export function dockerComputerToolInstruction(computerKind: string): string | undefined {
   if (computerKind !== "docker") return undefined;
-  return "For Python CLI tools, use `uv tool install <package>`; it installs without sudo and keeps tools under this computer's persistent home.";
+  return "For Python CLI tools, use `uv tool install <package>`; it installs without sudo and keeps tools under this computer's persistent home. GitHub's `gh` CLI is installed. To sign this computer's browser into GitHub, run `nohup script -qec 'gh auth login --hostname github.com --web --git-protocol https' /tmp/gh-login.log >/dev/null 2>&1 &` — gh needs a TTY and keeps polling — then read the one-time code from the log, browser_navigate to https://github.com/login/device, and browser_act the code or request_takeover for the user to finish. Never use `--with-token` or otherwise bring a token onto this computer.";
 }
 
 // Ordering matters: stable blocks first, volatile ones last, so the prefix stays cacheable.

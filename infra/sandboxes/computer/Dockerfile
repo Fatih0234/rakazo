@@ -66,6 +66,21 @@ RUN set -eux; \
   rm -f "$archive"; \
   uv --version; \
   uvx --version
+# Debian bookworm does not package gh; install the pinned upstream binary so bots
+# can sign the desktop browser into GitHub through its device-flow login.
+ARG GH_VERSION=2.100.0
+RUN set -eux; \
+  case "$TARGETARCH" in \
+    amd64) gh_arch=amd64; gh_sha256=e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be ;; \
+    arm64) gh_arch=arm64; gh_sha256=ea4e7a581a32ccad6cc7923cb1576ac5859ba4b9a16ab22eb8f8a96e78e2e961 ;; \
+    *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+  esac; \
+  archive="$(mktemp)"; \
+  curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gh_arch}.tar.gz" -o "$archive"; \
+  echo "$gh_sha256  $archive" | sha256sum -c -; \
+  tar -xzf "$archive" -C /usr/local/bin --strip-components=2 "gh_${GH_VERSION}_linux_${gh_arch}/bin/gh"; \
+  rm -f "$archive"; \
+  gh --version
 ENV DISPLAY=:1
 ENV HOME=/home/rakazo
 ENV UV_TOOL_DIR=/home/rakazo/.local/share/uv/tools \
