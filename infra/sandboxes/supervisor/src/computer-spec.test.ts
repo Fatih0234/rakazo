@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -361,6 +362,235 @@ describe("graphical computer spec", () => {
           `--user-data-dir=${home}/.browser-profiles/chromium-screen-3`,
         );
       } finally {
+        rmSync(temp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "spawns Chromium when the caller passes the profile and debug flags itself",
+    () => {
+      const root = path.resolve(import.meta.dirname, "../../computer");
+      const temp = mkdtempSync(path.join(tmpdir(), "rakazo-browser-self-"));
+      const bin = path.join(temp, "bin");
+      const capture = path.join(temp, "args");
+      const home = path.join(temp, "home");
+      const chromium = path.join(bin, "chromium");
+      mkdirSync(bin);
+      writeFileSync(chromium, '#!/bin/sh\nprintf "%s\\n" "$@" > "$RAKAZO_TEST_ARGS"\n');
+      chmodSync(chromium, 0o755);
+
+      // browser-launch-N execs this wrapper with --user-data-dir and
+      // --remote-debugging-port already set, so the live-browser scan must not
+      // match the wrapper's own argv and take the reuse path instead of
+      // spawning.
+      const profile = path.join(home, ".browser-profiles", "chromium-bot-screen");
+      mkdirSync(profile, { recursive: true });
+
+      try {
+        const result = spawnSync(
+          "sh",
+          [
+            path.join(root, "rakazo-browser"),
+            `--user-data-dir=${profile}`,
+            "--remote-debugging-port=9222",
+          ],
+          {
+            env: {
+              ...process.env,
+              DISPLAY: ":1",
+              HOME: home,
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              RAKAZO_TEST_ARGS: capture,
+            },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+        const args = readFileSync(capture, "utf8");
+        expect(args).toContain(`--user-data-dir=${profile}`);
+        expect(args).toContain("--remote-debugging-port=9222");
+      } finally {
+        rmSync(temp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "spawns Chromium when the wrapper is invoked as ./rakazo-browser",
+    () => {
+      const root = path.resolve(import.meta.dirname, "../../computer");
+      const temp = mkdtempSync(path.join(tmpdir(), "rakazo-browser-rel-"));
+      const bin = path.join(temp, "bin");
+      const capture = path.join(temp, "args");
+      const home = path.join(temp, "home");
+      const chromium = path.join(bin, "chromium");
+      mkdirSync(bin);
+      writeFileSync(chromium, '#!/bin/sh\nprintf "%s\\n" "$@" > "$RAKAZO_TEST_ARGS"\n');
+      chmodSync(chromium, 0o755);
+      const profile = path.join(home, ".browser-profiles", "chromium-bot-screen");
+      mkdirSync(profile, { recursive: true });
+      // The kernel records the path passed to exec, so a relative invocation
+      // shows up as ./rakazo-browser rather than an absolute script path.
+      symlinkSync(path.join(root, "rakazo-browser"), path.join(temp, "rakazo-browser"));
+
+      try {
+        const result = spawnSync(
+          "./rakazo-browser",
+          [`--user-data-dir=${profile}`, "--remote-debugging-port=9222"],
+          {
+            cwd: temp,
+            env: {
+              ...process.env,
+              DISPLAY: ":1",
+              HOME: home,
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              RAKAZO_TEST_ARGS: capture,
+            },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+        const args = readFileSync(capture, "utf8");
+        expect(args).toContain(`--user-data-dir=${profile}`);
+        expect(args).toContain("--remote-debugging-port=9222");
+      } finally {
+        rmSync(temp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "keeps a live browser when its profile directory is named rakazo-browser",
+    () => {
+      const root = path.resolve(import.meta.dirname, "../../computer");
+      const temp = mkdtempSync(path.join(tmpdir(), "rakazo-browser-named-"));
+      const bin = path.join(temp, "bin");
+      const capture = path.join(temp, "args");
+      const home = path.join(temp, "home");
+      const profile = path.join(temp, "rakazo-browser");
+      const prefsPath = path.join(profile, "Default", "Preferences");
+      const liveBin = path.join(temp, "live", "chromium");
+      mkdirSync(bin);
+      mkdirSync(path.dirname(liveBin));
+      mkdirSync(path.dirname(prefsPath), { recursive: true });
+      writeFileSync(
+        path.join(bin, "chromium"),
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$RAKAZO_TEST_ARGS"\n',
+      );
+      chmodSync(path.join(bin, "chromium"), 0o755);
+      // /proc/pid/exe is this binary, so the basename is chromium without compiling.
+      copyFileSync("/bin/sh", liveBin);
+      chmodSync(liveBin, 0o755);
+      writeFileSync(prefsPath, '{\n  "profile": {\n    "exit_type": "Crashed"\n  }\n}\n');
+      const browser = spawn(
+        liveBin,
+        [
+          "-c",
+          "while :; do sleep 3600; done",
+          "chromium",
+          `--user-data-dir=${profile}`,
+          "--remote-debugging-port=9",
+          "--user-data-dir",
+          profile,
+        ],
+        { stdio: "ignore", detached: true },
+      );
+      const liveLock = path.join(profile, "SingletonLock");
+      symlinkSync(`testhost-${browser.pid}`, liveLock);
+      try {
+        const result = spawnSync(
+          "sh",
+          [
+            path.join(root, "rakazo-browser"),
+            `--user-data-dir=${profile}`,
+            "--remote-debugging-port=9222",
+          ],
+          {
+            env: {
+              ...process.env,
+              DISPLAY: ":1",
+              HOME: home,
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              RAKAZO_TEST_ARGS: capture,
+            },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+        expect(readlinkSync(liveLock)).toBe(`testhost-${browser.pid}`);
+        expect(readFileSync(prefsPath, "utf8")).toContain('"exit_type": "Crashed"');
+        expect(readFileSync(capture, "utf8")).toContain(`--user-data-dir=${profile}`);
+      } finally {
+        if (browser.pid) {
+          try {
+            process.kill(-browser.pid, "SIGKILL");
+          } catch {
+            browser.kill("SIGKILL");
+          }
+        }
+        rmSync(temp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "keeps a live shell browser when the profile flag ends in /rakazo-browser",
+    () => {
+      const root = path.resolve(import.meta.dirname, "../../computer");
+      const temp = mkdtempSync(path.join(tmpdir(), "rakazo-browser-flag-"));
+      const bin = path.join(temp, "bin");
+      const capture = path.join(temp, "args");
+      const home = path.join(temp, "home");
+      const profile = path.join(temp, "rakazo-browser");
+      const prefsPath = path.join(profile, "Default", "Preferences");
+      mkdirSync(bin);
+      mkdirSync(path.dirname(prefsPath), { recursive: true });
+      writeFileSync(
+        path.join(bin, "chromium"),
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$RAKAZO_TEST_ARGS"\n',
+      );
+      chmodSync(path.join(bin, "chromium"), 0o755);
+      const sleeper = path.join(bin, "sleeper");
+      writeFileSync(sleeper, "#!/bin/sh\nsleep 120\n");
+      chmodSync(sleeper, 0o755);
+      writeFileSync(prefsPath, '{\n  "profile": {\n    "exit_type": "Crashed"\n  }\n}\n');
+      const browser = spawn(sleeper, [`--user-data-dir=${profile}`, "--remote-debugging-port=9"], {
+        stdio: "ignore",
+        detached: true,
+      });
+      const liveLock = path.join(profile, "SingletonLock");
+      symlinkSync(`testhost-${browser.pid}`, liveLock);
+      try {
+        const result = spawnSync(
+          "sh",
+          [
+            path.join(root, "rakazo-browser"),
+            `--user-data-dir=${profile}`,
+            "--remote-debugging-port=9222",
+          ],
+          {
+            env: {
+              ...process.env,
+              DISPLAY: ":1",
+              HOME: home,
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              RAKAZO_TEST_ARGS: capture,
+            },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+        expect(readlinkSync(liveLock)).toBe(`testhost-${browser.pid}`);
+        expect(readFileSync(prefsPath, "utf8")).toContain('"exit_type": "Crashed"');
+      } finally {
+        if (browser.pid) {
+          try {
+            process.kill(-browser.pid, "SIGKILL");
+          } catch {
+            browser.kill("SIGKILL");
+          }
+        }
         rmSync(temp, { recursive: true, force: true });
       }
     },
