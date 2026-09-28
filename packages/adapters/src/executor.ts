@@ -2755,7 +2755,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                   {
                     actions: [
                       {
-                        kind: "launch",
+                        kind: "focus",
                         application,
                         uri: args.uri ? String(args.uri) : undefined,
                       },

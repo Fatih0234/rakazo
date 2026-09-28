@@ -125,7 +125,8 @@ export type ComputerAction =
   | { kind: "scroll"; direction: "up" | "down"; amount?: number }
   | { kind: "wait"; ms: number }
   | { kind: "open"; path: string }
-  | { kind: "launch"; application: string; uri?: string };
+  | { kind: "launch"; application: string; uri?: string }
+  | { kind: "focus"; application: string; uri?: string };
 
 export interface ComputerObservation {
   frameId: string;

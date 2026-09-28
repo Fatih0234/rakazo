@@ -22,6 +22,8 @@ KNOWN_LAUNCH = frozenset(
         "xterm",
     }
 )
+# Focus-or-launch wraps KNOWN_LAUNCH launchers: rakazo-focus-or-launch <launcher> [uri].
+FOCUS_OR_LAUNCH = "rakazo-focus-or-launch"
 CONTROL_TIMEOUT_SEC = 10
 LAUNCH_SPAWN_POLL_SEC = 0.2
 # A live browser opens a URL in this process, then exits. rakazo-browser caps the
@@ -175,12 +177,18 @@ def allowed_control_argv(argv, display):
         profile = argv[2].removeprefix("RAKAZO_BROWSER_PROFILE=")
         if not re.fullmatch(r"/home/rakazo/\.browser-profiles/chromium-bot-[a-f0-9]{32}", profile):
             return False
-        if command not in ("xdg-open", "rakazo-browser"):
+        if command not in ("xdg-open", "rakazo-browser", FOCUS_OR_LAUNCH):
             return False
     if command == "xdotool":
         return allowed_xdotool_argv(argv)
     if command == "xdg-open":
         return len(argv) == index + 2
+    if command == FOCUS_OR_LAUNCH:
+        return (
+            len(argv) in (index + 2, index + 3)
+            and argv[index + 1] in KNOWN_LAUNCH
+            and (index == 2 or argv[index + 1] == "rakazo-browser")
+        )
     if "/" in command or command not in KNOWN_LAUNCH:
         return False
     return len(argv) in (index + 1, index + 2)
@@ -189,11 +197,15 @@ def allowed_control_argv(argv, display):
 def is_long_lived_control(argv):
     """Apps and openers that must not be waited on under display_lock."""
     command = argv[control_command_index(argv)]
-    return command == "xdg-open" or command in KNOWN_LAUNCH
+    return command == "xdg-open" or command in KNOWN_LAUNCH or command == FOCUS_OR_LAUNCH
 
 
 def launch_spawn_poll_sec(argv):
-    command = argv[control_command_index(argv)]
+    index = control_command_index(argv)
+    command = argv[index]
+    if command == FOCUS_OR_LAUNCH:
+        # The wrapped launcher keeps its own poll bound through the wrapper.
+        command = argv[index + 1] if len(argv) > index + 1 else ""
     if command == "rakazo-browser":
         return BROWSER_OPEN_POLL_SEC
     return LAUNCH_SPAWN_POLL_SEC

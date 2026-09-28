@@ -41,6 +41,7 @@ export const computerActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("wait"), ms: z.number() }),
   z.object({ kind: z.literal("open"), path: z.string() }),
   z.object({ kind: z.literal("launch"), application: z.string(), uri: z.string().optional() }),
+  z.object({ kind: z.literal("focus"), application: z.string(), uri: z.string().optional() }),
 ]);
 
 export { BROWSER_APPLICATIONS as DOCKER_BROWSER_ALIASES } from "@rakazo/core/node/desktop-runtime";
@@ -362,6 +363,9 @@ export function containerActionStep(
       "env",
       `DISPLAY=${display}`,
       ...(browser && browserProfile ? [`RAKAZO_BROWSER_PROFILE=${browserProfile}`] : []),
+      // focus routes through the image wrapper, which raises a matching window
+      // by WM_CLASS or execs the allowlisted launcher to spawn one.
+      ...(action.kind === "focus" ? ["rakazo-focus-or-launch"] : []),
       browser ? "rakazo-browser" : action.application,
       ...(action.uri ? [action.uri] : []),
     ];

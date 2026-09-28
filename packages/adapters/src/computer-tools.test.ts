@@ -9,12 +9,23 @@ describe("computer tool bridge", () => {
         { kind: "click", x: 20.4, y: 30.6 },
         { kind: "type", text: "hello" },
         { kind: "scroll", direction: "up", amount: 999 },
+        { kind: "focus", application: "xterm" },
       ]),
     ).toEqual([
       { kind: "pointer", x: 20, y: 31, type: "click", button: "left" },
       { kind: "clipboard", text: "hello" },
       { kind: "scroll", direction: "up", amount: 20 },
+      { kind: "focus", application: "xterm" },
     ]);
+  });
+
+  it("keeps an optional URI on focus actions and rejects a missing application", () => {
+    expect(
+      parseComputerActions([
+        { kind: "focus", application: "chromium", uri: "https://example.test" },
+      ]),
+    ).toEqual([{ kind: "focus", application: "chromium", uri: "https://example.test" }]);
+    expect(() => parseComputerActions([{ kind: "focus" }])).toThrow(/application/);
   });
 
   it("rejects batches whose expanded double-click actions exceed the limit", () => {

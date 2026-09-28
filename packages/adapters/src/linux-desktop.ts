@@ -206,6 +206,9 @@ function browserActionCommand(
   layout: Parameters<typeof extraDisplayActionCommand>[0],
   env: DesktopEnvironment,
 ) {
+  if (action.kind === "focus") {
+    return focusOrLaunchActionCommand(action, layout);
+  }
   const browser =
     action.kind === "open" && /^https?:\/\//i.test(action.path)
       ? action.path
@@ -219,12 +222,41 @@ function browserActionCommand(
   return `cd ${shellQuote(workspace)}\n${extraDisplayActionCommand(layout, action.kind === "open" ? { ...action, path: workspacePath(workspace, action.path) } : action)}`;
 }
 
+/**
+ * Raise an app's existing window by WM_CLASS, else spawn it — the focus primitive
+ * rakazo-focus-or-launch provides inside the computer image, inline for provider desktops.
+ * Extra arguments still run the launcher first (Chrome forwards URLs to its live window).
+ */
+function focusOrLaunchActionCommand(
+  action: Extract<ComputerAction, { kind: "focus" }>,
+  layout: Parameters<typeof extraDisplayActionCommand>[0],
+) {
+  const browser = BROWSER_APPLICATIONS.has(action.application.toLowerCase());
+  // The launcher resolves whichever Chrome-family binary the provider has.
+  const wmClass = browser
+    ? "chrom"
+    : (action.application.split("/").pop() ?? "").replaceAll(/[^A-Za-z0-9_-]/g, "");
+  const spawn = browser
+    ? `nohup ${browserLauncherPath(layout.displayNumber)} ${shellQuote(action.uri ?? "about:blank")} </dev/null >/tmp/rakazo/browser-open-${layout.displayNumber}.log 2>&1 &`
+    : `DISPLAY=${layout.display} ${shellQuote(action.application)}${action.uri ? ` ${shellQuote(action.uri)}` : ""}`;
+  if (!wmClass) return spawn;
+  return [
+    `wid=$(DISPLAY=${layout.display} wmctrl -lx 2>/dev/null | awk -v class=${shellQuote(wmClass)} 'tolower($3) ~ class { print $1; exit }')`,
+    'if [ -n "$wid" ]; then',
+    ...(action.uri !== undefined ? [`  ${spawn}`] : []),
+    `  DISPLAY=${layout.display} wmctrl -ia "$wid"`,
+    "else",
+    `  ${spawn}`,
+    "fi",
+  ].join("\n");
+}
+
 /** Install the same X11 tools in minimal Ubuntu sandboxes, only if their image lacks them. */
 export const PREPARE_LINUX_DESKTOP = [
   "set -eu",
   'missing=""',
   // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion
-  'for pair in python3:python3 flock:util-linux Xvfb:xvfb xdpyinfo:x11-utils x11vnc:x11vnc fluxbox:fluxbox xdotool:xdotool scrot:scrot xterm:xterm; do command -v "${pair%%:*}" >/dev/null 2>&1 || missing="$missing ${pair#*:}"; done',
+  'for pair in python3:python3 flock:util-linux Xvfb:xvfb xdpyinfo:x11-utils x11vnc:x11vnc fluxbox:fluxbox xdotool:xdotool wmctrl:wmctrl scrot:scrot xterm:xterm; do command -v "${pair%%:*}" >/dev/null 2>&1 || missing="$missing ${pair#*:}"; done',
   'if ! command -v websockify >/dev/null 2>&1 && [ ! -x /opt/noVNC/utils/websockify/run ]; then missing="$missing websockify"; fi',
   'if [ ! -d /usr/share/novnc ] && [ ! -d /opt/noVNC ]; then missing="$missing novnc"; fi',
   'if [ -n "$missing" ]; then',
