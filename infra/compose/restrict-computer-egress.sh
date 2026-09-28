@@ -112,27 +112,28 @@ wait_for_docker_user() {
 }
 
 # Canonical form so iptables -S reordering (-d before -i, ctstate sorted) still
-# matches the spec. Comparison is only used to skip a rewrite.
+# matches the spec. Every other token (protocol, ports, source, match modules)
+# stays in the identity, so a narrower rule is not treated as a managed copy.
 normalize_rule() {
   local spec="$1"
   local -a toks
   read -ra toks <<<"$spec"
-  local in="" out="" dest="" jump="" ct="" i=0
+  local in="" out="" dest="" jump="" ct="" extra="" i=0
   while ((i < ${#toks[@]})); do
     case "${toks[i]}" in
-      -i) in="${toks[i + 1]}"; i+=2 ;;
-      -o) out="${toks[i + 1]}"; i+=2 ;;
-      -d) dest="${toks[i + 1]}"; i+=2 ;;
-      -j) jump="${toks[i + 1]}"; i+=2 ;;
-      -m) i+=2 ;;
-      --ctstate) ct="${toks[i + 1]}"; i+=2 ;;
-      *) i+=1 ;;
+      -i) in="${toks[i + 1]:-}"; i=$((i + 2)) ;;
+      -o) out="${toks[i + 1]:-}"; i=$((i + 2)) ;;
+      -d) dest="${toks[i + 1]:-}"; i=$((i + 2)) ;;
+      -j) jump="${toks[i + 1]:-}"; i=$((i + 2)) ;;
+      --ctstate) ct="${toks[i + 1]:-}"; i=$((i + 2)) ;;
+      *) extra+="${toks[i]} "; i=$((i + 1)) ;;
     esac
   done
   if [[ -n $ct ]]; then
     ct="$(printf '%s\n' "$ct" | tr ',' '\n' | LC_ALL=C sort | paste -sd, -)"
   fi
-  printf 'in=%s out=%s dest=%s ct=%s jump=%s' "$in" "$out" "$dest" "$ct" "$jump"
+  printf 'in=%s out=%s dest=%s ct=%s jump=%s extra=%s' \
+    "$in" "$out" "$dest" "$ct" "$jump" "${extra%" "}"
 }
 
 # True when this chain already begins with the managed rules, in order, above

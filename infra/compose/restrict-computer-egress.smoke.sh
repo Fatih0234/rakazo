@@ -57,6 +57,37 @@ state="$STUB_DIR/$(basename "$0").state"
 printf '%s\n' "$*" >>"$STUB_DIR/$(basename "$0").calls"
 op="$1"; shift || true
 
+# iptables -S prints -d before -i and may swap ctstate flag order. The script
+# must still recognize its own rules in that form.
+canonicalize() {
+  local chain="${1%% *}" rest="${1#* }"
+  [[ "$chain" == "$rest" ]] && { printf '%s\n' "$1"; return; }
+  local -a toks kept=()
+  local dest="" i=0
+  read -ra toks <<<"$rest"
+  while ((i < ${#toks[@]})); do
+    if [[ ${toks[i]} == "-d" && -n ${toks[i + 1]:-} ]]; then
+      dest="${toks[i + 1]}"
+      i=$((i + 2))
+    elif [[ ${toks[i]} == "--ctstate" && ${toks[i + 1]:-} == "ESTABLISHED,RELATED" ]]; then
+      kept+=("--ctstate" "RELATED,ESTABLISHED")
+      i=$((i + 2))
+    else
+      kept+=("${toks[i]}")
+      i=$((i + 1))
+    fi
+  done
+  if [[ -n $dest ]]; then
+    if ((${#kept[@]} > 0)); then
+      printf '%s -d %s %s\n' "$chain" "$dest" "${kept[*]}"
+    else
+      printf '%s -d %s\n' "$chain" "$dest"
+    fi
+  else
+    printf '%s %s\n' "$chain" "${kept[*]}"
+  fi
+}
+
 # Exit before the Nth mutating command (--apply repair test). State is unchanged
 # by the command that fails.
 fail_midway() {
@@ -79,7 +110,7 @@ case "$op" in
     if [[ -f $state ]]; then
       while IFS= read -r row; do
         [[ "$row" == "$chain "* ]] || continue
-        printf '%s\n' "-A $row"
+        printf '%s\n' "-A $(canonicalize "$row")"
       done <"$state"
     fi
     ;;
@@ -134,11 +165,50 @@ drop_at="$(grep -nxF 'INPUT -i rakazo-c+ -j DROP' "$v4_state" | head -1 | cut -d
   fail "established accept must sit above the INPUT drop"
 
 # Second apply inserts nothing when the managed rules are already the prefix.
+# The stub's -S output has already moved -d ahead of -i and swapped ctstate.
 RAKAZO_IPTABLES="$bin/iptables" RAKAZO_IP6TABLES="$bin/ip6tables" bash "$script" --apply
 [[ "$(grep -c '^-I ' "$v4_calls")" == 14 ]] ||
   fail "rules re-inserted on repeat apply"
 [[ "$(grep -c '^-I ' "$STUB_DIR/ip6tables.calls")" == 7 ]] ||
   fail "IPv6 rules re-inserted on repeat apply"
+
+# Later repair checks expect this exact prefix.
+cp "$v4_state" "$scratch/v4.clean"
+
+# Same interface and destination with a different target is not the managed
+# drop. --apply must install the drop and leave the foreign accept in place.
+sed 's/DOCKER-USER -i rakazo-c+ -d 169.254.0.0\/16 -j DROP/DOCKER-USER -i rakazo-c+ -d 169.254.0.0\/16 -j ACCEPT/' \
+  "$scratch/v4.clean" >"$v4_state"
+RAKAZO_IPTABLES="$bin/iptables" RAKAZO_IP6TABLES="$bin/ip6tables" bash "$script" --apply
+grep -qxF 'DOCKER-USER -i rakazo-c+ -d 169.254.0.0/16 -j DROP' "$v4_state" ||
+  fail "metadata drop not restored when an accept occupied its slot"
+grep -qxF 'DOCKER-USER -i rakazo-c+ -d 169.254.0.0/16 -j ACCEPT' "$v4_state" ||
+  fail "foreign accept for the metadata destination was deleted"
+meta_drop_at="$(grep -nxF 'DOCKER-USER -i rakazo-c+ -d 169.254.0.0/16 -j DROP' "$v4_state" | head -1 | cut -d: -f1)"
+meta_acc_at="$(grep -nxF 'DOCKER-USER -i rakazo-c+ -d 169.254.0.0/16 -j ACCEPT' "$v4_state" | head -1 | cut -d: -f1)"
+[[ -n "$meta_drop_at" && -n "$meta_acc_at" && "$meta_drop_at" -lt "$meta_acc_at" ]] ||
+  fail "metadata drop is not above the foreign accept"
+
+# A narrower copy (protocol and port) and a port-specific accept share some
+# fields with managed rules. Repair must not delete them.
+{
+  printf '%s\n' 'DOCKER-USER -j ACCEPT'
+  cat "$scratch/v4.clean"
+  printf '%s\n' \
+    'DOCKER-USER -i rakazo-c+ -d 10.0.0.0/8 -p tcp --dport 22 -j DROP' \
+    'INPUT -i rakazo-c+ -p tcp -j ACCEPT'
+} >"$v4_state"
+RAKAZO_IPTABLES="$bin/iptables" RAKAZO_IP6TABLES="$bin/ip6tables" bash "$script" --apply
+grep -qxF 'DOCKER-USER -i rakazo-c+ -d 10.0.0.0/8 -p tcp --dport 22 -j DROP' "$v4_state" ||
+  fail "narrower drop was deleted"
+grep -qxF 'INPUT -i rakazo-c+ -p tcp -j ACCEPT' "$v4_state" ||
+  fail "port-specific accept was deleted"
+[[ "$(grep -cxF 'DOCKER-USER -i rakazo-c+ -d 10.0.0.0/8 -j DROP' "$v4_state")" == 1 ]] ||
+  fail "managed 10/8 drop missing or duplicated"
+[[ "$(grep -cxF 'INPUT -i rakazo-c+ -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT' "$v4_state")" == 1 ]] ||
+  fail "established accept missing or duplicated after keeping foreign rules"
+
+cp "$scratch/v4.clean" "$v4_state"
 
 # --print output replays verbatim: feeding the printed commands through the
 # stubbed firewall must reproduce the exact chains --apply built.
