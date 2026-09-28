@@ -153,7 +153,7 @@ describe("PiRuntimeCredentialStore", () => {
   });
 
   it("persists a mid-run refresh that returns the same account", async () => {
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => undefined);
     let persisted: OAuthCredential | undefined;
     const store = new PiRuntimeCredentialStore(
       "openai-codex",
@@ -173,7 +173,7 @@ describe("PiRuntimeCredentialStore", () => {
   });
 
   it("retires and fails a mid-run refresh that returns a different account", async () => {
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => true);
     const persist = vi.fn(async () => {});
     const store = new PiRuntimeCredentialStore(
       "openai-codex",
@@ -206,8 +206,8 @@ describe("PiRuntimeCredentialStore", () => {
 
   it("settles account-change retirement before the error surfaces", async () => {
     let releaseRetire!: () => void;
-    const retireGate = new Promise<void>((resolve) => {
-      releaseRetire = resolve;
+    const retireGate = new Promise<undefined>((resolve) => {
+      releaseRetire = () => resolve(undefined);
     });
     const retire = vi.fn(() => retireGate);
     const store = new PiRuntimeCredentialStore(
@@ -250,7 +250,12 @@ describe("PiRuntimeCredentialStore", () => {
 
     await expect(
       store.modify("openai-codex", async () => credential({ accountId: "acct-b" })),
-    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof Error &&
+        !(error instanceof RetiredModelCredentialError) &&
+        error.message === OAUTH_ACCOUNT_CHANGED_ERROR,
+    );
     expect(retire).toHaveBeenCalledWith(
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
@@ -280,14 +285,20 @@ describe("PiRuntimeCredentialStore", () => {
       failed?: ModelCredentialFailedState,
     ) => {
       const matches = failed ? matchesFailedOAuthSecret(() => rotated, failed) : undefined;
-      if (matches && !matches({ id: "secret-codex", ciphertext: "cipher-codex" })) return;
+      if (matches && !matches({ id: "secret-codex", ciphertext: "cipher-codex" })) return false;
       deleteCredential();
+      return true;
     };
     const store = new PiRuntimeCredentialStore("openai-codex", stored, undefined, retire);
 
     await expect(
       store.modify("openai-codex", async () => credential({ accountId: "acct-b" })),
-    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof Error &&
+        !(error instanceof RetiredModelCredentialError) &&
+        error.message === OAUTH_ACCOUNT_CHANGED_ERROR,
+    );
 
     expect(deleteCredential).not.toHaveBeenCalled();
   });
@@ -315,20 +326,26 @@ describe("PiRuntimeCredentialStore", () => {
       failed?: ModelCredentialFailedState,
     ) => {
       const matches = failed ? matchesFailedOAuthSecret(() => rotated, failed) : undefined;
-      if (matches && !matches({ id: "secret-codex", ciphertext: "cipher-codex" })) return;
+      if (matches && !matches({ id: "secret-codex", ciphertext: "cipher-codex" })) return false;
       deleteCredential();
+      return true;
     };
     const store = new PiRuntimeCredentialStore("openai-codex", stored, undefined, retire);
 
     await expect(
       store.modify("openai-codex", async () => credential({ accountId: "acct-b" })),
-    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof Error &&
+        !(error instanceof RetiredModelCredentialError) &&
+        error.message === OAUTH_ACCOUNT_CHANGED_ERROR,
+    );
 
     expect(deleteCredential).not.toHaveBeenCalled();
   });
 
   it("tolerates a missing account id on either side of a mid-run refresh", async () => {
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => undefined);
     const persisted: OAuthCredential[] = [];
     const store = new PiRuntimeCredentialStore(
       "openai-codex",

@@ -570,22 +570,29 @@ export async function resolveModelAuth(
     const storedAccountId = oauthCredentialAccountId(parsed.credential);
     const refreshedAccountId = oauthCredentialAccountId(credential);
     if (storedAccountId && refreshedAccountId && storedAccountId !== refreshedAccountId) {
+      let deleted = false;
       if (opts?.retire) {
         try {
           // `parsed.credential` is still the stored material whose refresh
           // produced the foreign account — retirement fences on it so a
           // concurrently persisted newer credential survives the delete.
-          await opts.retire(
-            "account-changed",
-            `stored account ${storedAccountId}, refreshed account ${refreshedAccountId}`,
-            parsed.credential,
-          );
+          deleted =
+            (await opts.retire(
+              "account-changed",
+              `stored account ${storedAccountId}, refreshed account ${refreshedAccountId}`,
+              parsed.credential,
+            )) === true;
         } catch (retireError) {
           // A retirement failure must never mask the account-change error.
+          // Leave it unmarked so setup can retry after a database outage.
           getLogger().error("model credential retirement failed", retireError);
         }
       }
-      throw new RetiredModelCredentialError(OAUTH_ACCOUNT_CHANGED_ERROR);
+      // The foreign token is never persisted. Fail the run permanently only
+      // when this call deleted the stored credential; a skipped delete means
+      // a newer credential survived and a retry may succeed.
+      if (deleted) throw new RetiredModelCredentialError(OAUTH_ACCOUNT_CHANGED_ERROR);
+      throw new Error(OAUTH_ACCOUNT_CHANGED_ERROR);
     }
     await opts?.persist?.(
       serializeModelSecret({

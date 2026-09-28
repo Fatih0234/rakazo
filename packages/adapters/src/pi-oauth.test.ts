@@ -512,12 +512,13 @@ describe("resolveModelAuth account-change guard", () => {
       failed?: ModelCredentialFailedState,
     ) => {
       const matches = failed ? matchesFailedOAuthSecret(() => row(), failed) : undefined;
-      if (matches && !matches({ id: "secret-codex", ciphertext: "cipher-codex" })) return;
+      if (matches && !matches({ id: "secret-codex", ciphertext: "cipher-codex" })) return false;
       deleteCredential();
+      return true;
     };
 
   it("persists a refresh that returns the same account", async () => {
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => undefined);
     const persist = vi.fn(async () => {});
     const resolved = await resolveModelAuth(expiredAccount("acct-a"), CHATGPT_OAUTH_PROVIDER, {
       now: 10_000,
@@ -531,7 +532,7 @@ describe("resolveModelAuth account-change guard", () => {
   });
 
   it("retires the credential and fails when the refresh returns a different account", async () => {
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => true);
     const persist = vi.fn(async () => {});
     const toAuth = vi.fn(
       async (current: OAuthCredential): Promise<{ apiKey: string }> => ({
@@ -568,7 +569,7 @@ describe("resolveModelAuth account-change guard", () => {
   });
 
   it("detects the account change from the refreshed token's JWT claim", async () => {
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => true);
     // A refresh that does not copy `accountId` onto the credential is still
     // caught when the new access token carries the ChatGPT account claim.
     const refresh = async (): Promise<OAuthCredential> =>
@@ -597,7 +598,7 @@ describe("resolveModelAuth account-change guard", () => {
   });
 
   it("compares against a stored account id carried only by the stored access JWT", async () => {
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => true);
     await expect(
       resolveModelAuth(
         expiredAccount(undefined, fakeJwt(chatGptAccountClaim("acct-a"))),
@@ -632,7 +633,12 @@ describe("resolveModelAuth account-change guard", () => {
           oauthCred({ access: "new", expires: 99_999, accountId: "acct-b" }),
         ),
       }),
-    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof Error &&
+        !(error instanceof RetiredModelCredentialError) &&
+        error.message === OAUTH_ACCOUNT_CHANGED_ERROR,
+    );
     expect(retire).toHaveBeenCalledWith(
       "account-changed",
       "stored account acct-a, refreshed account acct-b",
@@ -669,7 +675,12 @@ describe("resolveModelAuth account-change guard", () => {
           toAuth: async (current: OAuthCredential) => ({ apiKey: current.access }),
         },
       }),
-    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof Error &&
+        !(error instanceof RetiredModelCredentialError) &&
+        error.message === OAUTH_ACCOUNT_CHANGED_ERROR,
+    );
 
     expect(deleteCredential).not.toHaveBeenCalled();
   });
@@ -689,7 +700,11 @@ describe("resolveModelAuth account-change guard", () => {
           oauthCred({ access: "new", expires: 99_999, accountId: "acct-b" }),
         ),
       }),
-    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof RetiredModelCredentialError &&
+        error.message === OAUTH_ACCOUNT_CHANGED_ERROR,
+    );
 
     expect(deleteCredential).toHaveBeenCalledTimes(1);
   });
@@ -701,7 +716,7 @@ describe("resolveModelAuth account-change guard", () => {
   ])(
     "tolerates a missing account id on the %s",
     async (_case, storedAccountId, refreshedAccountId) => {
-      const retire = vi.fn(async () => {});
+      const retire = vi.fn(async () => undefined);
       const persist = vi.fn(async () => {});
       const resolved = await resolveModelAuth(
         expiredAccount(storedAccountId),
@@ -749,7 +764,12 @@ describe("resolveModelAuth account-change guard", () => {
           oauthCred({ access: "foreign", expires: 99_999, accountId: "acct-b" }),
         ),
       }),
-    ).rejects.toThrow(OAUTH_ACCOUNT_CHANGED_ERROR);
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof Error &&
+        !(error instanceof RetiredModelCredentialError) &&
+        error.message === OAUTH_ACCOUNT_CHANGED_ERROR,
+    );
 
     expect(deleteCredential).not.toHaveBeenCalled();
   });
