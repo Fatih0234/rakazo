@@ -1338,6 +1338,10 @@ msgstr ""
 msgid "Could not open local settings. Start the local server and create its owner account, then try again."
 msgstr "Impossible d'ouvrir les paramètres locaux. Démarrez le serveur local et créez le compte du propriétaire, puis réessayez."
 
+#: src/components/computer/TerminalApp.tsx:243
+msgid "Could not open terminal"
+msgstr "Impossible d'ouvrir le terminal"
+
 #: src/pages/VoiceSettingsOverlay.tsx:183
 msgid "Could not play a test clip"
 msgstr "Impossible de lire un extrait de test"
@@ -2897,6 +2901,10 @@ msgstr "Ouvrir en fenêtre complète"
 msgid "Open navigation"
 msgstr "Ouvrir la navigation"
 
+#: src/components/computer/TerminalApp.tsx:92
+msgid "Open shell"
+msgstr "Ouvrir le shell"
+
 #: src/pages/ScratchpadSection.tsx:106
 msgid "Open work"
 msgstr "Travaux en cours"
@@ -3597,6 +3605,10 @@ msgstr "Conversation partagée avec 2 à 6 bots. Ils répondent tous dans le mê
 #: src/pages/KnowledgeSection.tsx:66
 msgid "Shared documents"
 msgstr "Documents partagés"
+
+#: src/components/computer/TerminalApp.tsx:72
+msgid "Shell"
+msgstr "Shell"
 
 #: src/pages/Shell.tsx:3321
 #: src/pages/Shell.tsx:3383

@@ -1338,6 +1338,10 @@ msgstr "Datei konnte nicht geöffnet werden"
 msgid "Could not open local settings. Start the local server and create its owner account, then try again."
 msgstr ""
 
+#: src/components/computer/TerminalApp.tsx:243
+msgid "Could not open terminal"
+msgstr "Terminal konnte nicht geöffnet werden"
+
 #: src/pages/VoiceSettingsOverlay.tsx:183
 msgid "Could not play a test clip"
 msgstr "Testclip konnte nicht abgespielt werden"
@@ -2897,6 +2901,10 @@ msgstr "In vollständigem Fenster öffnen"
 msgid "Open navigation"
 msgstr "Navigation öffnen"
 
+#: src/components/computer/TerminalApp.tsx:92
+msgid "Open shell"
+msgstr "Shell öffnen"
+
 #: src/pages/ScratchpadSection.tsx:106
 msgid "Open work"
 msgstr "Offene Arbeit"
@@ -3597,6 +3605,10 @@ msgstr ""
 #: src/pages/KnowledgeSection.tsx:66
 msgid "Shared documents"
 msgstr "Geteilte Dokumente"
+
+#: src/components/computer/TerminalApp.tsx:72
+msgid "Shell"
+msgstr "Shell"
 
 #: src/pages/Shell.tsx:3321
 #: src/pages/Shell.tsx:3383
