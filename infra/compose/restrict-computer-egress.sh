@@ -153,11 +153,36 @@ chain_has_prefix() {
   done
 }
 
+# Rules below a managed prefix that duplicate it. The prefix itself is kept:
+# replacements are inserted at the head first, and only later copies are removed.
+delete_stale_below_prefix() {
+  local cmd="$1" chain="$2"
+  shift 2
+  local -a wanted=("$@") lines=() stale=()
+  local line i j norm prefix_len=${#wanted[@]}
+  while IFS= read -r line; do
+    [[ "$line" == "-A $chain "* ]] || continue
+    lines+=("${line#-A "$chain" }")
+  done < <("$cmd" -S "$chain" 2>/dev/null || true)
+  for ((i = prefix_len; i < ${#lines[@]}; i++)); do
+    norm="$(normalize_rule "${lines[i]}")"
+    for ((j = 0; j < prefix_len; j++)); do
+      if [[ "$norm" == "$(normalize_rule "${wanted[j]}")" ]]; then
+        stale+=("$((i + 1))")
+        break
+      fi
+    done
+  done
+  # Highest number first so each delete leaves the remaining numbers valid.
+  for ((i = ${#stale[@]} - 1; i >= 0; i--)); do
+    "$cmd" -D "$chain" "${stale[i]}"
+  done
+}
+
 # Insert each chain's rules at its head so a broader accept cannot shadow the
 # drops. Same-bridge RETURN stays above the drops, and the INPUT established
 # accept stays above the catch-all drop. A chain that already has that prefix
-# is left alone. Otherwise the managed rules are removed wherever they sit and
-# inserted again, so a later accept cannot stay above them.
+# is left alone.
 apply_family() {
   local cmd="$1" rules=() line chain
   command -v "$cmd" >/dev/null 2>&1 || return 0
@@ -189,26 +214,30 @@ apply_family() {
   if ((chain_needs == 0)); then
     return 0
   fi
+  # Insert the new prefix before deleting the copies it replaces. Deleting
+  # first would drop enforcement if a later iptables command failed or the
+  # script were interrupted. Stale copies are removed only once the new rules
+  # are already at the head, and by number so those new rules stay.
   # One reverse pass matches --print and real per-chain inserts: each -I 1
   # leaves the documented order at the head (RETURN above drops, established
   # accept above the INPUT drop).
   local i
-  local -a args
-  for ((i = 0; i < ${#rules[@]}; i++)); do
-    line="${rules[i]}"
-    chain="${line%% *}"
-    [[ -n ${rewrite[$chain]+x} ]] || continue
-    read -ra args <<<"${line#* }"
-    while "$cmd" -C "$chain" "${args[@]}" 2>/dev/null; do
-      "$cmd" -D "$chain" "${args[@]}"
-    done
-  done
+  local -a args wanted=()
   for ((i = ${#rules[@]} - 1; i >= 0; i--)); do
     line="${rules[i]}"
     chain="${line%% *}"
     [[ -n ${rewrite[$chain]+x} ]] || continue
     read -ra args <<<"${line#* }"
     "$cmd" -I "$chain" 1 "${args[@]}"
+  done
+  for chain in "${chain_names[@]}"; do
+    [[ -n ${rewrite[$chain]+x} ]] || continue
+    wanted=()
+    for line in "${rules[@]}"; do
+      [[ "${line%% *}" == "$chain" ]] || continue
+      wanted+=("${line#* }")
+    done
+    delete_stale_below_prefix "$cmd" "$chain" "${wanted[@]}"
   done
 }
 

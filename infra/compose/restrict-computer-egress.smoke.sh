@@ -56,6 +56,21 @@ for tool in iptables ip6tables; do
 state="$STUB_DIR/$(basename "$0").state"
 printf '%s\n' "$*" >>"$STUB_DIR/$(basename "$0").calls"
 op="$1"; shift || true
+
+# Exit before the Nth mutating command (--apply repair test). State is unchanged
+# by the command that fails.
+fail_midway() {
+  [[ -n ${STUB_FAIL_ON_MUTATION:-} ]] || return 0
+  local count_file="$STUB_DIR/mutation.count" count=0
+  [[ -f $count_file ]] && count="$(<"$count_file")"
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$count_file"
+  if ((count == STUB_FAIL_ON_MUTATION)); then
+    echo "simulated iptables failure" >&2
+    exit 1
+  fi
+}
+
 case "$op" in
   -L) exit 0 ;;
   -S)
@@ -71,10 +86,26 @@ case "$op" in
   -C) grep -qxF -- "$*" "$state" 2>/dev/null ;;
   # -I CHAIN 1 inserts at the top: model it as a prepend so the state file
   # mirrors real chain order (top to bottom).
-  -I) chain="$1"; shift 2 || true
+  -I) fail_midway
+      chain="$1"; shift 2 || true
       { printf '%s %s\n' "$chain" "$*"; cat "$state" 2>/dev/null; } >"$state.tmp"
       mv "$state.tmp" "$state" ;;
-  -D) grep -vxF -- "$*" "$state" >"$state.tmp" 2>/dev/null || true; mv "$state.tmp" "$state" ;;
+  # -D CHAIN N removes one rule by number. -D CHAIN spec removes every match
+  # (used by --remove).
+  -D) fail_midway
+      chain="$1"; shift || true
+      if [[ "${1:-}" =~ ^[0-9]+$ && $# -eq 1 ]]; then
+        n="$1"
+        awk -v chain="$chain" -v n="$n" '
+          $1 == chain { c++; if (c == n) next }
+          { print }
+        ' "$state" >"$state.tmp"
+        mv "$state.tmp" "$state"
+      else
+        grep -vxF -- "$chain $*" "$state" >"$state.tmp" 2>/dev/null || true
+        mv "$state.tmp" "$state"
+      fi
+      ;;
 esac
 STUB
   chmod +x "$bin/$tool"
@@ -145,6 +176,31 @@ accept_at="$(grep -nxF 'DOCKER-USER -j ACCEPT' "$v4_state" | head -1 | cut -d: -
 meta_at="$(grep -nxF 'DOCKER-USER -i rakazo-c+ -d 169.254.0.0/16 -j DROP' "$v4_state" | head -1 | cut -d: -f1)"
 [[ -n "$accept_at" && -n "$meta_at" && "$meta_at" -lt "$accept_at" ]] ||
   fail "metadata drop is not above the foreign ACCEPT"
+[[ "$(grep -cxF 'DOCKER-USER -i rakazo-c+ -d 169.254.0.0/16 -j DROP' "$v4_state")" == 1 ]] ||
+  fail "repair left a stale metadata drop"
+[[ "$(wc -l <"$v4_state")" == 15 ]] ||
+  fail "repair left duplicate rules, got $(wc -l <"$v4_state") lines"
+
+# A failure halfway through the repair must not remove the drops. 14 inserts
+# land the new prefix first; the 15th mutation is the first stale delete and
+# is failed before it changes anything. Both the new and previous copies stay.
+{ printf '%s\n' 'DOCKER-USER -j ACCEPT' 'INPUT -j ACCEPT'; cat "$v4_state"; } >"$v4_state.tmp"
+mv "$v4_state.tmp" "$v4_state"
+rm -f "$STUB_DIR/mutation.count"
+calls_before="$(wc -l <"$v4_calls")"
+STUB_FAIL_ON_MUTATION=15 RAKAZO_IPTABLES="$bin/iptables" RAKAZO_IP6TABLES="$bin/ip6tables" \
+  bash "$script" --apply && fail "repair should fail when iptables fails midway" || true
+meta_drop='DOCKER-USER -i rakazo-c+ -d 169.254.0.0/16 -j DROP'
+input_drop='INPUT -i rakazo-c+ -j DROP'
+[[ "$(grep -cxF "$meta_drop" "$v4_state")" == 2 ]] ||
+  fail "metadata drop missing after a midway repair failure"
+[[ "$(grep -cxF "$input_drop" "$v4_state")" == 2 ]] ||
+  fail "INPUT drop missing after a midway repair failure"
+new_calls="$(tail -n +"$((calls_before + 1))" "$v4_calls")"
+[[ "$(grep -c '^-I ' <<<"$new_calls")" == 14 ]] ||
+  fail "repair did not insert the new prefix before failing"
+[[ "$(grep -c '^-D ' <<<"$new_calls")" == 1 ]] ||
+  fail "repair deleted rules before the new prefix was in place"
 
 # Without ip6tables on PATH the IPv6 family is skipped only when the host has
 # no global IPv6 (loopback scope 10). On a dual-stack host (scope 00) the same
