@@ -39,7 +39,7 @@ export class PiRuntimeCredentialStore implements CredentialStore {
       reason: ModelCredentialRetireReason,
       detail?: string,
       failed?: ModelCredentialFailedState,
-    ) => Promise<void>,
+    ) => Promise<boolean | undefined>,
   ) {
     this.credential = credential;
   }

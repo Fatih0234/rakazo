@@ -381,7 +381,7 @@ describe("resolveModelAuth retirement", () => {
     const failure = new Error("OAuth refresh failed for openai-codex", {
       cause: new Error('OpenAI Codex token refresh failed (400): {"error":"invalid_grant"}'),
     });
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => true);
     const persist = vi.fn(async () => {});
 
     await expect(
@@ -411,7 +411,7 @@ describe("resolveModelAuth retirement", () => {
       new Error('OpenAI Codex token refresh failed (500): {"error":"invalid_grant"}'),
       new Error("request timed out"),
     ]) {
-      const retire = vi.fn(async () => {});
+      const retire = vi.fn(async () => undefined);
       await expect(
         resolveModelAuth(expired, CHATGPT_OAUTH_PROVIDER, {
           now: 10_000,
@@ -443,6 +443,20 @@ describe("resolveModelAuth retirement", () => {
       "refresh_token_expired",
       expect.objectContaining({ access: "old", refresh: "refresh-token", expires: 1 }),
     );
+    expect(isRetiredModelCredentialError(failure)).toBe(false);
+  });
+
+  it("does not mark a refresh error retired when the delete was skipped", async () => {
+    const failure = new Error('refresh failed (400): {"error":"invalid_grant"}');
+    const retire = vi.fn(async () => false);
+    await expect(
+      resolveModelAuth(expired, CHATGPT_OAUTH_PROVIDER, {
+        now: 10_000,
+        retire,
+        oauth: failingRefresh(failure),
+      }),
+    ).rejects.toBe(failure);
+    expect(isRetiredModelCredentialError(failure)).toBe(false);
   });
 
   it("rethrows the refresh error when no retire hook is configured", async () => {
@@ -457,7 +471,7 @@ describe("resolveModelAuth retirement", () => {
 
   it("does not refresh or retire while the stored token is still valid", async () => {
     const refresh = vi.fn();
-    const retire = vi.fn(async () => {});
+    const retire = vi.fn(async () => undefined);
     const resolved = await resolveModelAuth(
       JSON.stringify(oauthCred({ access: "live", expires: 1_000_000 })),
       CHATGPT_OAUTH_PROVIDER,

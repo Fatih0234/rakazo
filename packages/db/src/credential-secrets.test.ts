@@ -151,11 +151,13 @@ describe("retireModelCredential", () => {
     };
     const { prisma, tx } = retirePrisma(state);
 
-    await retireModelCredential(prisma, {
-      userId: "user-1",
-      credentialId: "cred-codex",
-      secretId: "secret-codex",
-    });
+    await expect(
+      retireModelCredential(prisma, {
+        userId: "user-1",
+        credentialId: "cred-codex",
+        secretId: "secret-codex",
+      }),
+    ).resolves.toBe(true);
 
     expect(state.credentials).toEqual([]);
     expect(state.preferences).toEqual([]);
@@ -193,12 +195,14 @@ describe("retireModelCredential", () => {
     };
     const { prisma, tx } = retirePrisma(state);
 
-    await retireModelCredential(prisma, {
-      userId: "user-1",
-      credentialId: "cred-codex",
-      secretId: "secret-codex",
-      matchesFailedSecret: (row) => row.ciphertext === "cipher-failed",
-    });
+    await expect(
+      retireModelCredential(prisma, {
+        userId: "user-1",
+        credentialId: "cred-codex",
+        secretId: "secret-codex",
+        matchesFailedSecret: (row) => row.ciphertext === "cipher-failed",
+      }),
+    ).resolves.toBe(false);
 
     expect(tx.secret.findFirst).toHaveBeenCalledWith({
       where: { id: "secret-codex" },

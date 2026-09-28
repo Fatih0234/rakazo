@@ -5285,7 +5285,7 @@ async function resolveModelKey(
     reason: ModelCredentialRetireReason,
     detail?: string,
     failed?: ModelCredentialFailedState,
-  ) => Promise<void>;
+  ) => Promise<boolean | undefined>;
   redact: string[];
 }> {
   if (credential) {

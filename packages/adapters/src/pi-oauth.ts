@@ -516,7 +516,7 @@ type ResolveModelOpts = {
     reason: ModelCredentialRetireReason,
     detail?: string,
     failed?: ModelCredentialFailedState,
-  ) => Promise<void>;
+  ) => Promise<boolean | undefined>;
   now?: number;
   oauth?: Pick<OAuthAuth, "refresh" | "toAuth">;
   signal?: AbortSignal;
@@ -545,18 +545,21 @@ export async function resolveModelAuth(
     } catch (error) {
       const marker = terminalOAuthRefreshErrorMarker(error);
       if (marker && opts?.retire) {
+        let deleted = false;
         try {
           // `credential` is still the stored material the failed refresh was
           // attempted on — retirement fences on it so a concurrently persisted
           // newer credential survives the delete.
-          await opts.retire("terminal-refresh-failure", marker, credential);
+          deleted = (await opts.retire("terminal-refresh-failure", marker, credential)) === true;
         } catch (retireError) {
           // A retirement failure must never mask the refresh error the caller sees.
+          // Leave the error unmarked so setup can retry after a database outage.
           getLogger().error("model credential retirement failed", retireError);
+          throw error;
         }
-        // The original refresh error still propagates. Mark it so a run can fail
-        // once instead of retrying a credential this call already deleted.
-        markRetiredModelCredentialError(error);
+        // Mark only a credential this call actually deleted. A skipped delete
+        // means a newer credential won the race and a retry may succeed.
+        if (deleted) markRetiredModelCredentialError(error);
       }
       throw error;
     }

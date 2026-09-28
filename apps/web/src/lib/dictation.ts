@@ -30,9 +30,58 @@ export const TRANSCRIPTION_RESPONSE_TIMEOUT_MS = 70_000;
 export const MAX_TRANSCRIPTION_RESPONSE_BYTES = 64 * 1024;
 const ENDPOINT_UNSUPPORTED =
   "This browser can't detect when you stop talking. Use Chrome, the desktop app, or hold-to-talk in the composer.";
+/** Web Speech codes that mean the cloud recognizer cannot be used. */
+const WEB_SPEECH_SERVICE_ERRORS = new Set(["network", "service-not-allowed"]);
 
 export function webSpeechAvailable(): boolean {
-  return Boolean(speechRecognitionCtor());
+  return Boolean(speechRecognitionCtor()) && !electronSpeechHost();
+}
+
+/**
+ * Electron exposes webkitSpeechRecognition without a speech-service key, so
+ * recognition fails with `network`. Don't treat that API as available there.
+ */
+function electronSpeechHost(): boolean {
+  if (typeof window !== "undefined") {
+    const host = window as Window & { rakazoDesktop?: unknown };
+    if (host.rakazoDesktop) return true;
+  }
+  if (typeof navigator === "undefined") return false;
+  const agent = navigator.userAgent;
+  return typeof agent === "string" && agent.includes("Electron");
+}
+
+/** Connected server transcription should take over after Web Speech cannot run. */
+export function webSpeechNeedsServerFallback(
+  error: string | undefined,
+  transcribe: boolean,
+): boolean {
+  return transcribe && typeof error === "string" && WEB_SPEECH_SERVICE_ERRORS.has(error);
+}
+
+function normalizedTranscript(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+function startsWithWholePrefix(serverText: string, prefix: string): boolean {
+  const head = prefix.toLowerCase();
+  const tail = serverText.toLowerCase();
+  if (!tail.startsWith(head)) return false;
+  // Index by code point. A supplementary-plane letter is two UTF-16 units, and
+  // the first half alone is not a letter.
+  const point = tail.codePointAt(head.length);
+  if (point === undefined) return true;
+  // Punctuation ends the retained word. Letters, numbers, and "_" continue it.
+  return !/[\p{L}\p{N}_]/u.test(String.fromCodePoint(point));
+}
+
+export function combineTranscript(prefix: string, serverText: string): string {
+  const head = normalizedTranscript(prefix);
+  const tail = serverText.trim();
+  if (!head) return tail;
+  if (!tail) return head;
+  if (startsWithWholePrefix(tail, head)) return tail;
+  return `${head} ${normalizedTranscript(tail)}`;
 }
 
 function speechRecognitionCtor(): SpeechRecognitionCtor | undefined {
@@ -126,11 +175,12 @@ export class Dictation {
     const spaceId = selectedSpaceId();
     this.onFinal = opts.onFinal;
     this.set({ status: "listening", transcript: "" });
+    const transcribe = Boolean(opts.transcribe);
     if (webSpeechAvailable()) {
-      this.listenWebSpeech(opts.mode, opts.endpointMs ?? 850, mine);
+      this.listenWebSpeech(opts.mode, opts.endpointMs ?? 850, mine, transcribe, spaceId);
       return;
     }
-    if (opts.transcribe) {
+    if (transcribe) {
       await this.listenRecorder(mine, opts.mode, opts.endpointMs ?? 850, spaceId);
       return;
     }
@@ -141,15 +191,22 @@ export class Dictation {
     });
   }
 
-  private listenWebSpeech(mode: DictationMode, endpointMs: number, mine: number) {
+  private listenWebSpeech(
+    mode: DictationMode,
+    endpointMs: number,
+    mine: number,
+    transcribe: boolean,
+    spaceId: string | null,
+  ) {
     const Ctor = speechRecognitionCtor();
     if (!Ctor) return;
     const rec = new Ctor();
+    let live = true;
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = navigator.language || "en-US";
     rec.onresult = (event) => {
-      if (this.token !== mine) return;
+      if (!live || this.token !== mine) return;
       let transcript = "";
       for (let i = 0; i < event.results.length; i += 1) {
         transcript += event.results[i]?.[0]?.transcript ?? "";
@@ -158,21 +215,27 @@ export class Dictation {
       if (mode !== "endpoint") return;
       clearTimeout(this.silenceTimer);
       this.silenceTimer = setTimeout(() => {
-        if (this.token !== mine) return;
+        if (!live || this.token !== mine) return;
         const text = this.snapshot.transcript.trim();
         this.finish(text, mine);
       }, endpointMs);
     };
     rec.onerror = (event) => {
-      if (this.token !== mine) return;
+      if (!live || this.token !== mine) return;
       if (event.error === "aborted" || event.error === "no-speech") return;
+      if (webSpeechNeedsServerFallback(event.error, transcribe)) {
+        live = false;
+        this.fallbackToServer(rec, mine, mode, endpointMs, spaceId);
+        return;
+      }
+      live = false;
       this.set({
         ...IDLE,
         error: event.error ? `Dictation failed: ${event.error}` : "Dictation failed.",
       });
     };
     rec.onend = () => {
-      if (this.token !== mine) return;
+      if (!live || this.token !== mine) return;
       if (this.snapshot.status !== "listening") return;
       if (mode === "hold") {
         this.finish(this.snapshot.transcript, mine);
@@ -190,7 +253,47 @@ export class Dictation {
       }
     };
     this.recognition = rec;
-    rec.start();
+    try {
+      rec.start();
+    } catch {
+      if (!live || this.token !== mine) return;
+      if (transcribe) {
+        live = false;
+        this.fallbackToServer(rec, mine, mode, endpointMs, spaceId);
+        return;
+      }
+      live = false;
+      this.releaseRecognition(rec);
+      this.set({ ...IDLE, error: "Dictation failed." });
+    }
+  }
+
+  private fallbackToServer(
+    rec: SpeechRecognitionLike,
+    mine: number,
+    mode: DictationMode,
+    endpointMs: number,
+    spaceId: string | null,
+  ) {
+    const recognized = normalizedTranscript(this.snapshot.transcript);
+    this.releaseRecognition(rec);
+    clearTimeout(this.silenceTimer);
+    this.silenceTimer = undefined;
+    if (this.token !== mine) return;
+    this.set({ status: "listening", transcript: recognized });
+    void this.listenRecorder(mine, mode, endpointMs, spaceId);
+  }
+
+  private releaseRecognition(rec: SpeechRecognitionLike) {
+    rec.onresult = null;
+    rec.onerror = null;
+    rec.onend = null;
+    if (this.recognition === rec) this.recognition = null;
+    try {
+      rec.abort();
+    } catch {
+      // already stopped
+    }
   }
 
   private async listenRecorder(
@@ -203,39 +306,54 @@ export class Dictation {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (error) {
-      if (this.token !== mine) return;
-      this.set({
-        ...IDLE,
-        error: error instanceof Error ? error.message : "Microphone failed",
-      });
+      this.failListening(mine, error instanceof Error ? error.message : "Microphone failed");
       return;
     }
     if (this.token !== mine) {
       for (const track of stream.getTracks()) track.stop();
       return;
     }
-    if (mode === "endpoint" && !this.armSilence(stream, mine, endpointMs)) {
+    const keptSpeech = this.snapshot.transcript.trim().length > 0;
+    if (mode === "endpoint" && !this.armSilence(stream, mine, endpointMs, keptSpeech)) {
       for (const track of stream.getTracks()) track.stop();
-      this.set({ ...IDLE, error: ENDPOINT_UNSUPPORTED });
+      this.failListening(mine, ENDPOINT_UNSUPPORTED);
       return;
     }
-    const media = new MediaRecorder(stream);
-    this.media = media;
-    this.chunks = [];
-    media.ondataavailable = (event) => {
-      if (this.token !== mine) return;
-      if (event.data.size) this.chunks.push(event.data);
-    };
-    media.onstop = () => {
+    let media: MediaRecorder | undefined;
+    try {
+      media = new MediaRecorder(stream);
+      this.media = media;
+      this.chunks = [];
+      media.ondataavailable = (event) => {
+        if (this.token !== mine) return;
+        if (event.data.size) this.chunks.push(event.data);
+      };
+      media.onstop = () => {
+        for (const track of stream.getTracks()) track.stop();
+        if (this.token !== mine) return;
+        this.stopVad();
+        void this.transcribeChunks(mine, spaceId);
+      };
+      media.start(mode === "endpoint" ? 250 : undefined);
+    } catch (error) {
+      if (media) {
+        media.ondataavailable = null;
+        media.onstop = null;
+      }
       for (const track of stream.getTracks()) track.stop();
+      if (this.media === media) this.media = null;
       if (this.token !== mine) return;
       this.stopVad();
-      void this.transcribeChunks(mine, spaceId);
-    };
-    media.start(mode === "endpoint" ? 250 : undefined);
+      this.failListening(mine, error instanceof Error ? error.message : "Dictation failed.");
+    }
   }
 
-  private armSilence(stream: MediaStream, mine: number, endpointMs: number): boolean {
+  private armSilence(
+    stream: MediaStream,
+    mine: number,
+    endpointMs: number,
+    alreadyHeard = false,
+  ): boolean {
     const Ctor = audioContextCtor();
     if (!Ctor) return false;
     try {
@@ -247,7 +365,7 @@ export class Dictation {
       this.audioContext = ctx;
       if (ctx.state === "suspended") void ctx.resume();
       const data = new Uint8Array(analyser.fftSize);
-      let heardSpeech = false;
+      let heardSpeech = alreadyHeard;
       let silentFor = 0;
       this.vadTimer = setInterval(() => {
         const media = this.media;
@@ -294,7 +412,12 @@ export class Dictation {
     const blob = new Blob(this.chunks, { type: this.chunks[0]?.type || "audio/webm" });
     this.chunks = [];
     if (!blob.size) {
-      this.set(IDLE);
+      const prefix = normalizedTranscript(this.snapshot.transcript);
+      if (!prefix) {
+        this.set(IDLE);
+        return;
+      }
+      this.finish(prefix, mine);
       return;
     }
     this.set({ status: "transcribing", transcript: this.snapshot.transcript });
@@ -324,10 +447,10 @@ export class Dictation {
       const body = await readTranscriptionBody(res, abort.signal);
       if (this.token !== mine) return;
       if (!res.ok) {
-        this.set({ ...IDLE, error: body.error ?? "Could not transcribe that recording." });
+        this.failListening(mine, body.error ?? "Could not transcribe that recording.");
         return;
       }
-      this.finish(body.text ?? "", mine);
+      this.finish(combineTranscript(this.snapshot.transcript, body.text ?? ""), mine);
     } catch (error) {
       // User cancel bumps token in stop() before aborting, so a matching token
       // means the deadline timer fired. Browsers may reject fetch as AbortError
@@ -338,13 +461,13 @@ export class Dictation {
           abort.signal.reason.message === "Transcription request timed out.") ||
         (error instanceof Error && error.message === "Transcription request timed out.");
       if (timedOut || (error instanceof Error && error.name === "AbortError")) {
-        this.set({ ...IDLE, error: "Transcription request timed out." });
+        this.failListening(mine, "Transcription request timed out.");
         return;
       }
-      this.set({
-        ...IDLE,
-        error: error instanceof Error ? error.message : "Could not transcribe that recording.",
-      });
+      this.failListening(
+        mine,
+        error instanceof Error ? error.message : "Could not transcribe that recording.",
+      );
     } finally {
       clearTimeout(timer);
       if (this.transcribeAbort === abort) this.transcribeAbort = null;
@@ -357,6 +480,16 @@ export class Dictation {
       return;
     }
     this.finish(this.snapshot.transcript, this.token);
+  }
+
+  private failListening(mine: number, message: string) {
+    if (this.token !== mine) return;
+    const prefix = normalizedTranscript(this.snapshot.transcript);
+    if (prefix) {
+      this.finish(prefix, mine);
+      return;
+    }
+    this.set({ ...IDLE, error: message });
   }
 
   private finish(text: string, mine: number) {
