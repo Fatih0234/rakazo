@@ -80,11 +80,11 @@ msgid "{0} will still respond to direct mentions."
 msgstr "{0} will still respond to direct mentions."
 
 #. placeholder {0}: active.name
-#: src/pages/Shell.tsx:3655
+#: src/pages/Shell.tsx:3658
 msgid "{0}'s screen"
 msgstr "{0}'s screen"
 
-#: src/pages/Shell.tsx:6509
+#: src/pages/Shell.tsx:6515
 msgid "{botName}’s computer"
 msgstr "{botName}’s computer"
 
@@ -135,12 +135,12 @@ msgstr "{title}, {label}"
 msgid "{toolCount, plural, one {# tool} other {# tools}}"
 msgstr "{toolCount, plural, one {# tool} other {# tools}}"
 
-#: src/pages/Shell.tsx:4575
+#: src/pages/Shell.tsx:4578
 msgid "{workingBotName} is working"
 msgstr "{workingBotName} is working"
 
 #. placeholder {0}: mention.name
-#: src/pages/Shell.tsx:5506
+#: src/pages/Shell.tsx:5509
 msgid "@{0}"
 msgstr "@{0}"
 
@@ -191,11 +191,11 @@ msgstr "Action confirmations"
 #. placeholder {0}: sectionMenu.section.name
 #: src/pages/BotContextMenu.tsx:84
 #: src/pages/Shell.tsx:2924
-#: src/pages/Shell.tsx:4161
+#: src/pages/Shell.tsx:4164
 msgid "Actions for {0}"
 msgstr "Actions for {0}"
 
-#: src/pages/Shell.tsx:4035
+#: src/pages/Shell.tsx:4038
 msgid "Actions for space"
 msgstr "Actions for space"
 
@@ -222,11 +222,11 @@ msgstr "Add"
 msgid "Add a model in Settings to use this."
 msgstr "Add a model in Settings to use this."
 
-#: src/pages/Shell.tsx:3817
+#: src/pages/Shell.tsx:3820
 msgid "Add a run time for this one-shot."
 msgstr "Add a run time for this one-shot."
 
-#: src/pages/Shell.tsx:3795
+#: src/pages/Shell.tsx:3798
 msgid "Add a schedule, webhook, GitHub, or message trigger"
 msgstr "Add a schedule, webhook, GitHub, or message trigger"
 
@@ -326,7 +326,7 @@ msgstr "Advanced"
 msgid "Advanced..."
 msgstr "Advanced..."
 
-#: src/pages/Shell.tsx:3417
+#: src/pages/Shell.tsx:3420
 msgid "Agent computer"
 msgstr "Agent computer"
 
@@ -459,7 +459,7 @@ msgstr "Approve this server to let your agent use its tools."
 msgid "Archive"
 msgstr "Archive"
 
-#: src/pages/Shell.tsx:6291
+#: src/pages/Shell.tsx:6294
 msgid "archived"
 msgstr "archived"
 
@@ -467,7 +467,7 @@ msgstr "archived"
 msgid "Archived"
 msgstr "Archived"
 
-#: src/pages/Shell.tsx:6302
+#: src/pages/Shell.tsx:6305
 msgid "Archived. Chat, memory, and files kept."
 msgstr "Archived. Chat, memory, and files kept."
 
@@ -526,15 +526,15 @@ msgstr "at {0}"
 msgid "at {timeSelect}"
 msgstr "at {timeSelect}"
 
-#: src/pages/Shell.tsx:5586
+#: src/pages/Shell.tsx:5589
 msgid "Attach file"
 msgstr "Attach file"
 
-#: src/components/computer/TerminalApp.tsx:37
+#: src/components/computer/TerminalApp.tsx:40
 msgid "Attached {path}"
 msgstr "Attached {path}"
 
-#: src/pages/Shell.tsx:5825
+#: src/pages/Shell.tsx:5828
 msgid "Attachment"
 msgstr "Attachment"
 
@@ -597,18 +597,18 @@ msgstr "Base URL"
 msgid "Bearer token"
 msgstr "Bearer token"
 
-#: src/pages/Shell.tsx:6501
+#: src/pages/Shell.tsx:6507
 msgid "Booting live desktop…"
 msgstr "Booting live desktop…"
 
 #. placeholder {0}: computerBot?.name ?? active?.name
-#: src/pages/Shell.tsx:4341
+#: src/pages/Shell.tsx:4344
 msgid "Booting up {0}’s computer"
 msgstr "Booting up {0}’s computer"
 
-#: src/pages/Shell.tsx:6163
-#: src/pages/Shell.tsx:6164
-#: src/pages/Shell.tsx:6295
+#: src/pages/Shell.tsx:6166
+#: src/pages/Shell.tsx:6167
+#: src/pages/Shell.tsx:6298
 msgid "bot"
 msgstr "bot"
 
@@ -623,11 +623,11 @@ msgstr "Bot"
 msgid "Bot"
 msgstr "Bot"
 
-#: src/pages/Shell.tsx:4463
+#: src/pages/Shell.tsx:4466
 msgid "Bot screen"
 msgstr "Bot screen"
 
-#: src/pages/Shell.tsx:3618
+#: src/pages/Shell.tsx:3621
 msgid "Bot screen preview"
 msgstr "Bot screen preview"
 
@@ -643,7 +643,7 @@ msgstr "Bots"
 msgid "Bots act without asking by default. Add an exception only when you want to review a type of action first."
 msgstr "Bots act without asking by default. Add an exception only when you want to review a type of action first."
 
-#: src/pages/Shell.tsx:4576
+#: src/pages/Shell.tsx:4579
 msgid "Bots are working"
 msgstr "Bots are working"
 
@@ -693,7 +693,7 @@ msgstr "Cancel new bot"
 msgid "Cancel new group"
 msgstr "Cancel new group"
 
-#: src/pages/Shell.tsx:5434
+#: src/pages/Shell.tsx:5437
 msgid "Cancel reply"
 msgstr "Cancel reply"
 
@@ -734,7 +734,7 @@ msgstr "Chat apps"
 msgid "Chat apps, group channels, and agent connections."
 msgstr "Chat apps, group channels, and agent connections."
 
-#: src/pages/Shell.tsx:5761
+#: src/pages/Shell.tsx:5764
 msgid "Chat Settings"
 msgstr "Chat Settings"
 
@@ -748,8 +748,8 @@ msgstr "Check failed"
 msgid "Check for updates"
 msgstr "Check for updates"
 
-#: src/pages/Shell.tsx:3830
-#: src/pages/Shell.tsx:3842
+#: src/pages/Shell.tsx:3833
+#: src/pages/Shell.tsx:3845
 msgid "Check in."
 msgstr "Check in."
 
@@ -830,7 +830,7 @@ msgstr "Close {title}"
 msgid "Close chart"
 msgstr "Close chart"
 
-#: src/pages/Shell.tsx:4436
+#: src/pages/Shell.tsx:4439
 msgid "Close computer"
 msgstr "Close computer"
 
@@ -864,7 +864,7 @@ msgstr "Close model settings"
 msgid "Close navigation"
 msgstr "Close navigation"
 
-#: src/pages/Shell.tsx:3596
+#: src/pages/Shell.tsx:3599
 msgid "Close panel"
 msgstr "Close panel"
 
@@ -917,24 +917,24 @@ msgid "Complete"
 msgstr "Complete"
 
 #: src/pages/SettingsOverlay.tsx:88
-#: src/pages/Shell.tsx:6454
+#: src/pages/Shell.tsx:6460
 #: src/pages/shell/bot-panel.tsx:56
 msgid "Computer"
 msgstr "Computer"
 
-#: src/pages/Shell.tsx:6504
+#: src/pages/Shell.tsx:6510
 msgid "Computer failed to boot"
 msgstr "Computer failed to boot"
 
-#: src/pages/Shell.tsx:4486
+#: src/pages/Shell.tsx:4489
 msgid "Computer is asleep"
 msgstr "Computer is asleep"
 
-#: src/pages/Shell.tsx:6503
+#: src/pages/Shell.tsx:6509
 msgid "Computer is asleep. Open it to wake."
 msgstr "Computer is asleep. Open it to wake."
 
-#: src/pages/Shell.tsx:6505
+#: src/pages/Shell.tsx:6511
 msgid "Computer is stopped"
 msgstr "Computer is stopped"
 
@@ -1070,7 +1070,7 @@ msgstr "Continue in Background"
 msgid "Continue with email"
 msgstr "Continue with email"
 
-#: src/pages/Shell.tsx:5957
+#: src/pages/Shell.tsx:5960
 msgid "Copy"
 msgstr "Copy"
 
@@ -1254,7 +1254,7 @@ msgstr "Could not load artifacts."
 msgid "Could not load bots. Reload to try again."
 msgstr "Could not load bots. Reload to try again."
 
-#: src/components/computer/TerminalApp.tsx:78
+#: src/components/computer/TerminalApp.tsx:84
 msgid "Could not load commands"
 msgstr "Could not load commands"
 
@@ -1357,7 +1357,7 @@ msgstr "Could not reset password"
 msgid "Could not revoke connection"
 msgstr "Could not revoke connection"
 
-#: src/pages/Shell.tsx:3896
+#: src/pages/Shell.tsx:3899
 msgid "Could not run routine"
 msgstr "Could not run routine"
 
@@ -1379,7 +1379,7 @@ msgstr "Could not save group"
 msgid "Could not save model"
 msgstr "Could not save model"
 
-#: src/pages/Shell.tsx:3867
+#: src/pages/Shell.tsx:3870
 msgid "Could not save routine"
 msgstr "Could not save routine"
 
@@ -1486,7 +1486,7 @@ msgstr "Create account"
 msgid "Create group"
 msgstr "Create group"
 
-#: src/pages/Shell.tsx:3438
+#: src/pages/Shell.tsx:3441
 #: src/pages/shell/bot-picker.tsx:74
 msgid "Create new Bot"
 msgstr "Create new Bot"
@@ -1636,11 +1636,11 @@ msgstr "Delete group"
 msgid "Delete memories too"
 msgstr "Delete memories too"
 
-#: src/pages/Shell.tsx:4049
+#: src/pages/Shell.tsx:4052
 msgid "Delete space"
 msgstr "Delete space"
 
-#: src/pages/Shell.tsx:6293
+#: src/pages/Shell.tsx:6296
 msgid "deleted"
 msgstr "deleted"
 
@@ -1701,7 +1701,7 @@ msgstr "Disconnecting…"
 msgid "Dismiss"
 msgstr "Dismiss"
 
-#: src/pages/Shell.tsx:5410
+#: src/pages/Shell.tsx:5413
 msgid "Dismiss error"
 msgstr "Dismiss error"
 
@@ -1781,7 +1781,7 @@ msgstr "Duplicate"
 msgid "e.g. Hivenet Agent, Presales, Timesheets bot"
 msgstr "e.g. Hivenet Agent, Presales, Timesheets bot"
 
-#: src/pages/Shell.tsx:6113
+#: src/pages/Shell.tsx:6116
 msgid "Earlier message"
 msgstr "Earlier message"
 
@@ -2004,8 +2004,8 @@ msgid "Git event"
 msgstr "Git event"
 
 #: src/pages/MessagingSettingsOverlay.tsx:204
-#: src/pages/Shell.tsx:3407
-#: src/pages/Shell.tsx:3566
+#: src/pages/Shell.tsx:3410
+#: src/pages/Shell.tsx:3569
 msgid "Group"
 msgstr "Group"
 
@@ -2055,7 +2055,7 @@ msgstr "Hear a sample"
 msgid "Hi, this is how I'll sound when I read replies out loud."
 msgstr "Hi, this is how I'll sound when I read replies out loud."
 
-#: src/pages/Shell.tsx:3316
+#: src/pages/Shell.tsx:3318
 msgid "Hide bots"
 msgstr "Hide bots"
 
@@ -2086,7 +2086,7 @@ msgstr "How often"
 msgid "How to check"
 msgstr "How to check"
 
-#: src/pages/Shell.tsx:6013
+#: src/pages/Shell.tsx:6016
 msgid "I’m done"
 msgstr "I’m done"
 
@@ -2169,21 +2169,21 @@ msgstr "Isolated preview — no access to your account"
 msgid "Its conversation, files, and routines will be permanently deleted. Bots it created stay in your list."
 msgstr "Its conversation, files, and routines will be permanently deleted. Bots it created stay in your list."
 
-#: src/pages/Shell.tsx:4948
+#: src/pages/Shell.tsx:4951
 msgid "Jump to latest"
 msgstr "Jump to latest"
 
-#: src/pages/Shell.tsx:6103
+#: src/pages/Shell.tsx:6106
 msgid "Jump to replied message"
 msgstr "Jump to replied message"
 
 #. placeholder {0}: accessibleReplyExcerpt(message.replyQuote)
-#: src/pages/Shell.tsx:6100
+#: src/pages/Shell.tsx:6103
 msgid "Jump to replied message: “{0}”"
 msgstr "Jump to replied message: “{0}”"
 
 #. placeholder {0}: accessibleReplyExcerpt(previewMessageText(replyPreview))
-#: src/pages/Shell.tsx:6102
+#: src/pages/Shell.tsx:6105
 msgid "Jump to replied message: {0}"
 msgstr "Jump to replied message: {0}"
 
@@ -2214,7 +2214,7 @@ msgstr "Language"
 msgid "Later"
 msgstr "Later"
 
-#: src/components/computer/TerminalApp.tsx:39
+#: src/components/computer/TerminalApp.tsx:42
 msgid "Launched {app}"
 msgstr "Launched {app}"
 
@@ -2250,7 +2250,7 @@ msgstr "Listening"
 msgid "Listening…"
 msgstr "Listening…"
 
-#: src/pages/Shell.tsx:4813
+#: src/pages/Shell.tsx:4816
 msgid "Load earlier messages"
 msgstr "Load earlier messages"
 
@@ -2301,7 +2301,7 @@ msgstr "Loading voice providers…"
 #: src/pages/IntegrationSetup.tsx:72
 #: src/pages/Onboarding.tsx:379
 #: src/pages/PeerMessagesOverlay.tsx:98
-#: src/pages/Shell.tsx:4813
+#: src/pages/Shell.tsx:4816
 msgid "Loading…"
 msgstr "Loading…"
 
@@ -2414,7 +2414,7 @@ msgstr "Memory"
 msgid "Memory scope"
 msgstr "Memory scope"
 
-#: src/pages/Shell.tsx:5492
+#: src/pages/Shell.tsx:5495
 msgid "Mentions"
 msgstr "Mentions"
 
@@ -2422,8 +2422,8 @@ msgstr "Mentions"
 msgid "Mentions only"
 msgstr "Mentions only"
 
-#: src/pages/Shell.tsx:5693
-#: src/pages/Shell.tsx:5827
+#: src/pages/Shell.tsx:5696
+#: src/pages/Shell.tsx:5830
 msgid "Message"
 msgstr "Message"
 
@@ -2432,12 +2432,12 @@ msgstr "Message"
 msgid "Message"
 msgstr "Message"
 
-#: src/pages/Shell.tsx:5689
-#: src/pages/Shell.tsx:5693
+#: src/pages/Shell.tsx:5692
+#: src/pages/Shell.tsx:5696
 msgid "Message {activeName}"
 msgstr "Message {activeName}"
 
-#: src/pages/Shell.tsx:5387
+#: src/pages/Shell.tsx:5390
 msgid "Message composer"
 msgstr "Message composer"
 
@@ -2446,15 +2446,15 @@ msgstr "Message composer"
 msgid "Message event"
 msgstr "Message event"
 
-#: src/pages/Shell.tsx:6181
+#: src/pages/Shell.tsx:6184
 msgid "Message from {peer}"
 msgstr "Message from {peer}"
 
-#: src/pages/Shell.tsx:5690
+#: src/pages/Shell.tsx:5693
 msgid "Message…"
 msgstr "Message…"
 
-#: src/pages/Shell.tsx:6181
+#: src/pages/Shell.tsx:6184
 msgid "Messaged {peer}"
 msgstr "Messaged {peer}"
 
@@ -2536,7 +2536,7 @@ msgstr "Models from server"
 msgid "Monthly"
 msgstr "Monthly"
 
-#: src/pages/Shell.tsx:5946
+#: src/pages/Shell.tsx:5949
 msgid "More"
 msgstr "More"
 
@@ -2585,7 +2585,7 @@ msgstr "Needs input"
 msgid "Needs takeover"
 msgstr "Needs takeover"
 
-#: src/pages/Shell.tsx:4383
+#: src/pages/Shell.tsx:4386
 msgid "Needs you"
 msgstr "Needs you"
 
@@ -2638,6 +2638,10 @@ msgstr "no auth"
 #: src/pages/PluginsOverlay.tsx:1037
 msgid "No authentication"
 msgstr "No authentication"
+
+#: src/components/computer/TerminalApp.tsx:49
+msgid "No bot activity yet."
+msgstr "No bot activity yet."
 
 #: src/pages/shell/command-palette.tsx:107
 msgid "No bots"
@@ -2786,14 +2790,14 @@ msgstr "On a schedule"
 msgid "on the 1st at {0}"
 msgstr "on the 1st at {0}"
 
-#: src/pages/Shell.tsx:4087
+#: src/pages/Shell.tsx:4090
 msgid "Only empty spaces can be deleted. Delete its bots and groups first."
 msgstr "Only empty spaces can be deleted. Delete its bots and groups first."
 
 #: src/pages/ScratchpadSection.tsx:159
-#: src/pages/Shell.tsx:3644
-#: src/pages/Shell.tsx:3649
-#: src/pages/Shell.tsx:6475
+#: src/pages/Shell.tsx:3647
+#: src/pages/Shell.tsx:3652
+#: src/pages/Shell.tsx:6481
 msgid "Open"
 msgstr "Open"
 
@@ -2802,11 +2806,11 @@ msgstr "Open"
 msgid "Open {0}"
 msgstr "Open {0}"
 
-#: src/pages/Shell.tsx:3612
+#: src/pages/Shell.tsx:3615
 msgid "Open in full window"
 msgstr "Open in full window"
 
-#: src/pages/Shell.tsx:3367
+#: src/pages/Shell.tsx:3370
 msgid "Open navigation"
 msgstr "Open navigation"
 
@@ -2819,11 +2823,11 @@ msgstr "Open work"
 msgid "OpenAI-compatible server URL"
 msgstr "OpenAI-compatible server URL"
 
-#: src/components/computer/TerminalApp.tsx:38
+#: src/components/computer/TerminalApp.tsx:41
 msgid "Opened {path}"
 msgstr "Opened {path}"
 
-#: src/pages/Shell.tsx:6304
+#: src/pages/Shell.tsx:6307
 msgid "Opened its thread."
 msgstr "Opened its thread."
 
@@ -2973,15 +2977,15 @@ msgstr "Pull request"
 msgid "Queued"
 msgstr "Queued"
 
-#: src/pages/Shell.tsx:5030
+#: src/pages/Shell.tsx:5033
 msgid "Quote"
 msgstr "Quote"
 
-#: src/pages/Shell.tsx:5903
+#: src/pages/Shell.tsx:5906
 msgid "React"
 msgstr "React"
 
-#: src/pages/Shell.tsx:5914
+#: src/pages/Shell.tsx:5917
 msgid "Reactions"
 msgstr "Reactions"
 
@@ -3077,7 +3081,7 @@ msgstr "Refresh view"
 msgid "Refreshing…"
 msgstr "Refreshing…"
 
-#: src/pages/Shell.tsx:6003
+#: src/pages/Shell.tsx:6006
 msgid "Release"
 msgstr "Release"
 
@@ -3097,7 +3101,7 @@ msgid "Remove"
 msgstr "Remove"
 
 #. placeholder {0}: attachment.file.name
-#: src/pages/Shell.tsx:5478
+#: src/pages/Shell.tsx:5481
 msgid "Remove {0}"
 msgstr "Remove {0}"
 
@@ -3106,7 +3110,7 @@ msgid "Remove Git event"
 msgstr "Remove Git event"
 
 #. placeholder {0}: mention.name
-#: src/pages/Shell.tsx:5626
+#: src/pages/Shell.tsx:5629
 msgid "Remove mention {0}"
 msgstr "Remove mention {0}"
 
@@ -3119,7 +3123,7 @@ msgid "Remove schedule"
 msgstr "Remove schedule"
 
 #. placeholder {0}: selectedSkill.name
-#: src/pages/Shell.tsx:5605
+#: src/pages/Shell.tsx:5608
 msgid "Remove skill {0}"
 msgstr "Remove skill {0}"
 
@@ -3127,7 +3131,7 @@ msgstr "Remove skill {0}"
 msgid "Remove webhook"
 msgstr "Remove webhook"
 
-#: src/pages/Shell.tsx:6303
+#: src/pages/Shell.tsx:6306
 msgid "Removed with chat, computer, and memory."
 msgstr "Removed with chat, computer, and memory."
 
@@ -3142,7 +3146,7 @@ msgid "Removing…"
 msgstr "Removing…"
 
 #: src/pages/BotContextMenu.tsx:119
-#: src/pages/Shell.tsx:4176
+#: src/pages/Shell.tsx:4179
 #: src/pages/shell/dialogs.tsx:246
 msgid "Rename section"
 msgstr "Rename section"
@@ -3161,24 +3165,24 @@ msgstr "Replace API key"
 msgid "Replace key"
 msgstr "Replace key"
 
-#: src/pages/Shell.tsx:5935
+#: src/pages/Shell.tsx:5938
 msgid "Reply"
 msgstr "Reply"
 
-#: src/pages/Shell.tsx:5442
+#: src/pages/Shell.tsx:5445
 msgid "Reply cancelled"
 msgstr "Reply cancelled"
 
 #. placeholder {0}: replyNameRef.current
-#: src/pages/Shell.tsx:5380
+#: src/pages/Shell.tsx:5383
 msgid "Replying to {0}"
 msgstr "Replying to {0}"
 
-#: src/pages/Shell.tsx:5430
+#: src/pages/Shell.tsx:5433
 msgid "Replying to {replyName}"
 msgstr "Replying to {replyName}"
 
-#: src/pages/Shell.tsx:5429
+#: src/pages/Shell.tsx:5432
 msgid "Replying to {replyName}: “{replyQuote}”"
 msgstr "Replying to {replyName}: “{replyQuote}”"
 
@@ -3265,8 +3269,8 @@ msgid "Rotate key"
 msgstr "Rotate key"
 
 #: src/pages/RoutineEditor.tsx:265
-#: src/pages/Shell.tsx:3829
-#: src/pages/Shell.tsx:3841
+#: src/pages/Shell.tsx:3832
+#: src/pages/Shell.tsx:3844
 msgid "Routine"
 msgstr "Routine"
 
@@ -3283,7 +3287,7 @@ msgstr "Run at"
 msgid "Run history"
 msgstr "Run history"
 
-#: src/pages/Shell.tsx:3822
+#: src/pages/Shell.tsx:3825
 msgid "Run time must be in the future."
 msgstr "Run time must be in the future."
 
@@ -3411,12 +3415,12 @@ msgstr "Search providers"
 msgid "Searching…"
 msgstr "Searching…"
 
-#: src/pages/Shell.tsx:3408
+#: src/pages/Shell.tsx:3411
 msgid "Select a bot"
 msgstr "Select a bot"
 
-#: src/pages/Shell.tsx:5724
-#: src/pages/Shell.tsx:5745
+#: src/pages/Shell.tsx:5727
+#: src/pages/Shell.tsx:5748
 msgid "Send"
 msgstr "Send"
 
@@ -3473,15 +3477,15 @@ msgstr "Server URL"
 #: src/pages/SettingsOverlay.tsx:149
 #: src/pages/Shell.tsx:3270
 #: src/pages/Shell.tsx:3277
-#: src/pages/Shell.tsx:3562
+#: src/pages/Shell.tsx:3565
 msgid "Settings"
 msgstr "Settings"
 
-#: src/pages/Shell.tsx:5763
+#: src/pages/Shell.tsx:5766
 msgid "Settings: General"
 msgstr "Settings: General"
 
-#: src/pages/Shell.tsx:5765
+#: src/pages/Shell.tsx:5768
 msgid "Settings: Usage"
 msgstr "Settings: Usage"
 
@@ -3507,13 +3511,13 @@ msgstr "Shared chat with 2-6 bots. They all reply in the same thread."
 msgid "Shared documents"
 msgstr "Shared documents"
 
-#: src/pages/Shell.tsx:3316
-#: src/pages/Shell.tsx:3377
-#: src/pages/Shell.tsx:3378
+#: src/pages/Shell.tsx:3318
+#: src/pages/Shell.tsx:3380
+#: src/pages/Shell.tsx:3381
 msgid "Show bots"
 msgstr "Show bots"
 
-#: src/pages/Shell.tsx:3586
+#: src/pages/Shell.tsx:3589
 msgid "Show computer"
 msgstr "Show computer"
 
@@ -3530,7 +3534,7 @@ msgstr "Show more"
 msgid "Show password"
 msgstr "Show password"
 
-#: src/pages/Shell.tsx:3586
+#: src/pages/Shell.tsx:3589
 msgid "Show settings"
 msgstr "Show settings"
 
@@ -3552,7 +3556,7 @@ msgid "Sign up"
 msgstr "Sign up"
 
 #. placeholder {0}: skill.name
-#: src/pages/Shell.tsx:5539
+#: src/pages/Shell.tsx:5542
 msgid "Skill {0}"
 msgstr "Skill {0}"
 
@@ -3561,7 +3565,7 @@ msgid "Skills"
 msgstr "Skills"
 
 #: src/components/integrations/IntegrationSetup.tsx:365
-#: src/pages/Shell.tsx:6010
+#: src/pages/Shell.tsx:6013
 msgid "Skip"
 msgstr "Skip"
 
@@ -3602,8 +3606,8 @@ msgstr "Space interrupts · Esc hangs up"
 msgid "Spaces"
 msgstr "Spaces"
 
-#: src/pages/Shell.tsx:6149
-#: src/pages/Shell.tsx:6404
+#: src/pages/Shell.tsx:6152
+#: src/pages/Shell.tsx:6410
 msgid "Speak"
 msgstr "Speak"
 
@@ -3615,8 +3619,8 @@ msgstr "Speak + transcribe"
 msgid "Speak only"
 msgstr "Speak only"
 
-#: src/pages/Shell.tsx:6145
-#: src/pages/Shell.tsx:6400
+#: src/pages/Shell.tsx:6148
+#: src/pages/Shell.tsx:6406
 msgid "Speak this reply"
 msgstr "Speak this reply"
 
@@ -3642,16 +3646,16 @@ msgstr "Starting…"
 msgid "Steps"
 msgstr "Steps"
 
-#: src/pages/Shell.tsx:4398
-#: src/pages/Shell.tsx:4403
-#: src/pages/Shell.tsx:5734
-#: src/pages/Shell.tsx:6149
-#: src/pages/Shell.tsx:6404
+#: src/pages/Shell.tsx:4401
+#: src/pages/Shell.tsx:4406
+#: src/pages/Shell.tsx:5737
+#: src/pages/Shell.tsx:6152
+#: src/pages/Shell.tsx:6410
 msgid "Stop"
 msgstr "Stop"
 
-#: src/pages/Shell.tsx:6145
-#: src/pages/Shell.tsx:6400
+#: src/pages/Shell.tsx:6148
+#: src/pages/Shell.tsx:6406
 msgid "Stop speaking"
 msgstr "Stop speaking"
 
@@ -3677,7 +3681,7 @@ msgstr "Stored securely. Never shown here."
 msgid "Stream replies"
 msgstr "Stream replies"
 
-#: src/pages/Shell.tsx:6257
+#: src/pages/Shell.tsx:6260
 msgid "subagent"
 msgstr "subagent"
 
@@ -3713,7 +3717,7 @@ msgstr "System"
 msgid "Teach a task"
 msgstr "Teach a task"
 
-#: src/pages/Shell.tsx:3483
+#: src/pages/Shell.tsx:3486
 msgid "Teaching in progress. Stop teaching before sending a new message."
 msgstr "Teaching in progress. Stop teaching before sending a new message."
 
@@ -3721,7 +3725,7 @@ msgstr "Teaching in progress. Stop teaching before sending a new message."
 msgid "Team"
 msgstr "Team"
 
-#: src/pages/Shell.tsx:6509
+#: src/pages/Shell.tsx:6515
 msgid "Team Computer"
 msgstr "Team Computer"
 
@@ -3763,7 +3767,7 @@ msgstr "The selected memory provider is not available in this build."
 msgid "Thinking"
 msgstr "Thinking"
 
-#: src/pages/Shell.tsx:6489
+#: src/pages/Shell.tsx:6495
 msgid "This bot runs on this computer, not a Linux desktop. Shell and files use your home folder."
 msgstr "This bot runs on this computer, not a Linux desktop. Shell and files use your home folder."
 
@@ -3997,8 +4001,8 @@ msgid "Version"
 msgstr "Version"
 
 #: src/pages/SettingsOverlay.tsx:86
-#: src/pages/Shell.tsx:5711
-#: src/pages/Shell.tsx:5712
+#: src/pages/Shell.tsx:5714
+#: src/pages/Shell.tsx:5715
 #: src/pages/shell/bot-panel.tsx:582
 #: src/pages/VoiceSettingsOverlay.tsx:170
 #: src/pages/VoiceSettingsOverlay.tsx:293
@@ -4077,11 +4081,11 @@ msgstr "Where should bots run?"
 msgid "Working…"
 msgstr "Working…"
 
-#: src/components/computer/TerminalApp.tsx:36
+#: src/components/computer/TerminalApp.tsx:39
 msgid "Wrote {path}"
 msgstr "Wrote {path}"
 
-#: src/pages/Shell.tsx:5859
+#: src/pages/Shell.tsx:5862
 msgid "Yesterday"
 msgstr "Yesterday"
 
@@ -4098,7 +4102,7 @@ msgstr "You can close this tab if it does not redirect automatically."
 msgid "You can close this window."
 msgstr "You can close this window."
 
-#: src/pages/Shell.tsx:4387
+#: src/pages/Shell.tsx:4390
 msgid "You have control"
 msgstr "You have control"
 

@@ -80,11 +80,11 @@ msgid "{0} will still respond to direct mentions."
 msgstr ""
 
 #. placeholder {0}: active.name
-#: src/pages/Shell.tsx:3655
+#: src/pages/Shell.tsx:3658
 msgid "{0}'s screen"
 msgstr "{0}의 화면"
 
-#: src/pages/Shell.tsx:6509
+#: src/pages/Shell.tsx:6515
 msgid "{botName}’s computer"
 msgstr "{botName}의 컴퓨터"
 
@@ -135,12 +135,12 @@ msgstr "{title}, {label}"
 msgid "{toolCount, plural, one {# tool} other {# tools}}"
 msgstr ""
 
-#: src/pages/Shell.tsx:4575
+#: src/pages/Shell.tsx:4578
 msgid "{workingBotName} is working"
 msgstr "{workingBotName} 작업 중"
 
 #. placeholder {0}: mention.name
-#: src/pages/Shell.tsx:5506
+#: src/pages/Shell.tsx:5509
 msgid "@{0}"
 msgstr "@{0}"
 
@@ -191,11 +191,11 @@ msgstr "작업 실행 전 확인"
 #. placeholder {0}: sectionMenu.section.name
 #: src/pages/BotContextMenu.tsx:84
 #: src/pages/Shell.tsx:2924
-#: src/pages/Shell.tsx:4161
+#: src/pages/Shell.tsx:4164
 msgid "Actions for {0}"
 msgstr "{0} 작업 메뉴"
 
-#: src/pages/Shell.tsx:4035
+#: src/pages/Shell.tsx:4038
 msgid "Actions for space"
 msgstr ""
 
@@ -222,11 +222,11 @@ msgstr "추가"
 msgid "Add a model in Settings to use this."
 msgstr "이 기능을 사용하려면 설정에서 모델을 추가하세요."
 
-#: src/pages/Shell.tsx:3817
+#: src/pages/Shell.tsx:3820
 msgid "Add a run time for this one-shot."
 msgstr "이 일회성 실행의 시간을 추가하세요."
 
-#: src/pages/Shell.tsx:3795
+#: src/pages/Shell.tsx:3798
 msgid "Add a schedule, webhook, GitHub, or message trigger"
 msgstr ""
 
@@ -326,7 +326,7 @@ msgstr "고급 설정"
 msgid "Advanced..."
 msgstr "고급..."
 
-#: src/pages/Shell.tsx:3417
+#: src/pages/Shell.tsx:3420
 msgid "Agent computer"
 msgstr "Agent 컴퓨터"
 
@@ -459,7 +459,7 @@ msgstr "이 서버를 승인하면 Bot이 제공되는 도구를 사용할 수 �
 msgid "Archive"
 msgstr "보관"
 
-#: src/pages/Shell.tsx:6291
+#: src/pages/Shell.tsx:6294
 msgid "archived"
 msgstr "보관됨"
 
@@ -467,7 +467,7 @@ msgstr "보관됨"
 msgid "Archived"
 msgstr "보관됨"
 
-#: src/pages/Shell.tsx:6302
+#: src/pages/Shell.tsx:6305
 msgid "Archived. Chat, memory, and files kept."
 msgstr "보관되었습니다. 대화, 기억, 파일은 유지됩니다."
 
@@ -526,15 +526,15 @@ msgstr "{0}에"
 msgid "at {timeSelect}"
 msgstr "{timeSelect}에"
 
-#: src/pages/Shell.tsx:5586
+#: src/pages/Shell.tsx:5589
 msgid "Attach file"
 msgstr "파일 첨부"
 
-#: src/components/computer/TerminalApp.tsx:37
+#: src/components/computer/TerminalApp.tsx:40
 msgid "Attached {path}"
 msgstr ""
 
-#: src/pages/Shell.tsx:5825
+#: src/pages/Shell.tsx:5828
 msgid "Attachment"
 msgstr "첨부 파일"
 
@@ -597,18 +597,18 @@ msgstr "서버 주소"
 msgid "Bearer token"
 msgstr "Bearer 토큰"
 
-#: src/pages/Shell.tsx:6501
+#: src/pages/Shell.tsx:6507
 msgid "Booting live desktop…"
 msgstr "라이브 데스크톱 시작 중…"
 
 #. placeholder {0}: computerBot?.name ?? active?.name
-#: src/pages/Shell.tsx:4341
+#: src/pages/Shell.tsx:4344
 msgid "Booting up {0}’s computer"
 msgstr "{0}의 컴퓨터를 켜는 중"
 
-#: src/pages/Shell.tsx:6163
-#: src/pages/Shell.tsx:6164
-#: src/pages/Shell.tsx:6295
+#: src/pages/Shell.tsx:6166
+#: src/pages/Shell.tsx:6167
+#: src/pages/Shell.tsx:6298
 msgid "bot"
 msgstr "Bot"
 
@@ -623,11 +623,11 @@ msgstr "봇"
 msgid "Bot"
 msgstr "Bot"
 
-#: src/pages/Shell.tsx:4463
+#: src/pages/Shell.tsx:4466
 msgid "Bot screen"
 msgstr "Bot 화면"
 
-#: src/pages/Shell.tsx:3618
+#: src/pages/Shell.tsx:3621
 msgid "Bot screen preview"
 msgstr "Bot 화면 미리보기"
 
@@ -643,7 +643,7 @@ msgstr ""
 msgid "Bots act without asking by default. Add an exception only when you want to review a type of action first."
 msgstr "Bot은 기본적으로 묻지 않고 작업합니다. 먼저 확인하고 싶은 작업만 예외로 추가하세요."
 
-#: src/pages/Shell.tsx:4576
+#: src/pages/Shell.tsx:4579
 msgid "Bots are working"
 msgstr "봇 작업 중"
 
@@ -693,7 +693,7 @@ msgstr "새 Bot 만들기 취소"
 msgid "Cancel new group"
 msgstr "새 그룹 만들기 취소"
 
-#: src/pages/Shell.tsx:5434
+#: src/pages/Shell.tsx:5437
 msgid "Cancel reply"
 msgstr "답장 취소"
 
@@ -734,7 +734,7 @@ msgstr "채팅 앱"
 msgid "Chat apps, group channels, and agent connections."
 msgstr "채팅 앱, 그룹 채널 및 Agent 연결을 관리합니다."
 
-#: src/pages/Shell.tsx:5761
+#: src/pages/Shell.tsx:5764
 msgid "Chat Settings"
 msgstr "채팅 설정"
 
@@ -748,8 +748,8 @@ msgstr "확인 실패"
 msgid "Check for updates"
 msgstr "업데이트 확인"
 
-#: src/pages/Shell.tsx:3830
-#: src/pages/Shell.tsx:3842
+#: src/pages/Shell.tsx:3833
+#: src/pages/Shell.tsx:3845
 msgid "Check in."
 msgstr "확인해 주세요."
 
@@ -830,7 +830,7 @@ msgstr ""
 msgid "Close chart"
 msgstr "차트 닫기"
 
-#: src/pages/Shell.tsx:4436
+#: src/pages/Shell.tsx:4439
 msgid "Close computer"
 msgstr "컴퓨터 닫기"
 
@@ -864,7 +864,7 @@ msgstr "AI 모델 설정 닫기"
 msgid "Close navigation"
 msgstr "메뉴 닫기"
 
-#: src/pages/Shell.tsx:3596
+#: src/pages/Shell.tsx:3599
 msgid "Close panel"
 msgstr "패널 닫기"
 
@@ -917,24 +917,24 @@ msgid "Complete"
 msgstr "완료"
 
 #: src/pages/SettingsOverlay.tsx:88
-#: src/pages/Shell.tsx:6454
+#: src/pages/Shell.tsx:6460
 #: src/pages/shell/bot-panel.tsx:56
 msgid "Computer"
 msgstr "컴퓨터"
 
-#: src/pages/Shell.tsx:6504
+#: src/pages/Shell.tsx:6510
 msgid "Computer failed to boot"
 msgstr "컴퓨터를 시작하지 못했습니다"
 
-#: src/pages/Shell.tsx:4486
+#: src/pages/Shell.tsx:4489
 msgid "Computer is asleep"
 msgstr "컴퓨터가 절전 상태입니다"
 
-#: src/pages/Shell.tsx:6503
+#: src/pages/Shell.tsx:6509
 msgid "Computer is asleep. Open it to wake."
 msgstr "컴퓨터가 절전 상태입니다. 열어 깨우세요."
 
-#: src/pages/Shell.tsx:6505
+#: src/pages/Shell.tsx:6511
 msgid "Computer is stopped"
 msgstr "컴퓨터가 중지됨"
 
@@ -1070,7 +1070,7 @@ msgstr ""
 msgid "Continue with email"
 msgstr "이메일로 계속하기"
 
-#: src/pages/Shell.tsx:5957
+#: src/pages/Shell.tsx:5960
 msgid "Copy"
 msgstr "복사"
 
@@ -1254,7 +1254,7 @@ msgstr ""
 msgid "Could not load bots. Reload to try again."
 msgstr ""
 
-#: src/components/computer/TerminalApp.tsx:78
+#: src/components/computer/TerminalApp.tsx:84
 msgid "Could not load commands"
 msgstr ""
 
@@ -1357,7 +1357,7 @@ msgstr "비밀번호를 재설정할 수 없습니다"
 msgid "Could not revoke connection"
 msgstr "연결을 해제하지 못했습니다."
 
-#: src/pages/Shell.tsx:3896
+#: src/pages/Shell.tsx:3899
 msgid "Could not run routine"
 msgstr "루틴을 실행할 수 없습니다"
 
@@ -1379,7 +1379,7 @@ msgstr "그룹을 저장하지 못했습니다."
 msgid "Could not save model"
 msgstr "AI 모델을 저장하지 못했습니다."
 
-#: src/pages/Shell.tsx:3867
+#: src/pages/Shell.tsx:3870
 msgid "Could not save routine"
 msgstr "자동 실행을 저장하지 못했습니다."
 
@@ -1486,7 +1486,7 @@ msgstr "계정 만들기"
 msgid "Create group"
 msgstr "그룹 만들기"
 
-#: src/pages/Shell.tsx:3438
+#: src/pages/Shell.tsx:3441
 #: src/pages/shell/bot-picker.tsx:74
 msgid "Create new Bot"
 msgstr "새 Bot 만들기"
@@ -1636,11 +1636,11 @@ msgstr "그룹 삭제"
 msgid "Delete memories too"
 msgstr "기억도 함께 삭제"
 
-#: src/pages/Shell.tsx:4049
+#: src/pages/Shell.tsx:4052
 msgid "Delete space"
 msgstr ""
 
-#: src/pages/Shell.tsx:6293
+#: src/pages/Shell.tsx:6296
 msgid "deleted"
 msgstr "삭제됨"
 
@@ -1701,7 +1701,7 @@ msgstr "연결 해제 중…"
 msgid "Dismiss"
 msgstr "닫기"
 
-#: src/pages/Shell.tsx:5410
+#: src/pages/Shell.tsx:5413
 msgid "Dismiss error"
 msgstr "오류 닫기"
 
@@ -1781,7 +1781,7 @@ msgstr "복제"
 msgid "e.g. Hivenet Agent, Presales, Timesheets bot"
 msgstr "예: Hivenet Agent, Presales, 근무표 봇"
 
-#: src/pages/Shell.tsx:6113
+#: src/pages/Shell.tsx:6116
 msgid "Earlier message"
 msgstr "이전 메시지"
 
@@ -2004,8 +2004,8 @@ msgid "Git event"
 msgstr "Git 이벤트"
 
 #: src/pages/MessagingSettingsOverlay.tsx:204
-#: src/pages/Shell.tsx:3407
-#: src/pages/Shell.tsx:3566
+#: src/pages/Shell.tsx:3410
+#: src/pages/Shell.tsx:3569
 msgid "Group"
 msgstr "그룹"
 
@@ -2055,7 +2055,7 @@ msgstr "샘플 듣기"
 msgid "Hi, this is how I'll sound when I read replies out loud."
 msgstr "안녕하세요. 답변을 소리 내어 읽을 때 이런 목소리로 들립니다."
 
-#: src/pages/Shell.tsx:3316
+#: src/pages/Shell.tsx:3318
 msgid "Hide bots"
 msgstr ""
 
@@ -2086,7 +2086,7 @@ msgstr "실행 주기"
 msgid "How to check"
 msgstr "완료 확인 방법"
 
-#: src/pages/Shell.tsx:6013
+#: src/pages/Shell.tsx:6016
 msgid "I’m done"
 msgstr "조작 끝내기"
 
@@ -2169,21 +2169,21 @@ msgstr ""
 msgid "Its conversation, files, and routines will be permanently deleted. Bots it created stay in your list."
 msgstr "대화, 파일, 자동 실행이 영구 삭제됩니다. 이 Bot이 만든 다른 Bot은 목록에 남습니다."
 
-#: src/pages/Shell.tsx:4948
+#: src/pages/Shell.tsx:4951
 msgid "Jump to latest"
 msgstr "최신 메시지로 이동"
 
-#: src/pages/Shell.tsx:6103
+#: src/pages/Shell.tsx:6106
 msgid "Jump to replied message"
 msgstr "답장한 메시지로 이동"
 
 #. placeholder {0}: accessibleReplyExcerpt(message.replyQuote)
-#: src/pages/Shell.tsx:6100
+#: src/pages/Shell.tsx:6103
 msgid "Jump to replied message: “{0}”"
 msgstr ""
 
 #. placeholder {0}: accessibleReplyExcerpt(previewMessageText(replyPreview))
-#: src/pages/Shell.tsx:6102
+#: src/pages/Shell.tsx:6105
 msgid "Jump to replied message: {0}"
 msgstr ""
 
@@ -2214,7 +2214,7 @@ msgstr "언어"
 msgid "Later"
 msgstr ""
 
-#: src/components/computer/TerminalApp.tsx:39
+#: src/components/computer/TerminalApp.tsx:42
 msgid "Launched {app}"
 msgstr ""
 
@@ -2250,7 +2250,7 @@ msgstr ""
 msgid "Listening…"
 msgstr "듣는 중…"
 
-#: src/pages/Shell.tsx:4813
+#: src/pages/Shell.tsx:4816
 msgid "Load earlier messages"
 msgstr "이전 메시지 불러오기"
 
@@ -2301,7 +2301,7 @@ msgstr "음성 서비스를 불러오는 중…"
 #: src/pages/IntegrationSetup.tsx:72
 #: src/pages/Onboarding.tsx:379
 #: src/pages/PeerMessagesOverlay.tsx:98
-#: src/pages/Shell.tsx:4813
+#: src/pages/Shell.tsx:4816
 msgid "Loading…"
 msgstr "불러오는 중…"
 
@@ -2414,7 +2414,7 @@ msgstr "기억"
 msgid "Memory scope"
 msgstr "기억 사용 범위"
 
-#: src/pages/Shell.tsx:5492
+#: src/pages/Shell.tsx:5495
 msgid "Mentions"
 msgstr "멘션"
 
@@ -2422,8 +2422,8 @@ msgstr "멘션"
 msgid "Mentions only"
 msgstr ""
 
-#: src/pages/Shell.tsx:5693
-#: src/pages/Shell.tsx:5827
+#: src/pages/Shell.tsx:5696
+#: src/pages/Shell.tsx:5830
 msgid "Message"
 msgstr "메시지"
 
@@ -2432,12 +2432,12 @@ msgstr "메시지"
 msgid "Message"
 msgstr "메시지"
 
-#: src/pages/Shell.tsx:5689
-#: src/pages/Shell.tsx:5693
+#: src/pages/Shell.tsx:5692
+#: src/pages/Shell.tsx:5696
 msgid "Message {activeName}"
 msgstr "{activeName}에게 메시지 보내기"
 
-#: src/pages/Shell.tsx:5387
+#: src/pages/Shell.tsx:5390
 msgid "Message composer"
 msgstr "메시지 작성기"
 
@@ -2446,15 +2446,15 @@ msgstr "메시지 작성기"
 msgid "Message event"
 msgstr ""
 
-#: src/pages/Shell.tsx:6181
+#: src/pages/Shell.tsx:6184
 msgid "Message from {peer}"
 msgstr "{peer}의 메시지"
 
-#: src/pages/Shell.tsx:5690
+#: src/pages/Shell.tsx:5693
 msgid "Message…"
 msgstr "메시지를 입력하세요"
 
-#: src/pages/Shell.tsx:6181
+#: src/pages/Shell.tsx:6184
 msgid "Messaged {peer}"
 msgstr "{peer}에게 메시지 보냄"
 
@@ -2536,7 +2536,7 @@ msgstr "서버에서 찾은 모델"
 msgid "Monthly"
 msgstr "매월"
 
-#: src/pages/Shell.tsx:5946
+#: src/pages/Shell.tsx:5949
 msgid "More"
 msgstr ""
 
@@ -2585,7 +2585,7 @@ msgstr "입력 필요"
 msgid "Needs takeover"
 msgstr "인수 필요"
 
-#: src/pages/Shell.tsx:4383
+#: src/pages/Shell.tsx:4386
 msgid "Needs you"
 msgstr ""
 
@@ -2638,6 +2638,10 @@ msgstr "인증 없음"
 #: src/pages/PluginsOverlay.tsx:1037
 msgid "No authentication"
 msgstr "인증 없음"
+
+#: src/components/computer/TerminalApp.tsx:49
+msgid "No bot activity yet."
+msgstr ""
 
 #: src/pages/shell/command-palette.tsx:107
 msgid "No bots"
@@ -2786,14 +2790,14 @@ msgstr "일정에 따라"
 msgid "on the 1st at {0}"
 msgstr "매월 1일 {0}에"
 
-#: src/pages/Shell.tsx:4087
+#: src/pages/Shell.tsx:4090
 msgid "Only empty spaces can be deleted. Delete its bots and groups first."
 msgstr ""
 
 #: src/pages/ScratchpadSection.tsx:159
-#: src/pages/Shell.tsx:3644
-#: src/pages/Shell.tsx:3649
-#: src/pages/Shell.tsx:6475
+#: src/pages/Shell.tsx:3647
+#: src/pages/Shell.tsx:3652
+#: src/pages/Shell.tsx:6481
 msgid "Open"
 msgstr "열기"
 
@@ -2802,11 +2806,11 @@ msgstr "열기"
 msgid "Open {0}"
 msgstr "{0} 열기"
 
-#: src/pages/Shell.tsx:3612
+#: src/pages/Shell.tsx:3615
 msgid "Open in full window"
 msgstr "전체 창으로 열기"
 
-#: src/pages/Shell.tsx:3367
+#: src/pages/Shell.tsx:3370
 msgid "Open navigation"
 msgstr "메뉴 열기"
 
@@ -2819,11 +2823,11 @@ msgstr "진행 중인 작업"
 msgid "OpenAI-compatible server URL"
 msgstr "OpenAI 호환 서버 주소"
 
-#: src/components/computer/TerminalApp.tsx:38
+#: src/components/computer/TerminalApp.tsx:41
 msgid "Opened {path}"
 msgstr ""
 
-#: src/pages/Shell.tsx:6304
+#: src/pages/Shell.tsx:6307
 msgid "Opened its thread."
 msgstr "대화가 만들어졌습니다."
 
@@ -2973,15 +2977,15 @@ msgstr "풀 리퀘스트"
 msgid "Queued"
 msgstr "대기 중"
 
-#: src/pages/Shell.tsx:5030
+#: src/pages/Shell.tsx:5033
 msgid "Quote"
 msgstr ""
 
-#: src/pages/Shell.tsx:5903
+#: src/pages/Shell.tsx:5906
 msgid "React"
 msgstr "반응하기"
 
-#: src/pages/Shell.tsx:5914
+#: src/pages/Shell.tsx:5917
 msgid "Reactions"
 msgstr "반응"
 
@@ -3077,7 +3081,7 @@ msgstr "화면 새로고침"
 msgid "Refreshing…"
 msgstr "새로고침 중…"
 
-#: src/pages/Shell.tsx:6003
+#: src/pages/Shell.tsx:6006
 msgid "Release"
 msgstr "제어권 돌려주기"
 
@@ -3097,7 +3101,7 @@ msgid "Remove"
 msgstr "삭제"
 
 #. placeholder {0}: attachment.file.name
-#: src/pages/Shell.tsx:5478
+#: src/pages/Shell.tsx:5481
 msgid "Remove {0}"
 msgstr "{0} 삭제"
 
@@ -3106,7 +3110,7 @@ msgid "Remove Git event"
 msgstr ""
 
 #. placeholder {0}: mention.name
-#: src/pages/Shell.tsx:5626
+#: src/pages/Shell.tsx:5629
 msgid "Remove mention {0}"
 msgstr "{0} 멘션 삭제"
 
@@ -3119,7 +3123,7 @@ msgid "Remove schedule"
 msgstr "일정 제거"
 
 #. placeholder {0}: selectedSkill.name
-#: src/pages/Shell.tsx:5605
+#: src/pages/Shell.tsx:5608
 msgid "Remove skill {0}"
 msgstr "작업 기술 {0} 삭제"
 
@@ -3127,7 +3131,7 @@ msgstr "작업 기술 {0} 삭제"
 msgid "Remove webhook"
 msgstr "웹훅 제거"
 
-#: src/pages/Shell.tsx:6303
+#: src/pages/Shell.tsx:6306
 msgid "Removed with chat, computer, and memory."
 msgstr "대화, 컴퓨터, 기억과 함께 삭제되었습니다."
 
@@ -3142,7 +3146,7 @@ msgid "Removing…"
 msgstr "삭제 중…"
 
 #: src/pages/BotContextMenu.tsx:119
-#: src/pages/Shell.tsx:4176
+#: src/pages/Shell.tsx:4179
 #: src/pages/shell/dialogs.tsx:246
 msgid "Rename section"
 msgstr "섹션 이름 바꾸기"
@@ -3161,24 +3165,24 @@ msgstr "API 키 교체"
 msgid "Replace key"
 msgstr "키 교체"
 
-#: src/pages/Shell.tsx:5935
+#: src/pages/Shell.tsx:5938
 msgid "Reply"
 msgstr "답장"
 
-#: src/pages/Shell.tsx:5442
+#: src/pages/Shell.tsx:5445
 msgid "Reply cancelled"
 msgstr ""
 
 #. placeholder {0}: replyNameRef.current
-#: src/pages/Shell.tsx:5380
+#: src/pages/Shell.tsx:5383
 msgid "Replying to {0}"
 msgstr ""
 
-#: src/pages/Shell.tsx:5430
+#: src/pages/Shell.tsx:5433
 msgid "Replying to {replyName}"
 msgstr "{replyName}에게 답장"
 
-#: src/pages/Shell.tsx:5429
+#: src/pages/Shell.tsx:5432
 msgid "Replying to {replyName}: “{replyQuote}”"
 msgstr ""
 
@@ -3265,8 +3269,8 @@ msgid "Rotate key"
 msgstr "key 교체"
 
 #: src/pages/RoutineEditor.tsx:265
-#: src/pages/Shell.tsx:3829
-#: src/pages/Shell.tsx:3841
+#: src/pages/Shell.tsx:3832
+#: src/pages/Shell.tsx:3844
 msgid "Routine"
 msgstr "자동 실행"
 
@@ -3283,7 +3287,7 @@ msgstr "실행 시간"
 msgid "Run history"
 msgstr "실행 기록"
 
-#: src/pages/Shell.tsx:3822
+#: src/pages/Shell.tsx:3825
 msgid "Run time must be in the future."
 msgstr "실행 시간은 미래여야 합니다."
 
@@ -3411,12 +3415,12 @@ msgstr "AI 서비스 검색"
 msgid "Searching…"
 msgstr "검색 중…"
 
-#: src/pages/Shell.tsx:3408
+#: src/pages/Shell.tsx:3411
 msgid "Select a bot"
 msgstr "대화할 Bot을 선택하세요"
 
-#: src/pages/Shell.tsx:5724
-#: src/pages/Shell.tsx:5745
+#: src/pages/Shell.tsx:5727
+#: src/pages/Shell.tsx:5748
 msgid "Send"
 msgstr "보내기"
 
@@ -3473,15 +3477,15 @@ msgstr "서버 URL"
 #: src/pages/SettingsOverlay.tsx:149
 #: src/pages/Shell.tsx:3270
 #: src/pages/Shell.tsx:3277
-#: src/pages/Shell.tsx:3562
+#: src/pages/Shell.tsx:3565
 msgid "Settings"
 msgstr "설정"
 
-#: src/pages/Shell.tsx:5763
+#: src/pages/Shell.tsx:5766
 msgid "Settings: General"
 msgstr "설정: 일반"
 
-#: src/pages/Shell.tsx:5765
+#: src/pages/Shell.tsx:5768
 msgid "Settings: Usage"
 msgstr "설정: 사용량"
 
@@ -3507,13 +3511,13 @@ msgstr ""
 msgid "Shared documents"
 msgstr "공유 문서"
 
-#: src/pages/Shell.tsx:3316
-#: src/pages/Shell.tsx:3377
-#: src/pages/Shell.tsx:3378
+#: src/pages/Shell.tsx:3318
+#: src/pages/Shell.tsx:3380
+#: src/pages/Shell.tsx:3381
 msgid "Show bots"
 msgstr ""
 
-#: src/pages/Shell.tsx:3586
+#: src/pages/Shell.tsx:3589
 msgid "Show computer"
 msgstr ""
 
@@ -3530,7 +3534,7 @@ msgstr "더 보기"
 msgid "Show password"
 msgstr "비밀번호 표시"
 
-#: src/pages/Shell.tsx:3586
+#: src/pages/Shell.tsx:3589
 msgid "Show settings"
 msgstr "설정 보기"
 
@@ -3552,7 +3556,7 @@ msgid "Sign up"
 msgstr "가입하기"
 
 #. placeholder {0}: skill.name
-#: src/pages/Shell.tsx:5539
+#: src/pages/Shell.tsx:5542
 msgid "Skill {0}"
 msgstr "작업 기술 {0}"
 
@@ -3561,7 +3565,7 @@ msgid "Skills"
 msgstr "스킬"
 
 #: src/components/integrations/IntegrationSetup.tsx:365
-#: src/pages/Shell.tsx:6010
+#: src/pages/Shell.tsx:6013
 msgid "Skip"
 msgstr "건너뛰기"
 
@@ -3602,8 +3606,8 @@ msgstr "Space: 끼어들기 · Esc: 통화 종료"
 msgid "Spaces"
 msgstr ""
 
-#: src/pages/Shell.tsx:6149
-#: src/pages/Shell.tsx:6404
+#: src/pages/Shell.tsx:6152
+#: src/pages/Shell.tsx:6410
 msgid "Speak"
 msgstr "읽기"
 
@@ -3615,8 +3619,8 @@ msgstr "음성 출력·받아쓰기"
 msgid "Speak only"
 msgstr "음성 출력만"
 
-#: src/pages/Shell.tsx:6145
-#: src/pages/Shell.tsx:6400
+#: src/pages/Shell.tsx:6148
+#: src/pages/Shell.tsx:6406
 msgid "Speak this reply"
 msgstr "이 답변 읽기"
 
@@ -3642,16 +3646,16 @@ msgstr "시작하는 중…"
 msgid "Steps"
 msgstr "실행 단계"
 
-#: src/pages/Shell.tsx:4398
-#: src/pages/Shell.tsx:4403
-#: src/pages/Shell.tsx:5734
-#: src/pages/Shell.tsx:6149
-#: src/pages/Shell.tsx:6404
+#: src/pages/Shell.tsx:4401
+#: src/pages/Shell.tsx:4406
+#: src/pages/Shell.tsx:5737
+#: src/pages/Shell.tsx:6152
+#: src/pages/Shell.tsx:6410
 msgid "Stop"
 msgstr "중지"
 
-#: src/pages/Shell.tsx:6145
-#: src/pages/Shell.tsx:6400
+#: src/pages/Shell.tsx:6148
+#: src/pages/Shell.tsx:6406
 msgid "Stop speaking"
 msgstr "읽기 중지"
 
@@ -3677,7 +3681,7 @@ msgstr "안전하게 저장됩니다. 이 화면에 표시되지 않습니다."
 msgid "Stream replies"
 msgstr "답변 스트리밍"
 
-#: src/pages/Shell.tsx:6257
+#: src/pages/Shell.tsx:6260
 msgid "subagent"
 msgstr "보조 에이전트"
 
@@ -3713,7 +3717,7 @@ msgstr "시스템"
 msgid "Teach a task"
 msgstr "작업 가르치기"
 
-#: src/pages/Shell.tsx:3483
+#: src/pages/Shell.tsx:3486
 msgid "Teaching in progress. Stop teaching before sending a new message."
 msgstr "작업을 가르치는 중입니다. 새 메시지를 보내려면 먼저 가르치기를 종료하세요."
 
@@ -3721,7 +3725,7 @@ msgstr "작업을 가르치는 중입니다. 새 메시지를 보내려면 먼�
 msgid "Team"
 msgstr "팀 공용"
 
-#: src/pages/Shell.tsx:6509
+#: src/pages/Shell.tsx:6515
 msgid "Team Computer"
 msgstr "팀 컴퓨터"
 
@@ -3763,7 +3767,7 @@ msgstr "선택한 기억 서비스는 현재 빌드에서 사용할 수 없습�
 msgid "Thinking"
 msgstr "생각 깊이"
 
-#: src/pages/Shell.tsx:6489
+#: src/pages/Shell.tsx:6495
 msgid "This bot runs on this computer, not a Linux desktop. Shell and files use your home folder."
 msgstr "이 Bot은 별도 Linux 화면이 아니라 현재 컴퓨터에서 실행됩니다. 터미널과 파일 작업은 홈 폴더를 사용합니다."
 
@@ -3997,8 +4001,8 @@ msgid "Version"
 msgstr ""
 
 #: src/pages/SettingsOverlay.tsx:86
-#: src/pages/Shell.tsx:5711
-#: src/pages/Shell.tsx:5712
+#: src/pages/Shell.tsx:5714
+#: src/pages/Shell.tsx:5715
 #: src/pages/shell/bot-panel.tsx:582
 #: src/pages/VoiceSettingsOverlay.tsx:170
 #: src/pages/VoiceSettingsOverlay.tsx:293
@@ -4077,11 +4081,11 @@ msgstr "Bot을 어디에서 실행할까요?"
 msgid "Working…"
 msgstr "처리 중…"
 
-#: src/components/computer/TerminalApp.tsx:36
+#: src/components/computer/TerminalApp.tsx:39
 msgid "Wrote {path}"
 msgstr ""
 
-#: src/pages/Shell.tsx:5859
+#: src/pages/Shell.tsx:5862
 msgid "Yesterday"
 msgstr "어제"
 
@@ -4098,7 +4102,7 @@ msgstr "자동으로 이동하지 않으면 이 탭을 닫아도 됩니다."
 msgid "You can close this window."
 msgstr "이 창을 닫아도 됩니다."
 
-#: src/pages/Shell.tsx:4387
+#: src/pages/Shell.tsx:4390
 msgid "You have control"
 msgstr "직접 조작 중"
 
