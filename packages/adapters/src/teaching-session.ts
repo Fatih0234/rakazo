@@ -589,9 +589,17 @@ export async function recordTeachingInputEvent(
   }
   if (prepared.kind === "stale") return "stale";
   if (prepared.computer?.providerRef) {
-    const active = await getActiveTeachingSession(deps.prisma, actor.spaceId, botId, actor.userId);
-    // The row lock above does not cover sandbox IO. Skip if recording switched before typing.
-    if (protectedInputMissesRecording(mapped, active?.id)) return "stale";
+    // The row lock above does not cover sandbox IO. Only protected input is
+    // bound to a recording, so ordinary events skip this extra read.
+    if (mapped.sensitive === true && mapped.skillId) {
+      const active = await getActiveTeachingSession(
+        deps.prisma,
+        actor.spaceId,
+        botId,
+        actor.userId,
+      );
+      if (protectedInputMissesRecording(mapped, active?.id)) return "stale";
+    }
     await applyTeachingDesktopInput(
       deps.sandbox,
       prepared.computer,
