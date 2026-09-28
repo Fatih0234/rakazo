@@ -334,8 +334,9 @@ const TARGETS = "/tmp/rakazo/desktop-targets";
 
 // Menu exec strings run through `/bin/sh -c`, where `#` starts a comment; rgb:a/b/c keeps
 // hex colors intact. infra/sandboxes/computer/fluxbox.menu carries the same entry.
+// selectToClipboard puts selections in CLIPBOARD, which x11vnc forwards to the host.
 export const TERMINAL_MENU_COMMAND =
-  "xterm -bg rgb:11/11/13 -fg rgb:e8/e8/ea -cr rgb:e8/e8/ea -title Terminal";
+  "xterm -bg rgb:11/11/13 -fg rgb:e8/e8/ea -cr rgb:e8/e8/ea -title Terminal -xrm 'XTerm*selectToClipboard: true'";
 
 // Keep fixed mapping files present: TokenFile may be reading the directory concurrently.
 function revokeTargetCommand(kind: "view" | "control", display: number | string) {

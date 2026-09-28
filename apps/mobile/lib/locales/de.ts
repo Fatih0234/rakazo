@@ -619,7 +619,6 @@ export const DE_MESSAGES: Record<string, string> = {
   "Android blocked notifications.": "Android hat Benachrichtigungen blockiert.",
   // lib/voice.ts
   "Could not play that clip.": "Dieser Clip konnte nicht abgespielt werden.",
-
   // app/models.tsx
   "A sign-in page opened — enter this code there:":
     "Eine Anmeldeseite wurde geöffnet — gib dort diesen Code ein:",
@@ -635,4 +634,23 @@ export const DE_MESSAGES: Record<string, string> = {
     "Warte auf Anmeldung — der Code läuft in etwa {minutes} Minuten ab.",
   "Waiting for sign-in — the link expires in about {minutes} minutes.":
     "Warte auf Anmeldung — der Link läuft in etwa {minutes} Minuten ab.",
+  // call
+  "Allow microphone access to call a bot.": "Erlaube den Mikrofonzugriff, um einen Bot anzurufen.",
+  "Allow speech recognition in Settings, or connect ElevenLabs, OpenAI, or Fish Audio.":
+    "Erlaube die Spracherkennung in den Einstellungen oder verbinde ElevenLabs, OpenAI oder Fish Audio.",
+  Call: "Anrufen",
+  "Calls need transcription": "Anrufe brauchen eine Transkription",
+  "Could not hear that.": "Das war nicht zu verstehen.",
+  "Could not speak that.": "Das konnte nicht vorgelesen werden.",
+  "Could not transcribe that.": "Das konnte nicht transkribiert werden.",
+  "Hang up": "Auflegen",
+  "Hide transcript": "Transkript ausblenden",
+  Mute: "Stummschalten",
+  "On a call with {name}": "Im Gespräch mit {name}",
+  "Open Voice": "Sprache öffnen",
+  Settings: "Einstellungen",
+  "Show transcript": "Transkript anzeigen",
+  Transcript: "Transkript",
+  Unmute: "Stummschaltung aufheben",
+  "Voice chat": "Sprachchat",
 };

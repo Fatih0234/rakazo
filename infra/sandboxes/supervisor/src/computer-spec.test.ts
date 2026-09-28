@@ -227,6 +227,8 @@ describe("graphical computer spec", () => {
           "rgb:e8/e8/ea",
           "-title",
           "Terminal",
+          "-xrm",
+          "XTerm*selectToClipboard: true",
         ]);
         expect(argvFor("Browser")).toEqual([]);
       } finally {
