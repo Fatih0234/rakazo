@@ -207,7 +207,11 @@ function browserActionCommand(
   env: DesktopEnvironment,
 ) {
   if (action.kind === "focus") {
-    return focusOrLaunchActionCommand(action, layout);
+    const command = focusOrLaunchActionCommand(action, layout);
+    // The browser launcher is absolute. Other apps and URIs are workspace-relative,
+    // same as the launch path below.
+    if (BROWSER_APPLICATIONS.has(action.application.toLowerCase())) return command;
+    return `cd ${shellQuote(env.workspaceDir)}\n${command}`;
   }
   const browser =
     action.kind === "open" && /^https?:\/\//i.test(action.path)
@@ -222,31 +226,74 @@ function browserActionCommand(
   return `cd ${shellQuote(workspace)}\n${extraDisplayActionCommand(layout, action.kind === "open" ? { ...action, path: workspacePath(workspace, action.path) } : action)}`;
 }
 
+// Chrome-family WM_CLASS components. Matched whole, so "xterm" does not raise "uxterm".
+const CHROME_WM_CLASSES = "chromium|chromium-browser|google-chrome|google-chrome-stable|chrome";
+
 /**
  * Raise an app's existing window by WM_CLASS, else spawn it — the focus primitive
  * rakazo-focus-or-launch provides inside the computer image, inline for provider desktops.
- * Extra arguments still run the launcher first (Chrome forwards URLs to its live window).
+ * A URI still starts the launcher (Chrome forwards URLs into its live window) without
+ * waiting for that process to exit before the match is raised.
  */
 function focusOrLaunchActionCommand(
   action: Extract<ComputerAction, { kind: "focus" }>,
   layout: Parameters<typeof extraDisplayActionCommand>[0],
 ) {
   const browser = BROWSER_APPLICATIONS.has(action.application.toLowerCase());
-  // The launcher resolves whichever Chrome-family binary the provider has.
-  const wmClass = browser
-    ? "chrom"
-    : (action.application.split("/").pop() ?? "").replaceAll(/[^A-Za-z0-9_-]/g, "");
-  const spawn = browser
+  const binary = (action.application.split("/").pop() ?? "").replaceAll(/[^A-Za-z0-9_-]/g, "");
+  const quotedApp = shellQuote(action.application);
+  const quotedArg = action.uri === undefined ? "" : ` ${shellQuote(action.uri)}`;
+  const foreground = browser
     ? `nohup ${browserLauncherPath(layout.displayNumber)} ${shellQuote(action.uri ?? "about:blank")} </dev/null >/tmp/rakazo/browser-open-${layout.displayNumber}.log 2>&1 &`
-    : `DISPLAY=${layout.display} ${shellQuote(action.application)}${action.uri ? ` ${shellQuote(action.uri)}` : ""}`;
-  if (!wmClass) return spawn;
+    : `DISPLAY=${layout.display} ${quotedApp}${quotedArg}`;
+  // A GUI that stays in the foreground must not delay wmctrl -ia.
+  const background = browser ? foreground : `${foreground} >/dev/null 2>&1 &`;
+  if (!browser && !binary) return foreground;
+  const classCase = browser ? CHROME_WM_CLASSES : binary.toLowerCase();
   return [
-    `wid=$(DISPLAY=${layout.display} wmctrl -lx 2>/dev/null | awk -v class=${shellQuote(wmClass)} 'tolower($3) ~ class { print $1; exit }')`,
+    "wid=",
+    "fallback=",
+    "saw_profile=0",
+    "while read -r id desktop pid class _; do",
+    '  [ -n "$id" ] || continue',
+    "  class_lc=$(printf '%s' \"$class\" | tr '[:upper:]' '[:lower:]')",
+    "  old_ifs=$IFS",
+    "  IFS=.",
+    "  set -f",
+    "  matched=0",
+    "  for part in $class_lc; do",
+    `    case "$part" in ${classCase}) matched=1 ;; esac`,
+    "  done",
+    "  set +f",
+    "  IFS=$old_ifs",
+    '  [ "$matched" -eq 1 ] || continue',
+    '  [ -z "$fallback" ] && fallback=$id',
+    // Several Chrome profiles can share a display. Prefer the screen profile when
+    // a window advertises --user-data-dir; otherwise keep the first class match.
+    ...(browser
+      ? [
+          '  if [ -n "$CHROME_USER_DATA_DIR" ]; then',
+          '    case "$pid" in',
+          "      ''|*[!0-9]*) owner=\"\" ;;",
+          "      *) owner=$(tr '\\0' '\\n' <\"/proc/$pid/cmdline\" 2>/dev/null | awk 'prev == \"--user-data-dir\" { print; exit } index($0, \"--user-data-dir=\") == 1 { print substr($0, 17); exit } { prev = $0 }') ;;",
+          "    esac",
+          '    if [ -n "$owner" ]; then',
+          "      saw_profile=1",
+          '      if [ "$owner" = "$CHROME_USER_DATA_DIR" ]; then wid=$id; break; fi',
+          "      continue",
+          "    fi",
+          "  fi",
+        ]
+      : ["  wid=$id", "  break"]),
+    "done <<RAKAZO_WINDOWS",
+    `$(DISPLAY=${layout.display} wmctrl -lxp 2>/dev/null || true)`,
+    "RAKAZO_WINDOWS",
+    'if [ -z "$wid" ] && [ "$saw_profile" -eq 0 ]; then wid=$fallback; fi',
     'if [ -n "$wid" ]; then',
-    ...(action.uri !== undefined ? [`  ${spawn}`] : []),
+    ...(action.uri !== undefined ? [`  ${background}`] : []),
     `  DISPLAY=${layout.display} wmctrl -ia "$wid"`,
     "else",
-    `  ${spawn}`,
+    `  ${foreground}`,
     "fi",
   ].join("\n");
 }

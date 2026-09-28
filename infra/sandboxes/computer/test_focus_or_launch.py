@@ -1,8 +1,12 @@
 """Offline regressions for the focus-or-launch wrapper and its control argv."""
 import importlib.machinery
 import importlib.util
+import os
 from pathlib import Path
+import stat
 import subprocess
+import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -19,9 +23,9 @@ helper = load_module("focus_or_launch", "rakazo-focus-or-launch")
 control = load_module("control", "control.py")
 
 LISTING = """\
-0x01800003  0 chromium.Chromium   box  Example page - Chromium
-0x04000003  0 xterm.XTerm         box  Terminal
-0x0400000f -1 N/A.N/A             box  dock
+0x01800003  0 99999991 chromium.Chromium   box  Example page - Chromium
+0x04000003  0 99999992 xterm.XTerm         box  Terminal
+0x0400000f -1 99999993 N/A.N/A             box  dock
 0x04400010  0
 """
 
@@ -47,66 +51,133 @@ class MatchingWindowTest(unittest.TestCase):
         self.assertEqual(helper.matching_window(listing, "xterm"), "0x04000003")
 
     def test_first_match_wins_and_malformed_rows_are_skipped(self):
-        listing = LISTING + "0x05000000  0 xterm.XTerm         box  second\n"
+        listing = LISTING + "0x05000000  0 99999994 xterm.XTerm         box  second\n"
         self.assertEqual(helper.matching_window(listing, "xterm"), "0x04000003")
         self.assertEqual(helper.matching_window("garbage\n\n", "xterm"), "")
         self.assertEqual(helper.matching_window("", "xterm"), "")
 
+    def test_components_do_not_match_a_longer_class_name(self):
+        listing = "0x04000001  0 99999995 uxterm.UXTerm host uxterm\n" + LISTING
+        self.assertEqual(helper.matching_window(listing, "xterm"), "0x04000003")
+        self.assertEqual(helper.matching_window(listing, "uxterm"), "0x04000001")
+
+    def test_browser_windows_are_limited_to_the_requested_profile(self):
+        listing = (
+            "0x01800003  0 100 chromium.Chromium box Other\n"
+            "0x01800004  0 200 chromium.Chromium box Mine\n"
+        )
+        profiles = {"100": "/profiles/other", "200": "/profiles/mine"}
+        with patch.object(helper, "window_profile", side_effect=lambda pid: profiles.get(pid)):
+            self.assertEqual(
+                helper.matching_window(listing, "chromium", "/profiles/mine"), "0x01800004"
+            )
+            self.assertEqual(helper.matching_window(listing, "chromium", "/profiles/missing"), "")
+        # No profile request keeps the first class match, including when profiles are unreadable.
+        self.assertEqual(helper.matching_window(listing, "chromium"), "0x01800003")
+
 
 class MainTest(unittest.TestCase):
-    def run_wrapper(self, argv, listing=LISTING, launch_code=0):
+    def run_wrapper(self, argv, listing=LISTING, launch_code=None):
         calls = []
 
         def fake_run(run_argv, **_kwargs):
-            if run_argv[0] == "wmctrl":
+            if run_argv[:2] == ["wmctrl", "-lxp"]:
                 return subprocess.CompletedProcess(run_argv, 0, listing, "")
-            return subprocess.CompletedProcess(run_argv, launch_code, "", "")
+            calls.append(("run", run_argv))
+            return subprocess.CompletedProcess(run_argv, 0, "", "")
 
-        # exec replaces the process; the fake stops the call instead.
-        def fake_execvp(*call):
-            calls.append(call)
-            raise SystemExit(0)
+        def fake_popen(popen_argv, **_kwargs):
+            calls.append(("popen", popen_argv))
 
-        with patch.object(helper.subprocess, "run", side_effect=fake_run) as run, patch.object(
-            helper.os, "execvp", side_effect=fake_execvp
+            class Child:
+                def wait(self, timeout=None):
+                    calls.append(("wait", timeout))
+                    if launch_code is None:
+                        raise subprocess.TimeoutExpired(popen_argv, timeout or 0)
+                    return launch_code
+
+            return Child()
+
+        with patch.object(helper.subprocess, "run", side_effect=fake_run), patch.object(
+            helper.subprocess, "Popen", side_effect=fake_popen
         ):
             try:
                 helper.main(argv)
             except SystemExit as error:
                 if error.code:
                     calls.append(("exit", error.code))
-        return run, calls
+        return calls
 
     def test_activates_a_matching_window_without_spawning(self):
-        run, calls = self.run_wrapper(["xterm"])
-        self.assertEqual(calls, [("wmctrl", ["wmctrl", "-ia", "0x04000003"])])
-        self.assertEqual(run.call_count, 1)
+        calls = self.run_wrapper(["xterm"])
+        self.assertEqual(calls, [("run", ["wmctrl", "-ia", "0x04000003"])])
 
     def test_spawns_the_launcher_when_no_window_matches(self):
-        _, calls = self.run_wrapper(["xterm"], listing="")
-        self.assertEqual(calls, [("xterm", ["xterm"])])
+        calls = self.run_wrapper(["xterm"], listing="")
+        self.assertEqual(calls, [("popen", ["xterm"]), ("wait", helper.DEFAULT_LAUNCH_WAIT_SEC)])
 
     def test_missing_wmctrl_still_spawns(self):
+        calls = []
+
+        def fake_popen(popen_argv, **_kwargs):
+            calls.append(popen_argv)
+
+            class Child:
+                def wait(self, timeout=None):
+                    raise subprocess.TimeoutExpired(popen_argv, timeout or 0)
+
+            return Child()
+
         with patch.object(helper.subprocess, "run", side_effect=OSError), patch.object(
-            helper.os, "execvp", side_effect=SystemExit(0)
-        ) as execvp:
-            with self.assertRaises(SystemExit):
+            helper.subprocess, "Popen", side_effect=fake_popen
+        ):
+            with self.assertRaises(SystemExit) as raised:
                 helper.main(["xterm"])
-        execvp.assert_called_once_with("xterm", ["xterm"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(calls, [["xterm"]])
 
     def test_arguments_reach_the_launcher_before_the_window_is_raised(self):
-        run, calls = self.run_wrapper(["rakazo-browser", "https://example.test"])
-        run.assert_any_call(["rakazo-browser", "https://example.test"])
-        self.assertEqual(calls, [("wmctrl", ["wmctrl", "-ia", "0x01800003"])])
+        calls = self.run_wrapper(["rakazo-browser", "https://example.test"], launch_code=0)
+        self.assertEqual(
+            calls,
+            [
+                ("popen", ["rakazo-browser", "https://example.test"]),
+                ("wait", helper.LAUNCH_WAIT_SEC["rakazo-browser"]),
+                ("run", ["wmctrl", "-ia", "0x01800003"]),
+            ],
+        )
+
+    def test_a_live_launcher_does_not_block_the_raise(self):
+        calls = self.run_wrapper(["rakazo-browser", "https://example.test"])
+        self.assertEqual(calls[-1], ("run", ["wmctrl", "-ia", "0x01800003"]))
 
     def test_a_failing_launcher_does_not_raise_or_succeed(self):
-        run, calls = self.run_wrapper(["xterm", "bad-flag"], launch_code=1)
-        run.assert_any_call(["xterm", "bad-flag"])
-        self.assertEqual(calls, [("exit", 1)])
+        calls = self.run_wrapper(["xterm", "bad-flag"], launch_code=1)
+        self.assertEqual(
+            calls,
+            [
+                ("popen", ["xterm", "bad-flag"]),
+                ("wait", helper.DEFAULT_LAUNCH_WAIT_SEC),
+                ("exit", 1),
+            ],
+        )
 
     def test_usage_error_without_a_launcher(self):
         with self.assertRaises(SystemExit):
             helper.main([])
+
+    def test_a_different_browser_profile_is_not_raised(self):
+        calls = self.run_wrapper(["rakazo-browser"])
+        # The fixture PIDs expose no profile, so the only chromium window is raised.
+        self.assertEqual(calls, [("run", ["wmctrl", "-ia", "0x01800003"])])
+        with patch.object(helper, "window_profile", return_value="/profiles/other"), patch.dict(
+            os.environ, {"RAKAZO_BROWSER_PROFILE": "/profiles/mine"}
+        ):
+            calls = self.run_wrapper(["rakazo-browser"])
+        self.assertEqual(
+            calls,
+            [("popen", ["rakazo-browser"]), ("wait", helper.LAUNCH_WAIT_SEC["rakazo-browser"])],
+        )
 
 
 PROFILE = "/home/rakazo/.browser-profiles/chromium-bot-" + "a" * 32
@@ -129,7 +200,7 @@ class ControlArgvTest(unittest.TestCase):
         ):
             with self.subTest(argv=argv):
                 self.assertTrue(control.allowed_control_argv(argv, ":1"))
-                self.assertTrue(control.is_long_lived_control(argv))
+                self.assertFalse(control.is_long_lived_control(argv))
 
     def test_rejects_launchers_outside_the_allowlist(self):
         for inner in ("sh", "wmctrl", "rakazo-focus-or-launch", "/usr/bin/xterm"):
@@ -159,6 +230,124 @@ class ControlArgvTest(unittest.TestCase):
         self.assertEqual(control.launch_spawn_poll_sec(argv), control.BROWSER_OPEN_POLL_SEC)
         argv = ["env", "DISPLAY=:1", "rakazo-focus-or-launch", "xterm"]
         self.assertEqual(control.launch_spawn_poll_sec(argv), control.LAUNCH_SPAWN_POLL_SEC)
+
+    def test_focus_waits_for_the_wrapper_instead_of_the_spawn_poll(self):
+        argv = [
+            "env",
+            "DISPLAY=:1",
+            f"RAKAZO_BROWSER_PROFILE={PROFILE}",
+            "rakazo-focus-or-launch",
+            "rakazo-browser",
+        ]
+        with patch.object(
+            control.subprocess, "run", return_value=subprocess.CompletedProcess(argv, 0)
+        ) as run:
+            control.run_control_argv(argv, ":1")
+        self.assertEqual(run.call_args.args[0], argv)
+        self.assertEqual(run.call_args.kwargs["timeout"], control.FOCUS_COMPLETION_SEC)
+        self.assertGreater(control.FOCUS_COMPLETION_SEC, control.LAUNCH_SPAWN_POLL_SEC)
+
+    def test_slow_focus_is_not_reported_before_the_wrapper_exits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "rakazo-focus-or-launch"
+            marker = Path(tmp) / "done"
+            script.write_text(f"#!/bin/sh\nsleep 0.5\ntouch {marker}\n")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            argv = ["env", "DISPLAY=:1", "rakazo-focus-or-launch", "xterm"]
+            with patch.dict(os.environ, {"PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                started = time.monotonic()
+                control.run_control_argv(argv, ":1")
+                elapsed = time.monotonic() - started
+            self.assertGreaterEqual(elapsed, 0.45)
+            self.assertTrue(marker.exists())
+
+
+class ScriptTest(unittest.TestCase):
+    def test_window_profile_reads_the_user_data_dir_flag(self):
+        # The flag has to stay on this process. A shell would exec the sleep away.
+        equals = subprocess.Popen(
+            ["python3", "-c", "import time; time.sleep(30)", "--user-data-dir=/profiles/mine"]
+        )
+        separate = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import time; time.sleep(30)",
+                "--user-data-dir",
+                "/profiles/other",
+            ]
+        )
+        try:
+            self.assertEqual(helper.window_profile(str(equals.pid)), "/profiles/mine")
+            self.assertEqual(helper.window_profile(str(separate.pid)), "/profiles/other")
+            self.assertIsNone(helper.window_profile("99999999"))
+        finally:
+            for proc in (equals, separate):
+                proc.kill()
+                proc.wait()
+
+    def test_script_raises_the_requested_browser_profile_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            windows = Path(tmp) / "windows"
+            args_log = Path(tmp) / "args"
+            other = subprocess.Popen(
+                ["python3", "-c", "import time; time.sleep(30)", "--user-data-dir=/profiles/other"]
+            )
+            mine = subprocess.Popen(
+                ["python3", "-c", "import time; time.sleep(30)", "--user-data-dir=/profiles/mine"]
+            )
+            try:
+                windows.write_text(
+                    f"0x111 0 {other.pid} chromium.Chromium host Other\n"
+                    f"0x222 0 {mine.pid} chromium.Chromium host Mine\n"
+                )
+                wmctrl = bin_dir / "wmctrl"
+                wmctrl.write_text(
+                    "#!/bin/sh\n"
+                    'if [ "$1" = "-lxp" ]; then cat "$RAKAZO_TEST_WINDOWS"; exit 0; fi\n'
+                    'printf "wmctrl %s\\n" "$*" >> "$RAKAZO_TEST_ARGS"\n'
+                )
+                browser = bin_dir / "rakazo-browser"
+                browser.write_text('#!/bin/sh\nprintf "browser %s\\n" "$*" >> "$RAKAZO_TEST_ARGS"\n')
+                wmctrl.chmod(0o755)
+                browser.chmod(0o755)
+                env = {
+                    **os.environ,
+                    "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "RAKAZO_BROWSER_PROFILE": "/profiles/mine",
+                    "RAKAZO_TEST_WINDOWS": str(windows),
+                    "RAKAZO_TEST_ARGS": str(args_log),
+                }
+                script = str(Path(__file__).with_name("rakazo-focus-or-launch"))
+                result = subprocess.run(
+                    ["python3", script, "rakazo-browser"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(args_log.read_text().strip(), "wmctrl -ia 0x222")
+
+                args_log.write_text("")
+                windows.write_text(f"0x111 0 {other.pid} chromium.Chromium host Other\n")
+                result = subprocess.run(
+                    ["python3", script, "rakazo-browser"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(args_log.read_text().strip(), "browser")
+            finally:
+                for proc in (other, mine):
+                    proc.kill()
+                    proc.wait()
 
 
 if __name__ == "__main__":

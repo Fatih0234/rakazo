@@ -28,7 +28,7 @@ describe("focus-or-launch desktop helper", () => {
           path.join(bin, "wmctrl"),
           [
             "#!/bin/sh",
-            'if [ "$1" = "-lx" ]; then cat "$RAKAZO_TEST_WINDOWS";',
+            'if [ "$1" = "-lxp" ]; then cat "$RAKAZO_TEST_WINDOWS";',
             'else printf "wmctrl %s\\n" "$*" >> "$RAKAZO_TEST_ARGS"; fi',
           ].join("\n"),
         );
@@ -64,8 +64,9 @@ describe("focus-or-launch desktop helper", () => {
             .filter(Boolean);
         };
         const listing = [
-          "0x01800003  0 chromium.Chromium  box  Example - Chromium",
-          "0x04000003  0 xterm.XTerm        box  Terminal",
+          "0x04000001  0 101 uxterm.UXTerm      box  uxterm",
+          "0x01800003  0 100 chromium.Chromium  box  Example - Chromium",
+          "0x04000003  0 102 xterm.XTerm        box  Terminal",
           "",
         ].join("\n");
         expect(run(listing, ["xterm"])).toEqual(["wmctrl -ia 0x04000003"]);
@@ -78,6 +79,34 @@ describe("focus-or-launch desktop helper", () => {
         expect(run("", ["rakazo-browser", "https://example.test"])).toEqual([
           "rakazo-browser https://example.test",
         ]);
+        // A launcher that stays up must not block the raise of the window already found.
+        const pids = path.join(temp, "pids");
+        writeFileSync(
+          path.join(bin, "rakazo-browser"),
+          [
+            "#!/bin/sh",
+            'printf \'rakazo-browser %s\\n\' "$*" >> "$RAKAZO_TEST_ARGS"',
+            `echo $$ >> ${JSON.stringify(pids)}`,
+            "exec sleep 30",
+            "",
+          ].join("\n"),
+        );
+        chmodSync(path.join(bin, "rakazo-browser"), 0o755);
+        writeFileSync(pids, "");
+        const started = Date.now();
+        expect(run(listing, ["rakazo-browser", "https://example.test"])).toEqual([
+          "rakazo-browser https://example.test",
+          "wmctrl -ia 0x01800003",
+        ]);
+        expect(Date.now() - started).toBeLessThan(5_000);
+        for (const pid of readFileSync(pids, "utf8").split("\n")) {
+          if (!pid.trim()) continue;
+          try {
+            process.kill(Number(pid), "SIGTERM");
+          } catch {
+            // The launcher may already have exited.
+          }
+        }
       } finally {
         rmSync(temp, { recursive: true, force: true });
       }

@@ -156,26 +156,39 @@ export const builtinAgentTools: ConnectorTool[] = [
         actions: {
           type: "array",
           items: {
-            type: "object",
-            properties: {
-              kind: {
-                type: "string",
-                enum: ["click", "move", "down", "up", "type", "key", "scroll", "wait", "focus"],
+            oneOf: [
+              {
+                type: "object",
+                properties: {
+                  kind: { type: "string", enum: ["focus"] },
+                  application: { type: "string", minLength: 1, pattern: "\\S" },
+                  uri: { type: "string" },
+                },
+                required: ["kind", "application"],
               },
-              x: { type: "number" },
-              y: { type: "number" },
-              button: { type: "string", enum: ["left", "right"] },
-              double: { type: "boolean" },
-              text: { type: "string" },
-              key: { type: "string" },
-              modifiers: { type: "array", items: { type: "string" } },
-              direction: { type: "string", enum: ["up", "down"] },
-              amount: { type: "number" },
-              ms: { type: "number" },
-              application: { type: "string" },
-              uri: { type: "string" },
-            },
-            required: ["kind"],
+              {
+                type: "object",
+                properties: {
+                  kind: {
+                    type: "string",
+                    enum: ["click", "move", "down", "up", "type", "key", "scroll", "wait"],
+                  },
+                  x: { type: "number" },
+                  y: { type: "number" },
+                  button: { type: "string", enum: ["left", "right"] },
+                  double: { type: "boolean" },
+                  text: { type: "string" },
+                  key: { type: "string" },
+                  modifiers: { type: "array", items: { type: "string" } },
+                  direction: { type: "string", enum: ["up", "down"] },
+                  amount: { type: "number" },
+                  ms: { type: "number" },
+                  application: { type: "string" },
+                  uri: { type: "string" },
+                },
+                required: ["kind"],
+              },
+            ],
           },
         },
         observe: { type: "boolean" },

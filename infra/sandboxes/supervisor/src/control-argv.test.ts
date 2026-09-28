@@ -51,7 +51,7 @@ describe.each([undefined, profile])(
       { kind: "focus" as const, application: "chromium", uri: "https://example.com" },
       { kind: "focus" as const, application: "chromium" },
       { kind: "focus" as const, application: "xterm" },
-    ])("accepts generated $kind argv and identifies a long-lived process", (action) => {
+    ])("accepts generated $kind argv and does not treat focus as a long-lived app", (action) => {
       const step = containerActionStep(action, display, browserProfile);
       if (!("argv" in step)) throw new Error("expected command");
       if (
@@ -62,7 +62,10 @@ describe.each([undefined, profile])(
       ) {
         expect(step.argv[2]).toBe(`RAKAZO_BROWSER_PROFILE=${browserProfile}`);
       }
-      expect(check(step.argv)).toEqual({ allowed: true, longLived: true });
+      expect(check(step.argv)).toEqual({
+        allowed: true,
+        longLived: action.kind !== "focus",
+      });
     });
 
     it("accepts generated keyboard input without treating it as a long-lived process", () => {

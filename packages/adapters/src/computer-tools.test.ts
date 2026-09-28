@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { builtinAgentTools } from "./builtin-tools.js";
 import { computerObservation } from "./computer-support.js";
 import { observationToolResult, parseComputerActions } from "./computer-tools.js";
 
@@ -26,6 +27,35 @@ describe("computer tool bridge", () => {
       ]),
     ).toEqual([{ kind: "focus", application: "chromium", uri: "https://example.test" }]);
     expect(() => parseComputerActions([{ kind: "focus" }])).toThrow(/application/);
+    expect(() => parseComputerActions([{ kind: "focus", application: "   " }])).toThrow(
+      /application/,
+    );
+  });
+
+  it("requires a non-blank application on the focus tool variant", () => {
+    const tool = builtinAgentTools.find((entry) => entry.name === "computer_act");
+    const schema = tool?.inputSchema as {
+      properties?: {
+        actions?: {
+          items?: {
+            oneOf?: Array<{
+              required?: string[];
+              properties?: {
+                kind?: { enum?: string[] };
+                application?: { minLength?: number; pattern?: string };
+              };
+            }>;
+          };
+        };
+      };
+    };
+    const items = schema?.properties?.actions?.items ?? {};
+    const focus = items.oneOf?.find((branch) => branch.properties?.kind?.enum?.includes("focus"));
+    const other = items.oneOf?.find((branch) => branch !== focus);
+    expect(focus?.required).toEqual(["kind", "application"]);
+    expect(focus?.properties?.application).toMatchObject({ minLength: 1, pattern: "\\S" });
+    expect(other?.required).toEqual(["kind"]);
+    expect(other?.properties?.kind?.enum).not.toContain("focus");
   });
 
   it("rejects batches whose expanded double-click actions exceed the limit", () => {

@@ -194,10 +194,21 @@ def allowed_control_argv(argv, display):
     return len(argv) in (index + 1, index + 2)
 
 
+# The wrapper bounds each wmctrl call at 5s and may also wait out a browser
+# forward. Wait for it to exit so a slow listing is not reported as success.
+FOCUS_COMPLETION_SEC = 5 + BROWSER_OPEN_POLL_SEC + 5 + 1
+
+
 def is_long_lived_control(argv):
-    """Apps and openers that must not be waited on under display_lock."""
+    """Apps and openers that must not be waited on under display_lock.
+
+    The focus wrapper exits after it raises a window or detaches a spawn, so
+    the caller waits for that exit instead of treating the wrapper as the app.
+    """
     command = argv[control_command_index(argv)]
-    return command == "xdg-open" or command in KNOWN_LAUNCH or command == FOCUS_OR_LAUNCH
+    if command == FOCUS_OR_LAUNCH:
+        return False
+    return command == "xdg-open" or command in KNOWN_LAUNCH
 
 
 def launch_spawn_poll_sec(argv):
@@ -214,6 +225,14 @@ def launch_spawn_poll_sec(argv):
 def run_control_argv(argv, display):
     """Run a fallback control command without holding the lock forever."""
     env = {**os.environ, "DISPLAY": display}
+    if argv[control_command_index(argv)] == FOCUS_OR_LAUNCH:
+        try:
+            result = subprocess.run(argv, env=env, timeout=FOCUS_COMPLETION_SEC)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("computer action timed out") from error
+        if result.returncode:
+            raise RuntimeError("computer action failed")
+        return
     if is_long_lived_control(argv):
         child = subprocess.Popen(argv, env=env, start_new_session=True)
         try:
