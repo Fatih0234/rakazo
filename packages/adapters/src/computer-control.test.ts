@@ -177,7 +177,12 @@ describe("computer control leases", () => {
     await expect(expireComputerControl(harness.deps, "computer-id", "lease-1")).resolves.toBe(true);
 
     expect(harness.prisma.computer.updateMany).toHaveBeenCalledWith({
-      where: { id: "computer-id", providerRef: "computer" },
+      where: {
+        id: "computer-id",
+        providerRef: "computer",
+        state: { notIn: ["booting", "suspending"] },
+        controlLeaseId: "lease-1",
+      },
       data: { state: "stopped", providerRef: null },
     });
     expect(harness.events.finalizeComputerControlRelease).toHaveBeenCalledWith(
@@ -255,7 +260,12 @@ describe("computer control leases", () => {
       "lease-1",
     );
     expect(updateMany).toHaveBeenCalledWith({
-      where: { id: "computer-1", providerRef: "provider-1" },
+      where: {
+        id: "computer-1",
+        providerRef: "provider-1",
+        state: { notIn: ["booting", "suspending"] },
+        controlLeaseId: "lease-1",
+      },
       data: { state: "stopped", providerRef: null },
     });
   });

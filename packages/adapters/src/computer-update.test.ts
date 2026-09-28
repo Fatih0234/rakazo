@@ -231,7 +231,12 @@ describe("background computer maintenance", () => {
     // A dead sandbox holds no control to release: the stranded ref is dropped and
     // the update proceeds instead of reporting busy forever.
     expect(harness.computer.updateMany).toHaveBeenCalledWith({
-      where: { id: "computer-1", providerRef: "provider-1" },
+      where: {
+        id: "computer-1",
+        providerRef: "provider-1",
+        state: { notIn: ["booting", "suspending"] },
+        controlLeaseId: expect.any(String),
+      },
       data: { state: "stopped", providerRef: null },
     });
     expect(harness.jobs.enqueue).toHaveBeenCalledOnce();

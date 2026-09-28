@@ -2205,6 +2205,11 @@ export function createRouter(deps: RouterDeps) {
           bot = await repos.getBot(context.actor, input.botId);
         }
         if (!bot.computer) throw new IsolationError();
+        // Gone-sandbox revoke may have marked the row stopped; do not fall through to the
+        // running-state grant and return a confusing "control changed" conflict.
+        if (!bot.computer.providerRef || bot.computer.state !== "running") {
+          throw new ORPCError("BAD_REQUEST", { message: "computer must be running" });
+        }
 
         const executionLease = await deps.prisma.computerExecutionLease.findUnique({
           where: { computerId_botId: { computerId: bot.computer.id, botId: bot.id } },

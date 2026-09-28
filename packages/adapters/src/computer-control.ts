@@ -142,14 +142,8 @@ export async function clearInactiveUserComputerControl(
   return cleared.count === 1;
 }
 
-/**
- * Revoke this computer's screen control at the provider. A sandbox that is
- * already gone has nothing left to release: count the revoke as done and drop
- * the stranded providerRef — the same reconciliation the screen-url endpoint
- * applies — so later calls can offer a boot instead of throwing forever.
- * Callers mid-replacement pass clearGoneRef: false: their activation compare
- * still names the dead ref, and the replacement overwrites it.
- */
+/** Revoke provider screen control. Gone sandbox ⇒ already released; drop the stranded ref
+ * unless clearGoneRef: false (mid-replacement still names that ref for activation CAS). */
 export async function revokeScreenControl(
   deps: { prisma: PrismaClient; sandbox: SandboxProvider | undefined },
   computer: { id: string; homeKey: string; kind: string; providerRef: string | null },
@@ -164,8 +158,15 @@ export async function revokeScreenControl(
     if (!isSandboxGoneError(error)) throw error;
     if (opts?.clearGoneRef === false) return;
     getLogger().error(`computer ${computer.id} sandbox ${computer.providerRef} is gone`, error);
+    // Fence by lease + skip booting/suspending so a stale gone-cleanup cannot clobber an
+    // in-flight replace/boot that still names this providerRef.
     await deps.prisma.computer.updateMany({
-      where: { id: computer.id, providerRef: computer.providerRef },
+      where: {
+        id: computer.id,
+        providerRef: computer.providerRef,
+        state: { notIn: ["booting", "suspending"] },
+        ...(leaseId != null ? { controlLeaseId: leaseId } : {}),
+      },
       data: { state: "stopped", providerRef: null },
     });
   }
