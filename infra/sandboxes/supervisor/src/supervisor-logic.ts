@@ -146,16 +146,16 @@ export function shouldReplayComputerActions(attempt: ComputerControlAttempt<unkn
 }
 
 const CONTROL_BASE_TIMEOUT_MS = 15_000;
-const CONTROL_MAX_TIMEOUT_MS = 60_000;
+const MAX_CONTROL_ACTIONS = 24;
+const MAX_MAPPED_WAIT_MS = 5_000;
 // control.py waits this long for one focus wrapper (FOCUS_COMPLETION_SEC).
 const FOCUS_ACTION_BUDGET_MS = 13_400;
+// One control request already accepts 24 actions. Focus is the slow step, so the
+// HTTP ceiling covers a full batch of them plus settle. Each focus step stays 13.4s.
+const CONTROL_MAX_TIMEOUT_MS =
+  CONTROL_BASE_TIMEOUT_MS + MAX_CONTROL_ACTIONS * FOCUS_ACTION_BUDGET_MS + MAX_MAPPED_WAIT_MS;
 
-/**
- * HTTP deadline for one control request.
- * Focus and wait steps run one after another under the display lock. A batch of
- * 24 focus steps would need minutes, so an over-budget batch is rejected instead
- * of raising the 60s ceiling or aborting a later step. Each focus step stays 13.4s.
- */
+/** Bound the HTTP control deadline by focus steps, mapped waits, and settle time. */
 export function computerControlTimeoutMs(
   actions: Array<z.infer<typeof computerActionSchema>>,
   settleMs = 0,
@@ -163,20 +163,16 @@ export function computerControlTimeoutMs(
   let waits = 0;
   let focusSteps = 0;
   for (const action of actions) {
-    if (action.kind === "wait") waits += Math.min(Math.max(action.ms, 0), 5_000);
+    if (action.kind === "wait") waits += Math.min(Math.max(action.ms, 0), MAX_MAPPED_WAIT_MS);
     else if (action.kind === "focus") focusSteps += 1;
   }
-  const budget =
+  return Math.min(
+    CONTROL_MAX_TIMEOUT_MS,
     CONTROL_BASE_TIMEOUT_MS +
-    waits +
-    focusSteps * FOCUS_ACTION_BUDGET_MS +
-    Math.min(Math.max(settleMs, 0), 5_000);
-  if (budget > CONTROL_MAX_TIMEOUT_MS) {
-    throw new Error(
-      "computer action batch exceeds the control deadline; split focus and wait steps",
-    );
-  }
-  return budget;
+      waits +
+      focusSteps * FOCUS_ACTION_BUDGET_MS +
+      Math.min(Math.max(settleMs, 0), MAX_MAPPED_WAIT_MS),
+  );
 }
 
 export function toSandboxInput(input: {

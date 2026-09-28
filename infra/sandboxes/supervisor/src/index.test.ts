@@ -490,30 +490,22 @@ describe("sandbox supervisor input containment", () => {
     expect(computerControlTimeoutMs([focus, { kind: "wait", ms: 1_000 }], 500)).toBe(
       15_000 + 13_400 + 1_000 + 500,
     );
-    // 15s base + 3 * 13.4s = 55.2s, still inside the 60s ceiling.
-    expect(computerControlTimeoutMs([focus, focus, focus])).toBe(15_000 + 3 * 13_400);
-    expect(computerControlTimeoutMs([focus, focus, { kind: "wait", ms: 5_000 }], 5_000)).toBe(
-      15_000 + 2 * 13_400 + 5_000 + 5_000,
+    // Five focus steps need 15s + 67s. The deadline is that sum, not the old 60s clip.
+    expect(computerControlTimeoutMs(Array.from({ length: 5 }, () => focus))).toBe(
+      15_000 + 5 * 13_400,
     );
-    // 15s + 4 * 13.4s = 68.6s. Reject instead of clipping the deadline to 60s.
-    expect(() => computerControlTimeoutMs([focus, focus, focus, focus])).toThrow(
-      /control deadline/,
-    );
-    expect(() =>
-      computerControlTimeoutMs([focus, focus, focus, { kind: "wait", ms: 5_000 }]),
-    ).toThrow(/control deadline/);
     expect(
       computerControlTimeoutMs(
-        Array.from({ length: 8 }, () => ({ kind: "wait" as const, ms: 5_000 })),
+        Array.from({ length: 24 }, () => focus),
         5_000,
       ),
-    ).toBe(60_000);
-    expect(() =>
+    ).toBe(15_000 + 24 * 13_400 + 5_000);
+    expect(
       computerControlTimeoutMs(
         Array.from({ length: 10 }, () => ({ kind: "wait" as const, ms: 5_000 })),
         5_000,
       ),
-    ).toThrow(/control deadline/);
+    ).toBe(15_000 + 10 * 5_000 + 5_000);
   });
 
   it("wraps sandbox commands in a process-tree timeout", () => {
