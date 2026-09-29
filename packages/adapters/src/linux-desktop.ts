@@ -229,11 +229,10 @@ function browserActionCommand(
 // Chrome-family WM_CLASS components. Matched whole, so "xterm" does not raise "uxterm".
 const CHROME_WM_CLASSES = "chromium|chromium-browser|google-chrome|google-chrome-stable|chrome";
 
-// Firefox is a browser alias, but its window class is Navigator and the
-// Chromium launcher cannot raise or replace it.
+// Launch maps every BROWSER_APPLICATIONS name, including firefox, onto the
+// Chromium launcher. Focus must use that same set or it cannot raise the window launch opened.
 function isChromiumBrowser(application: string) {
-  const normalized = application.toLowerCase();
-  return normalized !== "firefox" && BROWSER_APPLICATIONS.has(normalized);
+  return BROWSER_APPLICATIONS.has(application.toLowerCase());
 }
 
 // Same 0.2s quick-failure window as rakazo-focus-or-launch. A GUI that stays

@@ -199,21 +199,29 @@ describe("provider focus command", () => {
     expect(readFileSync(activated, "utf8").trim()).toBe("0x0000000b");
   });
 
-  it("raises Firefox by its window class and keeps the workspace and URI", async () => {
-    writeFileSync(windows, "0x00000007  0 7 Navigator.Firefox host Firefox\n");
+  it("raises the Chromium window launch opened for the firefox alias", async () => {
+    writeFileSync(
+      windows,
+      [
+        "0x00000007  0 7 Navigator.Firefox host Firefox",
+        "0x0000000c  0 12 chromium.Chromium host Browser",
+        "",
+      ].join("\n"),
+    );
     const command = await focusCommand({
       kind: "focus",
       application: "firefox",
       uri: "https://example.test",
     });
-    expect(command).toContain(`\ncd '${workspace}'\n`);
-    expect(command).toContain("'firefox' 'https://example.test'");
-    expect(command).toContain("in firefox)");
-    expect(command).not.toContain("nohup ");
-    writeExecutable(path.join(bin, "firefox"), "#!/bin/sh\nexit 0\n");
+    expect(command).toContain("nohup /tmp/rakazo/browser-launch-1 'https://example.test'");
+    expect(command).toContain(
+      "in chromium|chromium-browser|google-chrome|google-chrome-stable|chrome)",
+    );
+    expect(command).not.toContain("in firefox)");
+    expect(command).not.toContain(`\ncd '${workspace}'\n`);
     const result = runFocus(command);
     expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(activated, "utf8").trim()).toBe("0x00000007");
+    expect(readFileSync(activated, "utf8").trim()).toBe("0x0000000c");
   });
 
   it("fails a focus URI when the launcher exits before the old window is raised", async () => {
