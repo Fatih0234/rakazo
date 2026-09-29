@@ -14,8 +14,8 @@ import { isLocalMcpHost } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { sanitizeConnectorError } from "./connector-safety.js";
-import { actorMayUsePrivateRemoteMcp } from "./mcp-private-endpoint.js";
 import { secureFetch, validateUrl, withEndpointOriginFallback } from "./mcp-transport.js";
+import { actorMayUsePrivateEndpoint } from "./private-endpoint.js";
 import type { RemoteTransportDependencies } from "./remote-mcp.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
@@ -480,7 +480,7 @@ export class McpOAuthBroker {
       server.endpoint,
       this.network,
       loaded.material,
-      await actorMayUsePrivateRemoteMcp(this.prisma, input.userId, this.allowPrivateEndpoint),
+      await actorMayUsePrivateEndpoint(this.prisma, input.userId, this.allowPrivateEndpoint),
     );
     const transport = new StreamableHTTPClientTransport(endpoint, {
       requestInit: { headers: networkFetch.headers },
@@ -618,7 +618,7 @@ export class McpOAuthBroker {
       pending.endpoint,
       this.network,
       {},
-      await actorMayUsePrivateRemoteMcp(this.prisma, pending.userId, this.allowPrivateEndpoint),
+      await actorMayUsePrivateEndpoint(this.prisma, pending.userId, this.allowPrivateEndpoint),
     );
     const transport = new StreamableHTTPClientTransport(endpoint, {
       authProvider: pending.provider,

@@ -292,6 +292,14 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
             throw new APIError("BAD_REQUEST", { message: "Email is not available" });
           }
         }
+        // Better Auth skips the password for a session under a day old, so a
+        // borrowed session alone could delete the account.
+        if (ctx.path === "/delete-user" && !ctx.body?.password) {
+          throw new APIError("BAD_REQUEST", {
+            message: "Invalid password",
+            code: "INVALID_PASSWORD",
+          });
+        }
         let policy =
           ctx.path === "/sign-up/email" || ctx.path === "/sign-in/email"
             ? await resolveSignupPolicy(prisma, env)
@@ -358,6 +366,8 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
         if (ctx.path === "/sign-up/email") {
           await releaseSignupGate(String(ctx.body?.email ?? ""));
         }
+        const redacted = withoutSessionTokens(ctx.path, ctx.context.returned);
+        if (redacted) return ctx.json(redacted);
       }),
     },
     databaseHooks: {
@@ -454,6 +464,38 @@ function escapeHtml(value: string): string {
 }
 
 export type Auth = ReturnType<typeof createAuth>;
+
+/**
+ * A session token is a bearer credential. Session reads describe sessions
+ * without handing any of them out; sign-in and sign-up still return the token
+ * they just issued. Returns the redacted body, or undefined to keep it.
+ */
+function withoutSessionTokens(
+  path: string,
+  returned: unknown,
+): Record<string, unknown> | unknown[] | undefined {
+  if (path === "/list-sessions" && Array.isArray(returned)) {
+    return returned.map(withoutToken);
+  }
+  if (
+    (path === "/get-session" || path === "/update-session") &&
+    isRecord(returned) &&
+    isRecord(returned.session)
+  ) {
+    return { ...returned, session: withoutToken(returned.session) };
+  }
+  return undefined;
+}
+
+function withoutToken(session: unknown): unknown {
+  if (!isRecord(session)) return session;
+  const { token: _token, ...rest } = session;
+  return rest;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 /** Assemble Better Auth trustedOrigins, adding localhost↔127.0.0.1 twins for loopback. */
 export function buildTrustedOrigins(env: Pick<AuthEnv, "webOrigin" | "baseURL" | "extraOrigins">) {

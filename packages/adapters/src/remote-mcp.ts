@@ -27,7 +27,7 @@ const MAX_RESULT_BYTES = 1_000_000;
 export type { ResolveHostname } from "./network-address.js";
 
 export interface RemoteUrlPolicy {
-  /** Deployment-owner escape for LAN / Docker-network MCP endpoints. Default off. */
+  /** Deployment-owner escape for loopback / LAN / Docker-network endpoints. Default off. */
   allowPrivateEndpoint?: boolean;
 }
 
@@ -36,7 +36,7 @@ export interface RemoteTransportDependencies {
   resolveHostname?: ResolveHostname;
 }
 
-export interface RemoteMcpOptions extends RemoteTransportDependencies {
+export interface RemoteMcpOptions extends RemoteTransportDependencies, RemoteUrlPolicy {
   endpoint: string;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -98,14 +98,17 @@ async function withRemoteMcpClient<T>(
   options: RemoteMcpOptions,
   run: (client: Client, signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
+  const policy = { allowPrivateEndpoint: options.allowPrivateEndpoint };
   const endpoint = await assertSafeRemoteUrl(
     options.endpoint,
     options.resolveHostname ?? resolveHostname,
+    policy,
   );
   const signal = combineSignals(options.signal, AbortSignal.timeout(MCP_TIMEOUT_MS));
   const safeFetch = createSafeRemoteFetch(
     options.fetch,
     options.resolveHostname ?? resolveHostname,
+    policy,
   );
   const transport = new StreamableHTTPClientTransport(endpoint, {
     requestInit: {

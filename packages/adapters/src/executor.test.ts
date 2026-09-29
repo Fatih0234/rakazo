@@ -1221,6 +1221,7 @@ describe("createRunExecutor", () => {
 
     expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: expect.objectContaining({ bot: { archivedAt: null } }),
         data: expect.objectContaining({ active: false, nextRunAt: null }),
       }),
     );
@@ -1240,6 +1241,52 @@ describe("createRunExecutor", () => {
         threadId: "group-thread-1",
       }),
     );
+  });
+
+  it("re-pauses a due routine whose bot is archived instead of queueing a run", async () => {
+    const scheduledAt = new Date(Date.now() - 1_000);
+    const enqueue = vi.fn(async () => undefined);
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    const $transaction = vi.fn();
+    const prisma = {
+      routine: {
+        findUnique: vi.fn(async () => ({
+          id: "routine-1",
+          spaceId: "ws-1",
+          botId: "bot-1",
+          userId: "user-1",
+          prompt: "say hi",
+          crons: [ONCE_ROUTINE_CRON],
+          timezone: "UTC",
+          active: true,
+          nextRunAt: scheduledAt,
+          threadId: null,
+        })),
+        updateMany,
+      },
+      bot: {
+        findUnique: vi.fn(async () => ({
+          id: "bot-1",
+          archivedAt: new Date(),
+          thread: { id: "thread-1" },
+        })),
+      },
+      $transaction,
+    } as unknown as PrismaClient;
+    const executor = createRunExecutor({
+      prisma,
+      jobs: { enqueue, cancel: vi.fn(async () => undefined), close: vi.fn(async () => undefined) },
+      events: { append: vi.fn(async () => undefined) },
+    } as unknown as Parameters<typeof createRunExecutor>[0]);
+
+    await executor.wakeRoutine("routine-1", scheduledAt.toISOString());
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: "routine-1", active: true },
+      data: { active: false, nextRunAt: null },
+    });
+    expect($transaction).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("wakes a tool-created group routine into the group thread, not the bot DM", async () => {

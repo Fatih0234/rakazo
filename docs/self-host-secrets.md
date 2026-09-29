@@ -86,10 +86,10 @@ example.
 bash install-images.sh --prepare-only   # creates .env + fills empties
 # inspect key NAMES only if debugging; never log values
 bash install-images.sh                  # pull + up; preserves .env
-curl -fsS http://127.0.0.1:3100/health
+curl -fsS http://127.0.0.1:3100/internal/health
 ```
 
-If `sandbox` in `/health` is `"none"` or the supervisor never becomes healthy,
+If `sandbox` in `/internal/health` is `"none"` or the supervisor never becomes healthy,
 check that `SANDBOX_SUPERVISOR_TOKEN` is set and non-empty for the Docker
 computer path. A missing token is a setup failure, not an "optional tighten
 later" item.

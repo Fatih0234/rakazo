@@ -90,6 +90,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { AppEnv } from "./env.js";
 import { loadEnv } from "./env.js";
+import { healthRoutes } from "./health.js";
 import { mountLocalSettings } from "./local-settings.js";
 import {
   createMessagingInboundHandler,
@@ -110,6 +111,19 @@ import {
 } from "./team-chat-startup.js";
 import { mountVoiceHttpRoutes } from "./voice.js";
 import { mountWebhookHttpRoutes } from "./webhook.js";
+
+/**
+ * Native clients always send the app scheme, including in Expo Go, so no
+ * exp:// origin is trusted: it would accept any Expo host as a redirect target.
+ * The loopback entries are the Expo web dev server.
+ */
+export const MOBILE_AUTH_ORIGINS = [
+  "rakazo://",
+  "http://localhost:8081",
+  "http://127.0.0.1:8081",
+  "http://localhost:19006",
+  "http://127.0.0.1:19006",
+];
 
 export interface AppHandles {
   app: Hono;
@@ -304,7 +318,12 @@ export async function createApp(
     (env.smtpUrl
       ? new SmtpEmailProvider({ url: env.smtpUrl, from: env.emailFrom ?? "" })
       : localEmailEmulator);
-  const installed = new InstalledConnectorProvider(prisma, secrets, remoteConnectors);
+  const installed = new InstalledConnectorProvider(
+    prisma,
+    secrets,
+    remoteConnectors,
+    env.mcpAllowPrivateEndpoint,
+  );
   const integrationSettings = new IntegrationProviderSettings(prisma, secrets, env.encryptionKey, {
     composio:
       composioOverride ??
@@ -338,15 +357,7 @@ export async function createApp(
     signupAllowlist: env.signupAllowlist,
     email,
     onEmailError: (error) => getLogger().error("transactional email delivery failed", error),
-    extraOrigins: [
-      "rakazo://",
-      "exp://",
-      "exp://*",
-      "http://localhost:8081",
-      "http://127.0.0.1:8081",
-      "http://localhost:19006",
-      "http://127.0.0.1:19006",
-    ],
+    extraOrigins: MOBILE_AUTH_ORIGINS,
     beforeDeleteUser: async (userId) => {
       const bots = await prisma.bot.findMany({
         where: { userId },
@@ -833,9 +844,9 @@ export async function createApp(
     })();
   }
 
-  app.get("/health", (c) =>
-    c.json({
-      ok: true,
+  app.route(
+    "/",
+    healthRoutes(() => ({
       runtime: env.agentRuntime,
       sandbox: env.sandboxProvider,
       composio: Boolean(stack.composio),
@@ -845,7 +856,7 @@ export async function createApp(
       jobs: jobKind,
       realtime: realtime.describe().id,
       revision: env.gitSha ?? null,
-    }),
+    })),
   );
 
   return {
@@ -896,7 +907,7 @@ export async function createApp(
 function isTrustedOrigin(origin: string, env: AppEnv) {
   if (!origin) return true;
   if (origin === env.webOrigin || origin === env.apiUrl || origin === env.authUrl) return true;
-  if (origin.startsWith("rakazo://") || origin.startsWith("exp://")) return true;
+  if (origin.startsWith("rakazo://")) return true;
   try {
     const host = new URL(origin).hostname;
     return isLoopbackHost(host);

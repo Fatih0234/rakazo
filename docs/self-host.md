@@ -275,9 +275,10 @@ screenshot computer tools stay available. Existing connections default to disabl
 managed endpoints, the deployment-wide fallback remains
 `RAKAZO_OPENAI_COMPATIBLE_VISION_MODELS=gpt4o-vision,llava`.
 
-Remote MCP defaults to public HTTPS. The deployment owner can attach a server on localhost, the
-same LAN, or a Docker network. Set `MCP_ALLOW_PRIVATE_ENDPOINT=true` on the API and worker to allow it for
-every user. Cloud metadata addresses stay blocked. Leave the flag unset on public installs.
+Remote MCP servers and installed API / GraphQL connectors default to public HTTPS. The deployment
+owner can attach one on localhost, the same LAN, or a Docker network. Set
+`MCP_ALLOW_PRIVATE_ENDPOINT=true` on the API and worker to allow these for every user. Cloud
+metadata addresses stay blocked. Leave the flag unset on public installs.
 
 For servers that accept standard `reasoning_effort`, enable **Supports thinking** under
 **Advanced** when connecting. The setting is saved on the connection (no env var or restart).
@@ -412,7 +413,15 @@ curl --fail https://app.example.com/health
 registry serves, so the commands above build `api`, `worker`, and `web` from the checkout you just
 cloned. The opt-in command under [Updater sidecar](#updater-sidecar) builds `updater` when needed.
 
-Passing `GIT_SHA` is what makes `GET /health` report a `"revision"`; a locally built image has no
+The public `/health` only reports liveness. Runtime, sandbox, and revision details stay on the API
+port at `/internal/health`, which the edge does not route:
+
+```bash
+docker compose --env-file .env -f infra/compose/docker-compose.prod.yml exec api \
+  node -e "fetch('http://127.0.0.1:3100/internal/health').then(r=>r.text()).then(console.log)"
+```
+
+Passing `GIT_SHA` is what makes `/internal/health` report a `"revision"`; a locally built image has no
 other way to know its commit. Prebuilt images from the registry bake it in at publish time, so when
 you switch to a release tag you should leave `GIT_SHA` unset — a value in `.env` would override what
 the image already knows.

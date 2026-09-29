@@ -31,7 +31,7 @@ Requirements:
 Verify:
 
 ```bash
-curl -fsS http://127.0.0.1:3100/health
+curl -fsS http://127.0.0.1:3100/internal/health
 # expect sandbox: docker
 ```
 
@@ -64,7 +64,7 @@ holds `docker-compose.images.yml` and `.env`):
 
 ```bash
 docker compose --env-file .env -f docker-compose.images.yml up -d
-curl -fsS http://127.0.0.1:3100/health
+curl -fsS http://127.0.0.1:3100/internal/health
 ```
 
 Confirm `sandbox` equals the intended provider (`e2b`, `daytona`, or `box`).

@@ -143,7 +143,7 @@ async function main() {
     },
   );
   const stack = createConnectorStack(false, undefined, [
-    new InstalledConnectorProvider(prisma, secrets),
+    new InstalledConnectorProvider(prisma, secrets, {}, allowPrivateEndpoint),
     ...integrationSettings.providers(),
     mcp,
   ]);

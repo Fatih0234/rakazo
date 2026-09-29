@@ -52,7 +52,11 @@ function fixture({
     authData: data,
     $executeRaw: vi.fn(async () => 0),
     $transaction: vi.fn(
-      async (run: (tx: typeof prisma) => Promise<unknown>, options?: { timeout?: number }) => {
+      async (
+        run: ((tx: typeof prisma) => Promise<unknown>) | Promise<unknown>[],
+        options?: { timeout?: number },
+      ) => {
+        if (Array.isArray(run)) return Promise.all(run);
         if (!expireAdmissionGate || options?.timeout === undefined) return run(prisma);
         if (expireAdmissionGate === "before") throw new Error("admission gate timeout");
         const pending = run(prisma);
@@ -100,6 +104,9 @@ function fixture({
         },
       ),
     },
+    member: { findMany: vi.fn(async () => []) },
+    messagingIdentity: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+    organization: { deleteMany: vi.fn(async () => ({ count: 0 })) },
     spaceMember: {
       findFirst: vi.fn(async ({ where }: { where: { userId: string } }) =>
         members.has(where.userId) ? { spaceId: "space-1" } : null,
@@ -435,5 +442,48 @@ describe("identity trust through auth endpoints", () => {
     expect(await (await f.request("/get-session", undefined, token)).json()).toBeNull();
     expect((await f.request("/update-user", { name: "Changed" }, token)).status).toBe(401);
     expect(f.messages).toHaveLength(0);
+  });
+});
+
+describe("session credentials", () => {
+  it("lists and reads sessions without handing out their tokens", async () => {
+    const f = fixture({ delivery: false });
+    await f.signup();
+    const tokens: string[] = [];
+    for (let i = 0; i < 2; i += 1) {
+      tokens.push(((await (await f.signin()).json()) as { token: string }).token);
+    }
+    const listed = await f.request("/list-sessions", undefined, tokens[0]);
+    expect(listed.status).toBe(200);
+    const text = await listed.text();
+    const sessions = JSON.parse(text) as Array<Record<string, unknown>>;
+    expect(sessions.length).toBeGreaterThanOrEqual(2);
+    for (const session of sessions) {
+      expect(session).toMatchObject({ id: expect.any(String), userId: expect.any(String) });
+      expect(session).not.toHaveProperty("token");
+    }
+    for (const token of tokens) expect(text).not.toContain(token);
+
+    const current = await f.request("/get-session", undefined, tokens[0]);
+    const body = (await current.json()) as { session: Record<string, unknown>; user: unknown };
+    expect(body.user).toMatchObject({ email: "approved@example.test" });
+    expect(body.session).not.toHaveProperty("token");
+    const server = await f.auth.api.getSession({
+      headers: new Headers({ authorization: `Bearer ${tokens[1]}` }),
+    });
+    expect(server?.session).not.toHaveProperty("token");
+  });
+
+  it("requires the password to delete an account, even from a fresh session", async () => {
+    const f = fixture({ delivery: false });
+    const { token } = (await (await f.signup()).json()) as { token: string };
+    for (const body of [{}, { password: "" }, { password: "wrong-password12" }]) {
+      const response = await f.request("/delete-user", body, token);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect(f.data.user).toHaveLength(1);
+    }
+    const deleted = await f.request("/delete-user", { password: "offline-password12" }, token);
+    expect(deleted.status).toBe(200);
+    expect(f.data.user).toHaveLength(0);
   });
 });

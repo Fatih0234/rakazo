@@ -453,6 +453,11 @@ function connectionContext(
   };
 }
 
+/** Loopback / LAN / Docker-network endpoints: the deployment owner, or everyone under the flag. */
+function mayUsePrivateEndpoint(actor: Actor, deps: Pick<RouterDeps, "env">): boolean {
+  return actor.isDeploymentOwner || deps.env.mcpAllowPrivateEndpoint === true;
+}
+
 async function assertMcpRemoteEndpoint(
   endpoint: string | null | undefined,
   actor: Actor,
@@ -461,7 +466,7 @@ async function assertMcpRemoteEndpoint(
   if (!endpoint) return;
   try {
     await assertSafeRemoteUrl(endpoint, deps.remoteConnectors?.resolveHostname, {
-      allowPrivateEndpoint: actor.isDeploymentOwner || deps.env.mcpAllowPrivateEndpoint === true,
+      allowPrivateEndpoint: mayUsePrivateEndpoint(actor, deps),
     });
   } catch (error) {
     throw new ORPCError("BAD_REQUEST", {
@@ -2976,14 +2981,17 @@ export function createRouter(deps: RouterDeps) {
         return mapRoutine(row);
       }),
       update: authed.routines.update.handler(async ({ context, input }) => {
+        // Archived bots keep their routines paused, so resolve an active parent before any write.
         const existing = await deps.prisma.routine.findFirst({
           where: {
             id: input.routineId,
             spaceId: context.actor.spaceId,
             userId: context.actor.userId,
+            bot: { archivedAt: null },
           },
         });
-        if (!existing) throw new IsolationError();
+        if (!existing) throw new ORPCError("NOT_FOUND");
+        const bot = await repos.getBot(context.actor, existing.botId);
         const active = input.active ?? existing.active;
         const crons = input.crons ?? existing.crons;
         const timezone = input.timezone ?? existing.timezone;
@@ -3050,22 +3058,27 @@ export function createRouter(deps: RouterDeps) {
             : isOneShotRoutineCrons(crons)
               ? (armedOneShotAt ?? existing.nextRunAt)
               : (recalculatedNextRunAt ?? existing.nextRunAt);
-        const row = await deps.prisma.routine.update({
-          where: { id: existing.id },
-          data: {
-            name: input.name,
-            prompt: input.prompt,
-            crons: input.crons,
-            timezone: input.timezone,
-            active: input.active,
-            notify: input.notify,
-            webhookEnabled: input.webhookEnabled,
-            githubEnabled: input.githubEnabled,
-            messageProvider: input.messageProvider,
-            nextRunAt,
-          },
-        });
-        const bot = await repos.getBot(context.actor, row.botId);
+        // Re-check the parent in the write itself so an archive that lands after the read wins.
+        const row = await deps.prisma.routine
+          .update({
+            where: { id: existing.id, bot: { archivedAt: null } },
+            data: {
+              name: input.name,
+              prompt: input.prompt,
+              crons: input.crons,
+              timezone: input.timezone,
+              active: input.active,
+              notify: input.notify,
+              webhookEnabled: input.webhookEnabled,
+              githubEnabled: input.githubEnabled,
+              messageProvider: input.messageProvider,
+              nextRunAt,
+            },
+          })
+          .catch((error: unknown) => {
+            if (isRecordNotFound(error)) throw new ORPCError("NOT_FOUND");
+            throw error;
+          });
         if (bot.thread) {
           await deps.events.append({
             spaceId: context.actor.spaceId,
@@ -3361,6 +3374,7 @@ export function createRouter(deps: RouterDeps) {
               credential,
               signal: context.signal,
               remote: deps.remoteConnectors,
+              allowPrivateEndpoint: mayUsePrivateEndpoint(context.actor, deps),
             });
             config = verified.config;
           }
@@ -3371,6 +3385,7 @@ export function createRouter(deps: RouterDeps) {
               credential,
               signal: context.signal,
               remote: deps.remoteConnectors,
+              allowPrivateEndpoint: mayUsePrivateEndpoint(context.actor, deps),
             });
             source = prepared.source;
             config = prepared.config;
@@ -3382,6 +3397,7 @@ export function createRouter(deps: RouterDeps) {
               credential,
               signal: context.signal,
               remote: deps.remoteConnectors,
+              allowPrivateEndpoint: mayUsePrivateEndpoint(context.actor, deps),
             });
             source = prepared.source;
             config = prepared.config;
@@ -6184,6 +6200,10 @@ async function messagingIdentityDto(
 
 function isUniqueViolation(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "P2002");
+}
+
+function isRecordNotFound(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "P2025");
 }
 
 function messagingChannelDto(membership: {

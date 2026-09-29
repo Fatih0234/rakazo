@@ -643,3 +643,71 @@ describe("OpenAPI connector import", () => {
     ).rejects.toThrow("Sensitive headers cannot be model-controlled");
   });
 });
+
+describe("private installed connectors", () => {
+  const LOCAL_API = "http://127.0.0.1:4000";
+  const config = {
+    auth: { type: "none" },
+    operations: [{ id: "list_items", method: "GET", path: "/items" }],
+  };
+
+  it("installs a loopback API only with the private-endpoint escape", async () => {
+    await expect(prepareApiInstall({ source: LOCAL_API, config })).rejects.toThrow(
+      "Connector URL must use HTTPS",
+    );
+    await expect(
+      prepareApiInstall({ source: LOCAL_API, config, allowPrivateEndpoint: true }),
+    ).resolves.toMatchObject({ source: LOCAL_API, operationCount: 1 });
+  });
+
+  it("checks the install owner's current standing on every call", async () => {
+    const install = {
+      id: "api-local",
+      kind: "api",
+      name: "Local API",
+      source: LOCAL_API,
+      secretId: null,
+      createdAt: new Date(0),
+      config,
+    };
+    const deployment = { ownerUserId: "owner-1" };
+    const prisma = {
+      capabilityInstall: { findFirst: vi.fn().mockResolvedValue(install) },
+      deploymentSettings: { findUnique: vi.fn(async () => deployment) },
+    };
+    const fetch = vi.fn(async () => Response.json({ items: [] }));
+    const execute = async (userId: string, instanceFlag = false) => {
+      const provider = new InstalledConnectorProvider(
+        prisma as never,
+        {} as never,
+        { fetch: fetch as unknown as typeof globalThis.fetch },
+        instanceFlag,
+      );
+      const events = [];
+      for await (const event of provider.execute(
+        {
+          tool: "list_items",
+          args: {},
+          executionId: "call-1",
+          route: { connectorId: "installed", resourceId: install.id, toolName: "list_items" },
+        },
+        { spaceId: "space-1", userId, signal: new AbortController().signal } as never,
+      )) {
+        events.push(event);
+      }
+      return events;
+    };
+
+    await expect(execute("owner-1")).resolves.toEqual([
+      { type: "result", data: { status: 200, data: { items: [] } } },
+    ]);
+    await expect(execute("member-1")).resolves.toEqual([
+      { type: "error", message: "Connector URL must use HTTPS" },
+    ]);
+    await expect(execute("member-1", true)).resolves.toMatchObject([{ type: "result" }]);
+    // Installed while this user owned the deployment: no longer reachable after the change.
+    deployment.ownerUserId = "member-1";
+    await expect(execute("owner-1")).resolves.toMatchObject([{ type: "error" }]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});

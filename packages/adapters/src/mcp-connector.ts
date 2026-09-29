@@ -22,8 +22,8 @@ import {
 } from "./lazy-tool-catalog.js";
 import type { McpOAuthBroker, OAuthMaterial } from "./mcp-oauth.js";
 import { oauthMaterialSecrets } from "./mcp-oauth.js";
-import { actorMayUsePrivateRemoteMcp } from "./mcp-private-endpoint.js";
 import { McpSession } from "./mcp-transport.js";
+import { actorMayUsePrivateEndpoint } from "./private-endpoint.js";
 import type { RemoteTransportDependencies } from "./remote-mcp.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
@@ -361,7 +361,7 @@ export class McpConnector implements ConnectorProvider {
         if (!server.endpoint) throw new Error("MCP endpoint is required");
         const endpoint = new URL(server.endpoint);
         const localHttp = endpoint.protocol === "http:" && isLocalMcpHost(endpoint.hostname);
-        const allowPrivateEndpoint = await actorMayUsePrivateRemoteMcp(
+        const allowPrivateEndpoint = await actorMayUsePrivateEndpoint(
           this.prisma,
           context.userId,
           this.options.allowPrivateEndpoint === true,

@@ -1359,6 +1359,38 @@ describeWithDatabase("API authorization and resource isolation", () => {
     ).toEqual([newer.id, older.id]);
   });
 
+  it("never hands out session tokens and asks for the password before account deletion", async () => {
+    const email = `sessions-${stamp}@rakazo.test`;
+    const cookie = await signup(app, email, "Sessions");
+    const second = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://127.0.0.1:5173" },
+      body: JSON.stringify({ email, password: "password12" }),
+    });
+    const { token } = (await second.json()) as { token: string };
+    expect(token).toEqual(expect.any(String));
+
+    const listed = await app.request("/api/auth/list-sessions", { headers: { cookie } });
+    expect(listed.status).toBe(200);
+    const text = await listed.text();
+    const sessions = JSON.parse(text) as Array<Record<string, unknown>>;
+    expect(sessions).toHaveLength(2);
+    for (const session of sessions) expect(session).not.toHaveProperty("token");
+    expect(text).not.toContain(token);
+    const current = (await (
+      await app.request("/api/auth/get-session", { headers: { cookie } })
+    ).json()) as { session: Record<string, unknown> };
+    expect(current.session).not.toHaveProperty("token");
+
+    const deleted = await app.request("/api/auth/delete-user", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, origin: "http://127.0.0.1:5173" },
+      body: JSON.stringify({}),
+    });
+    expect(deleted.status).toBe(400);
+    expect(await handles.prisma.user.findUnique({ where: { email } })).not.toBeNull();
+  });
+
   it("restricts deployment settings to the deployment owner", async () => {
     const owner = await signup(app, `deployment-owner-${stamp}@rakazo.test`, "Deployment Owner");
     const other = await signup(app, `deployment-other-${stamp}@rakazo.test`, "Deployment Other");

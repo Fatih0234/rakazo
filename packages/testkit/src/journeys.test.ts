@@ -2807,6 +2807,33 @@ describeJourneys("required product journeys", () => {
       runAt: new Date(Date.now() + 180_000).toISOString(),
     });
     expect(afterFire.status).toBeGreaterThanOrEqual(400);
+
+    await prisma.routine.update({
+      where: { id: routine.id },
+      data: { active: false, nextRunAt: null, lastRunAt: null },
+    });
+    await rpc(app, cookie, "bots/archive", { botId: bot.id });
+    const whileArchived = await raw(app, cookie, "routines/update", {
+      routineId: routine.id,
+      active: true,
+      runAt: new Date(Date.now() + 180_000).toISOString(),
+    });
+    expect(whileArchived.status).toBe(404);
+    await expect(
+      prisma.routine.findUniqueOrThrow({ where: { id: routine.id } }),
+    ).resolves.toMatchObject({ active: false, nextRunAt: null });
+
+    // A routine that is somehow active on an archived bot is re-paused, not run.
+    const dueAt = new Date(Date.now() - 1_000);
+    await prisma.routine.update({
+      where: { id: routine.id },
+      data: { active: true, nextRunAt: dueAt },
+    });
+    await executor.wakeRoutine(routine.id, dueAt.toISOString());
+    await expect(
+      prisma.routine.findUniqueOrThrow({ where: { id: routine.id } }),
+    ).resolves.toMatchObject({ active: false, nextRunAt: null, lastRunAt: null });
+    await expect(prisma.run.count({ where: { routineId: routine.id } })).resolves.toBe(0);
   });
 
   it("24: chat creates a space only after explicit approval", async () => {
