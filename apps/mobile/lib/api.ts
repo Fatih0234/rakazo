@@ -36,7 +36,9 @@ import { t } from "./i18n";
 import { resumeLiveNotifications } from "./live-notifications";
 import {
   clearSessionToken,
+  currentSessionGeneration,
   loadSessionToken,
+  replaceSessionTokenIfCurrent,
   restoreSessionToken,
   saveSessionToken,
   snapshotSessionToken,
@@ -444,20 +446,43 @@ export async function requestPasswordReset(email: string, redirectTo: string): P
 }
 
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const apiBase = currentApiBase();
+  const generation = currentSessionGeneration();
+  const headers = await authHeaders();
   const { response, body } = await fetchMobileJson<unknown>(
-    `${currentApiBase()}/api/auth/change-password`,
+    `${apiBase}/api/auth/change-password`,
     {
       method: "POST",
       headers: {
         "content-type": "application/json",
         origin: "rakazo://",
-        ...(await authHeaders()),
+        ...headers,
       },
       body: JSON.stringify({ currentPassword, newPassword, revokeOtherSessions: true }),
     },
     {},
   );
   if (!response.ok) throw new Error(responseErrorMessage(body, t("Could not change password")));
+  // Revoking other sessions also revokes this one; keep the replacement the server issued.
+  const token = tokenFromAuthResponse(response, body);
+  if (!token) return;
+  // A sign-out or server switch changes the session while the request is in flight.
+  if (currentApiBase() !== apiBase) return;
+  const maybeResume = async () => {
+    // Our save is the only change allowed; a sign-out during it must not restart notifications.
+    const spaceId = selectedSpaceId();
+    if (spaceId && currentSessionGeneration() === generation + 1) {
+      await resumeLiveNotifications(apiBase, token, spaceId).catch(() => undefined);
+    }
+  };
+  try {
+    if (!(await replaceSessionTokenIfCurrent(generation, token))) return;
+  } catch (error) {
+    // The replacement is already in memory; resume before the keychain error reaches the UI.
+    await maybeResume();
+    throw error;
+  }
+  await maybeResume();
 }
 
 async function fetchMobileJson<T>(
