@@ -22,7 +22,7 @@ import {
 } from "@rakazo/core";
 import * as Clipboard from "expo-clipboard";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   ActivityIndicator,
@@ -267,10 +267,18 @@ export default function Models() {
   const showModelSearch = modelsForProvider.length > MODEL_SEARCH_THRESHOLD;
   // Hide a query typed for another provider until load()/chooseProvider clears it.
   const modelQuery = modelSearch.provider === provider ? modelSearch.query : "";
-  const visibleModels = showModelSearch
+  const matchedModels = showModelSearch
     ? filterModelCatalog(modelsForProvider, modelQuery)
     : modelsForProvider;
-  const noModelMatches = showModelSearch && visibleModels.length === 0;
+  // Use and Save still apply to the staged model, so its radio stays visible.
+  const stagedModelHidden =
+    showModelSearch &&
+    selected !== undefined &&
+    modelQuery.trim().length > 0 &&
+    !matchedModels.some((entry) => entry.id === selected.id);
+  const visibleModels =
+    stagedModelHidden && selected ? [selected, ...matchedModels] : matchedModels;
+  const noModelMatches = showModelSearch && matchedModels.length === 0;
 
   // The search field keeps focus, so tell screen readers once when the results run out.
   useEffect(() => {
@@ -928,41 +936,49 @@ export default function Models() {
           />
         ) : null}
         <View style={styles.card}>
-          {noModelMatches ? (
+          {visibleModels.map((entry, index) => (
+            <Fragment key={`${entry.provider}:${entry.id}`}>
+              <Pressable
+                accessibilityRole="radio"
+                accessibilityState={{ selected: entry.id === selected.id }}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  cancelOAuth();
+                  setModelId(entry.id);
+                  setThinkingLevel(
+                    clampCatalogThinkingLevel(
+                      entry.id === credential?.modelId ? credential?.thinkingLevel : null,
+                      entry.thinkingLevels,
+                    ) as ThinkingLevel | null,
+                  );
+                  setError(null);
+                  setNotice(null);
+                }}
+                style={({ pressed }) => [
+                  styles.modelRow,
+                  entry.id === selected.id && styles.selectedRow,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <View style={styles.radio}>
+                  {entry.id === selected.id ? <View style={styles.radioDot} /> : null}
+                </View>
+                <Text style={styles.modelLabel}>{entry.label}</Text>
+              </Pressable>
+              {stagedModelHidden && noModelMatches && index === 0 ? (
+                <View style={styles.modelRow}>
+                  <Text style={[styles.modelLabel, styles.mutedLabel]}>
+                    {t("No matching models")}
+                  </Text>
+                </View>
+              ) : null}
+            </Fragment>
+          ))}
+          {!stagedModelHidden && noModelMatches ? (
             <View style={styles.modelRow}>
               <Text style={[styles.modelLabel, styles.mutedLabel]}>{t("No matching models")}</Text>
             </View>
           ) : null}
-          {visibleModels.map((entry) => (
-            <Pressable
-              key={`${entry.provider}:${entry.id}`}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: entry.id === selected.id }}
-              onPress={() => {
-                Keyboard.dismiss();
-                cancelOAuth();
-                setModelId(entry.id);
-                setThinkingLevel(
-                  clampCatalogThinkingLevel(
-                    entry.id === credential?.modelId ? credential?.thinkingLevel : null,
-                    entry.thinkingLevels,
-                  ) as ThinkingLevel | null,
-                );
-                setError(null);
-                setNotice(null);
-              }}
-              style={({ pressed }) => [
-                styles.modelRow,
-                entry.id === selected.id && styles.selectedRow,
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={styles.radio}>
-                {entry.id === selected.id ? <View style={styles.radioDot} /> : null}
-              </View>
-              <Text style={styles.modelLabel}>{entry.label}</Text>
-            </Pressable>
-          ))}
         </View>
         {catalogThinkingLevels.length ? (
           <Pressable
