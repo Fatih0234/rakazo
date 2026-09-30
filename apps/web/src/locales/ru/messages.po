@@ -92,6 +92,10 @@ msgstr "Компьютер {botName}"
 msgid "{days}d ago"
 msgstr "{days} дн. назад"
 
+#: src/components/ToolActivityDisclosure.tsx
+msgid "{hidden, plural, one {+# earlier step} other {+# earlier steps}}"
+msgstr ""
+
 #: src/lib/relative-time.ts
 #: src/pages/ActivityList.tsx
 msgid "{hours}h ago"
@@ -124,6 +128,14 @@ msgstr "Осталось: {remaining} · бот наблюдает, но не д
 #: src/components/ArtifactFileCard.tsx
 msgid "{size} B"
 msgstr "{size} Б"
+
+#: src/components/ToolActivityDisclosure.tsx
+msgid "{stepCount, plural, one {Done · # tool} other {Done · # tools}}"
+msgstr ""
+
+#: src/components/ToolActivityDisclosure.tsx
+msgid "{stepCount, plural, one {Working… · # tool} other {Working… · # tools}}"
+msgstr ""
 
 #: src/pages/ActivityList.tsx
 msgid "{title}, {label}"
@@ -614,10 +626,6 @@ msgstr "Бот для ссылки"
 #: src/pages/Artifacts.tsx
 msgid "Bots"
 msgstr ""
-
-#: src/components/ApprovalRulesSettings.tsx
-msgid "Bots act without asking by default. Add an exception only when you want to review a type of action first."
-msgstr "По умолчанию боты действуют, не спрашивая. Добавляйте исключение только в том случае, если вы хотите сначала просмотреть тип действия."
 
 #: src/pages/Shell.tsx
 msgid "Bots are working"
@@ -2557,10 +2565,6 @@ msgstr "Ни один бот не подходит"
 msgid "No chat apps linked yet."
 msgstr "Приложения для чата пока не связаны."
 
-#: src/components/ApprovalRulesSettings.tsx
-msgid "No exceptions. Actions run automatically."
-msgstr "Никаких исключений. Действия выполняются автоматически."
-
 #: src/pages/MessagingSettingsOverlay.tsx
 msgid "No group chats yet."
 msgstr "Групповых чатов пока нет."
@@ -2753,10 +2757,6 @@ msgstr "Открытие вашего пространства…"
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "Optional"
 msgstr "Необязательно"
-
-#: src/pages/AccountSettingsOverlay.tsx
-msgid "Optional controls most people never need"
-msgstr "Дополнительные элементы управления, которые большинству людей никогда не понадобятся"
 
 #: src/pages/McpServersOverlay.tsx
 msgid "Optional header value"
@@ -3417,6 +3417,10 @@ msgstr "Показать пароль"
 #: src/pages/Shell.tsx
 msgid "Show settings"
 msgstr "Показать настройки"
+
+#: src/pages/AccountSettingsOverlay.tsx
+msgid "Show tool activity"
+msgstr ""
 
 #: src/components/call/VoiceChatCard.tsx
 msgid "Show transcript"
