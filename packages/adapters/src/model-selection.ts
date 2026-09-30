@@ -156,7 +156,10 @@ export async function modelCredentialAuthKindsForSpace(
     select: { id: true, ciphertext: true },
   });
   const ciphertextById = new Map(secrets.map((secret) => [secret.id, secret.ciphertext]));
-  const readKind = (secretId: string): ModelCredentialAuthKind | undefined => {
+  // Every catalog model of a connected provider shares one secret, and each decrypt runs a
+  // synchronous scrypt, so decrypt each secret once rather than once per model.
+  const kindBySecretId = new Map<string, ModelCredentialAuthKind | undefined>();
+  const decryptKind = (secretId: string): ModelCredentialAuthKind | undefined => {
     const ciphertext = ciphertextById.get(secretId);
     if (!ciphertext) return undefined;
     try {
@@ -164,6 +167,10 @@ export async function modelCredentialAuthKindsForSpace(
     } catch {
       return undefined;
     }
+  };
+  const readKind = (secretId: string): ModelCredentialAuthKind | undefined => {
+    if (!kindBySecretId.has(secretId)) kindBySecretId.set(secretId, decryptKind(secretId));
+    return kindBySecretId.get(secretId);
   };
 
   const auth: SpaceCatalogAuth = {
