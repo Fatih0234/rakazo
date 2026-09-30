@@ -469,6 +469,25 @@ describe("space catalog auth", () => {
     expect(auth.byModel["openai-codex"]?.[spark]).toBe("disconnected");
     expect(listsSpark(auth)).toBe(false);
   });
+
+  it("decrypts a provider credential once, not once per catalog model", async () => {
+    const { prisma } = authPrisma({
+      credentials: [
+        {
+          ...storedCredential("cred-or", "secret-or", "2026-03-01T00:00:00.000Z"),
+          provider: "openrouter",
+        },
+      ],
+      preferences: [],
+      secrets: [{ id: "secret-or", ciphertext: "cipher-or" }],
+    });
+    const load = vi.fn(() => apiKey);
+
+    const auth = await modelCredentialAuthKindsForSpace(prisma, { load }, scope);
+
+    expect(auth.byProvider.openrouter).toBe("api_key");
+    expect(load).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("default credential selection", () => {

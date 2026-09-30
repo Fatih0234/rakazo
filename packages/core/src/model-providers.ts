@@ -1,4 +1,5 @@
 import type { ModelCatalogEntry } from "@rakazo/contracts";
+import { matchesSearchQuery } from "./search.js";
 
 /** Effort choices an OpenAI-compatible endpoint stores when reasoning is enabled. */
 export const COMPATIBLE_THINKING_LEVELS = [
@@ -110,4 +111,15 @@ export function selectedProviderOutsideSearchResults(
     return undefined;
   }
   return allProviders.find((entry) => entry.provider === selectedProvider);
+}
+
+/** Match a model by name, id, or provider name; a blank query keeps every model. */
+export function filterModelCatalog(
+  entries: readonly ModelCatalogEntry[],
+  query: string,
+): readonly ModelCatalogEntry[] {
+  if (!query.trim()) return entries;
+  return entries.filter((entry) =>
+    matchesSearchQuery(query, entry.label, entry.id, entry.providerName ?? entry.provider),
+  );
 }

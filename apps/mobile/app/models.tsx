@@ -16,15 +16,18 @@ import {
   clampCatalogThinkingLevel,
   createModelProbe,
   featuredModelProviders,
+  filterModelCatalog,
   initialModelProbeState,
   pickCatalogModelId,
 } from "@rakazo/core";
 import * as Clipboard from "expo-clipboard";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  Keyboard,
   Linking,
   Pressable,
   ScrollView,
@@ -72,6 +75,9 @@ function thinkingLevelLabel(level: ThinkingLevel, t: (message: string) => string
   return level;
 }
 
+/** Providers with more models than this get a search field. */
+const MODEL_SEARCH_THRESHOLD = 10;
+
 type ModelSelection = {
   provider?: string;
   modelId?: string;
@@ -87,6 +93,7 @@ export default function Models() {
   const [provider, setProvider] = useState("");
   const [showAllProviders, setShowAllProviders] = useState(false);
   const [modelId, setModelId] = useState("");
+  const [modelSearch, setModelSearch] = useState({ provider: "", query: "" });
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [reasoning, setReasoning] = useState(false);
@@ -164,6 +171,9 @@ export default function Models() {
     setCredentials(nextCredentials);
     resetOpenAiCompatibleProbe();
     setProvider(nextProvider);
+    setModelSearch((current) =>
+      current.provider === nextProvider ? current : { provider: nextProvider, query: "" },
+    );
     setModelId(nextModel);
     if (nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID) {
       setBaseUrl(nextCredential?.baseUrl ?? "");
@@ -254,6 +264,18 @@ export default function Models() {
   }, [groups, featuredProviders, showAllProviders, connectedProviderIds]);
   const modelsForProvider = catalog.filter((entry) => entry.provider === provider);
   const selected = modelsForProvider.find((entry) => entry.id === modelId) ?? modelsForProvider[0];
+  const showModelSearch = modelsForProvider.length > MODEL_SEARCH_THRESHOLD;
+  // Hide a query typed for another provider until load()/chooseProvider clears it.
+  const modelQuery = modelSearch.provider === provider ? modelSearch.query : "";
+  const visibleModels = showModelSearch
+    ? filterModelCatalog(modelsForProvider, modelQuery)
+    : modelsForProvider;
+  const noModelMatches = showModelSearch && visibleModels.length === 0;
+
+  // The search field keeps focus, so tell screen readers once when the results run out.
+  useEffect(() => {
+    if (noModelMatches) AccessibilityInfo.announceForAccessibility(t("No matching models"));
+  }, [noModelMatches, t]);
   const isOpenAiCompatible = provider === OPENAI_COMPATIBLE_PROVIDER_ID;
   const credential = credentials.find((entry) => entry.provider === provider);
   const currentEntry = catalog.find(
@@ -312,7 +334,9 @@ export default function Models() {
       nextProvider === OPENAI_COMPATIBLE_PROVIDER_ID
         ? (nextCredential?.modelId ?? "")
         : pickCatalogModelId(catalog, nextProvider, nextCredential?.modelId ?? me?.defaultModel);
+    Keyboard.dismiss();
     setProvider(nextProvider);
+    setModelSearch({ provider: nextProvider, query: "" });
     setReasoning(nextCredential?.reasoning ?? false);
     const nextEntry = catalog.find(
       (entry) => entry.provider === nextProvider && entry.id === nextModelId,
@@ -890,13 +914,32 @@ export default function Models() {
   const catalogModelCard =
     !isOpenAiCompatible && selected ? (
       <>
+        {showModelSearch ? (
+          <TextInput
+            accessibilityLabel={t("Search models")}
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={(query) => setModelSearch({ provider, query })}
+            placeholder={t("Search")}
+            placeholderTextColor={native.tertiaryLabel}
+            returnKeyType="search"
+            style={styles.keyInput}
+            value={modelQuery}
+          />
+        ) : null}
         <View style={styles.card}>
-          {modelsForProvider.map((entry) => (
+          {noModelMatches ? (
+            <View style={styles.modelRow}>
+              <Text style={[styles.modelLabel, styles.mutedLabel]}>{t("No matching models")}</Text>
+            </View>
+          ) : null}
+          {visibleModels.map((entry) => (
             <Pressable
               key={`${entry.provider}:${entry.id}`}
               accessibilityRole="radio"
               accessibilityState={{ selected: entry.id === selected.id }}
               onPress={() => {
+                Keyboard.dismiss();
                 cancelOAuth();
                 setModelId(entry.id);
                 setThinkingLevel(
@@ -1207,7 +1250,11 @@ export default function Models() {
 
   return (
     <SafeAreaView edges={["bottom"]} style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.activeCard}>
           <Text style={styles.eyebrow}>{t("Active model")}</Text>
           <Text style={styles.activeModel}>
@@ -1455,6 +1502,9 @@ function createModelsStyles() {
       color: native.label,
       fontSize: 15,
     },
+    mutedLabel: {
+      color: native.secondaryLabel,
+    },
     selectedRow: {
       backgroundColor: tokens.accent,
     },
@@ -1501,17 +1551,19 @@ function createModelsStyles() {
       marginTop: 4,
     },
     keyInput: {
-      height: 48,
+      minHeight: 48,
       borderRadius: 12,
       backgroundColor: native.fill,
       color: native.label,
       paddingHorizontal: 14,
+      paddingVertical: 10,
       marginTop: 4,
       fontSize: 16,
     },
     maxImagesInput: {
       width: 72,
-      height: 40,
+      minHeight: 40,
+      paddingVertical: 8,
       marginTop: 0,
       textAlign: "center",
     },

@@ -6,6 +6,12 @@ const SESSION_KEY = "rakazo.session_token";
 /** In-memory gate so a failed SecureStore wipe cannot keep sending the old bearer. */
 let sessionInvalidated = false;
 let sessionFallback: string | undefined;
+/** Bumped by every session change, so a late response can tell it no longer owns the session. */
+let sessionGeneration = 0;
+
+export function currentSessionGeneration() {
+  return sessionGeneration;
+}
 
 export async function loadSessionToken() {
   const snapshot = await snapshotSessionToken();
@@ -13,6 +19,7 @@ export async function loadSessionToken() {
 }
 
 export async function saveSessionToken(token: string) {
+  sessionGeneration += 1;
   await SecureStore.setItemAsync(SESSION_KEY, token);
   sessionInvalidated = false;
   sessionFallback = undefined;
@@ -20,6 +27,7 @@ export async function saveSessionToken(token: string) {
 
 /** Clears the session. Returns false only when SecureStore could neither delete nor overwrite. */
 export async function clearSessionToken(): Promise<boolean> {
+  sessionGeneration += 1;
   await stopLiveNotifications(true).catch(() => undefined);
   try {
     await SecureStore.deleteItemAsync(SESSION_KEY);
@@ -42,6 +50,7 @@ export async function clearSessionToken(): Promise<boolean> {
 
 /** Restores the current-server session in memory even when persistence is unavailable. */
 export async function restoreSessionToken(token: string) {
+  sessionGeneration += 1;
   if (!token) {
     sessionInvalidated = false;
     sessionFallback = undefined;
@@ -53,6 +62,29 @@ export async function restoreSessionToken(token: string) {
     sessionInvalidated = false;
     sessionFallback = token;
   }
+}
+
+/**
+ * Replaces the session only if nothing changed it since `generation` was read. The check and the
+ * write start in the same tick, so a sign-out that begins later clears the replacement too.
+ */
+export async function replaceSessionTokenIfCurrent(
+  generation: number,
+  token: string,
+): Promise<boolean> {
+  if (generation !== sessionGeneration) return false;
+  try {
+    await saveSessionToken(token);
+  } catch (error) {
+    // The server already revoked the stored token; keep the replacement in memory unless
+    // something else changed the session meanwhile, and still report that it was not saved.
+    if (sessionGeneration === generation + 1) {
+      sessionInvalidated = false;
+      sessionFallback = token;
+    }
+    throw error;
+  }
+  return true;
 }
 
 /** Snapshots the active token without treating an unreadable store as an empty session. */

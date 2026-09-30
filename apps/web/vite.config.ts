@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import http from "node:http";
 import https from "node:https";
@@ -17,6 +17,7 @@ import react from "@vitejs/plugin-react";
 import type { PreviewServer, ViteDevServer } from "vite";
 import { defineConfig, loadEnv } from "vite";
 import { resolveScreenProxySecret } from "../../packages/core/src/secrets-guard.ts";
+import { createServiceLogger } from "../../packages/logging/src/env.ts";
 import { collectNovncHtml, MAX_NOVNC_HTML_BYTES } from "./src/novnc-html.js";
 import {
   resolveNovncTarget,
@@ -27,6 +28,16 @@ import {
 const webPort = Number(process.env.WEB_PORT ?? 5173);
 const DESKTOP_STACK_PROBE_PATH = "/.well-known/rakazo-desktop-stack";
 const DESKTOP_STACK_TOKEN_HEADER = "x-rakazo-desktop-stack-token";
+const screenLog = createServiceLogger({ service: "rakazo-web" });
+
+function screenPolicy(url: string | undefined) {
+  return url?.startsWith("/novnc/session/control/") ? "control" : "view";
+}
+
+function socketErrorCode(error: unknown) {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code) ? code : "UNKNOWN";
+}
 
 function equalStackToken(expected: string, supplied: string | string[] | undefined) {
   if (expected === "" || typeof supplied !== "string") return false;
@@ -67,7 +78,18 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
       next();
       return;
     }
-    const target = await resolveNovncTarget(req.url, secret, api);
+    const connectionId = randomUUID();
+    const bindings = {
+      "screen.connection_id": connectionId,
+      "screen.policy": screenPolicy(req.url),
+    };
+    const target = await resolveNovncTarget(req.url, secret, api, (reason) => {
+      screenLog.warn("screen.proxy.target_rejected", {
+        ...bindings,
+        "screen.transport": "http",
+        reason,
+      });
+    });
     if (res.destroyed) return;
     if (!target) {
       res.statusCode = 403;
@@ -105,9 +127,14 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
       return true;
     };
     let downstreamFinished = false;
-    const finishUnavailable = () => {
+    const finishUnavailable = (reason: string, errorCode?: string) => {
       if (downstreamFinished || res.destroyed || res.writableEnded) return;
       downstreamFinished = true;
+      screenLog.warn("screen.proxy.http_failed", {
+        ...bindings,
+        reason,
+        ...(errorCode ? { "error.code": errorCode } : {}),
+      });
       stopChecking();
       if (res.headersSent) {
         res.destroy();
@@ -131,11 +158,18 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
           if ((incoming.statusCode ?? 502) >= 500 && scheduleRetry(incoming)) {
             return;
           }
+          if ((incoming.statusCode ?? 502) >= 400) {
+            screenLog.warn("screen.proxy.http_upstream_response", {
+              ...bindings,
+              "http.status": incoming.statusCode ?? 502,
+              "screen.retries": retries,
+            });
+          }
           const responseHeaders = safeScreenProxyResponseHeaders(incoming.headers);
           if (shouldInjectNovncStorageShim(responseHeaders, target.hostname)) {
             const declaredLength = Number(incoming.headers["content-length"] ?? 0);
             if (Number.isFinite(declaredLength) && declaredLength > MAX_NOVNC_HTML_BYTES) {
-              finishUnavailable();
+              finishUnavailable("html_too_large");
               incoming.destroy();
               return;
             }
@@ -149,7 +183,7 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
                 res.end(body);
               })
               .catch(() => {
-                finishUnavailable();
+                finishUnavailable("html_read_failed");
               });
             return;
           }
@@ -157,7 +191,7 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
           incoming.pipe(res);
         },
       );
-      upstream.on("error", () => {
+      upstream.on("error", (error) => {
         if (
           retryable &&
           !downstreamFinished &&
@@ -167,7 +201,7 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
         ) {
           return;
         }
-        finishUnavailable();
+        finishUnavailable("upstream_error", socketErrorCode(error));
       });
       if (req.method === "GET" || req.readableEnded) upstream.end();
       else req.pipe(upstream);
@@ -175,6 +209,7 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
     stopChecking = watchScreenAuthorization(
       async () => Boolean(await resolveNovncTarget(req.url, secret, api)),
       () => {
+        screenLog.warn("screen.proxy.http_revoked", bindings);
         upstream?.destroy();
         res.destroy();
       },
@@ -188,7 +223,19 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
 
   server.httpServer?.on("upgrade", async (req, socket, head) => {
     if (!req.url?.startsWith("/novnc/")) return;
-    const target = await resolveNovncTarget(req.url, secret, api);
+    const connectionId = randomUUID();
+    const startedAt = Date.now();
+    const bindings = {
+      "screen.connection_id": connectionId,
+      "screen.policy": screenPolicy(req.url),
+    };
+    const target = await resolveNovncTarget(req.url, secret, api, (reason) => {
+      screenLog.warn("screen.proxy.target_rejected", {
+        ...bindings,
+        "screen.transport": "websocket",
+        reason,
+      });
+    });
     if (socket.destroyed) return;
     if (!target) {
       socket.destroy();
@@ -198,18 +245,38 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
       target.protocol === "https:"
         ? tls.connect({ port: target.port, host: target.hostname, servername: target.hostname })
         : net.connect(target.port, target.hostname);
+    let upgraded = false;
+    let closed = false;
+    let closeInitiator: "client" | "upstream" | "revoked" | undefined;
+    const logClose = (side: "client" | "upstream") => {
+      if (closed) return;
+      closed = true;
+      const durationMs = Date.now() - startedAt;
+      const details = {
+        ...bindings,
+        "screen.upgraded": upgraded,
+        "screen.duration_ms": durationMs,
+        "screen.closed_by": closeInitiator ?? side,
+      };
+      if (!upgraded || durationMs < 5_000) screenLog.warn("screen.proxy.websocket_closed", details);
+      else screenLog.info("screen.proxy.websocket_closed", details);
+    };
     const stopChecking = watchScreenAuthorization(
       async () => Boolean(await resolveNovncTarget(req.url, secret, api)),
       () => {
+        screenLog.warn("screen.proxy.websocket_revoked", bindings);
+        closeInitiator ??= "revoked";
         socket.destroy();
         upstream.destroy();
       },
     );
     socket.once("close", () => {
+      logClose("client");
       stopChecking();
       upstream.destroy();
     });
     upstream.once("close", () => {
+      logClose("upstream");
       stopChecking();
       socket.destroy();
     });
@@ -231,6 +298,10 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
         responseChunks.push(chunk);
         responseSize += chunk.length;
         if (responseSize > 64 * 1024) {
+          screenLog.warn("screen.proxy.websocket_handshake_failed", {
+            ...bindings,
+            reason: "header_too_large",
+          });
           socket.destroy();
           upstream.destroy();
           return;
@@ -243,9 +314,31 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
         const responseHead = Buffer.concat(responseChunks, responseSize);
         const safe = stripSensitiveHandshakeHeaders(responseHead);
         if (!safe) {
+          screenLog.warn("screen.proxy.websocket_handshake_failed", {
+            ...bindings,
+            reason: "malformed_response",
+          });
           socket.destroy();
           upstream.destroy();
           return;
+        }
+        const status = Number(
+          responseHead
+            .toString("latin1", 0, responseHead.indexOf("\r\n"))
+            .match(/^HTTP\/1\.\d (\d{3})/)?.[1] ?? 0,
+        );
+        if (status !== 101) {
+          screenLog.warn("screen.proxy.websocket_handshake_failed", {
+            ...bindings,
+            reason: "upstream_status",
+            "http.status": status,
+          });
+        } else {
+          upgraded = true;
+          screenLog.info("screen.proxy.websocket_upgraded", {
+            ...bindings,
+            "screen.duration_ms": Date.now() - startedAt,
+          });
         }
         upstream.off("data", forwardHandshake);
         socket.write(safe);
@@ -253,8 +346,24 @@ function attachNovncProxy(server: ViteDevServer | PreviewServer, secret: string,
       };
       upstream.on("data", forwardHandshake);
     });
-    upstream.on("error", () => socket.destroy());
-    socket.on("error", () => upstream.destroy());
+    upstream.on("error", (error) => {
+      screenLog.warn("screen.proxy.websocket_error", {
+        ...bindings,
+        "screen.side": "upstream",
+        "error.code": socketErrorCode(error),
+      });
+      closeInitiator ??= "upstream";
+      socket.destroy();
+    });
+    socket.on("error", (error) => {
+      screenLog.warn("screen.proxy.websocket_error", {
+        ...bindings,
+        "screen.side": "client",
+        "error.code": socketErrorCode(error),
+      });
+      closeInitiator ??= "client";
+      upstream.destroy();
+    });
   });
 }
 

@@ -104,6 +104,10 @@ msgstr "{botName} 的电脑"
 msgid "{days}d ago"
 msgstr "{days} 天前"
 
+#: src/components/ToolActivityDisclosure.tsx
+msgid "{hidden, plural, one {+# earlier step} other {+# earlier steps}}"
+msgstr ""
+
 #: src/lib/relative-time.ts
 #: src/pages/ActivityList.tsx
 msgid "{hours}h ago"
@@ -136,6 +140,14 @@ msgstr "剩余 {remaining} · Bot 只看不操作"
 #: src/components/ArtifactFileCard.tsx
 msgid "{size} B"
 msgstr "{size} B"
+
+#: src/components/ToolActivityDisclosure.tsx
+msgid "{stepCount, plural, one {Done · # tool} other {Done · # tools}}"
+msgstr ""
+
+#: src/components/ToolActivityDisclosure.tsx
+msgid "{stepCount, plural, one {Working… · # tool} other {Working… · # tools}}"
+msgstr ""
 
 #: src/pages/ActivityList.tsx
 msgid "{title}, {label}"
@@ -636,10 +648,6 @@ msgstr "要关联的 Bot"
 #: src/pages/Artifacts.tsx
 msgid "Bots"
 msgstr ""
-
-#: src/components/ApprovalRulesSettings.tsx
-msgid "Bots act without asking by default. Add an exception only when you want to review a type of action first."
-msgstr "默认情况下 Bot 会直接执行。只有当你想先审核某类操作时，才添加例外。"
 
 #: src/pages/Shell.tsx
 msgid "Bots are working"
@@ -2629,10 +2637,6 @@ msgstr ""
 msgid "No chat apps linked yet."
 msgstr "还没有关联聊天应用。"
 
-#: src/components/ApprovalRulesSettings.tsx
-msgid "No exceptions. Actions run automatically."
-msgstr "没有例外。操作会自动执行。"
-
 #: src/pages/MessagingSettingsOverlay.tsx
 msgid "No group chats yet."
 msgstr "还没有群聊。"
@@ -2833,10 +2837,6 @@ msgstr "正在打开工作区…"
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "Optional"
 msgstr "可选"
-
-#: src/pages/AccountSettingsOverlay.tsx
-msgid "Optional controls most people never need"
-msgstr "多数人用不到的可选项"
 
 #: src/pages/McpServersOverlay.tsx
 msgid "Optional header value"
@@ -3497,6 +3497,10 @@ msgstr "显示密码"
 #: src/pages/Shell.tsx
 msgid "Show settings"
 msgstr "显示设置"
+
+#: src/pages/AccountSettingsOverlay.tsx
+msgid "Show tool activity"
+msgstr ""
 
 #: src/components/call/VoiceChatCard.tsx
 msgid "Show transcript"

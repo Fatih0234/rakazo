@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   clampCatalogThinkingLevel,
   featuredModelProviders,
+  filterModelCatalog,
   pickCatalogModelId,
   selectedProviderOutsideSearchResults,
 } from "./model-providers.js";
@@ -152,5 +153,44 @@ describe("clampCatalogThinkingLevel", () => {
 
   it("keeps a concrete level when the model is outside the catalog", () => {
     expect(clampCatalogThinkingLevel("high", undefined)).toBe("high");
+  });
+});
+
+describe("filterModelCatalog", () => {
+  const models: ModelCatalogEntry[] = [
+    {
+      provider: "openrouter",
+      providerName: "OpenRouter",
+      id: "anthropic/claude-sonnet",
+      label: "Claude Sonnet",
+      billing: "",
+    },
+    { provider: "openrouter", id: "openai/gpt-mini", label: "GPT Mini", billing: "" },
+  ];
+
+  it("keeps every model for a blank query", () => {
+    expect(filterModelCatalog(models, "")).toBe(models);
+    expect(filterModelCatalog(models, "   ")).toBe(models);
+  });
+
+  it("matches the label, id, or provider name, ignoring case and surrounding space", () => {
+    expect(filterModelCatalog(models, " sonnet ").map((entry) => entry.id)).toEqual([
+      "anthropic/claude-sonnet",
+    ]);
+    expect(filterModelCatalog(models, "OPENAI/").map((entry) => entry.id)).toEqual([
+      "openai/gpt-mini",
+    ]);
+    expect(filterModelCatalog(models, "OpenRouter").map((entry) => entry.id)).toEqual([
+      "anthropic/claude-sonnet",
+      "openai/gpt-mini",
+    ]);
+  });
+
+  it("falls back to the provider id when there is no provider name", () => {
+    expect(filterModelCatalog([models[1]!], "router")).toHaveLength(1);
+  });
+
+  it("returns nothing when no model matches", () => {
+    expect(filterModelCatalog(models, "gemini")).toEqual([]);
   });
 });

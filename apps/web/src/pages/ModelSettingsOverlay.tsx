@@ -17,6 +17,7 @@ import {
   COMPATIBLE_THINKING_LEVELS,
   clampCatalogThinkingLevel,
   createModelProbe,
+  filterModelCatalog,
   initialModelProbeState,
   pickCatalogModelId,
 } from "@rakazo/core";
@@ -1307,19 +1308,7 @@ function ModelPicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlightedIndex, setHighlightedIndex] = useState(selectedIndex);
-  const trimmedQuery = query.trim().toLowerCase();
-  const filteredOptions = useMemo(
-    () =>
-      trimmedQuery
-        ? options.filter(
-            (option) =>
-              option.label.toLowerCase().includes(trimmedQuery) ||
-              option.id.toLowerCase().includes(trimmedQuery) ||
-              (option.providerName ?? option.provider).toLowerCase().includes(trimmedQuery),
-          )
-        : options,
-    [options, trimmedQuery],
-  );
+  const filteredOptions = useMemo(() => filterModelCatalog(options, query), [options, query]);
   const groups = useMemo(() => {
     const grouped = new Map<string, ModelCatalogEntry[]>();
     for (const option of filteredOptions) {

@@ -104,6 +104,10 @@ msgstr "{botName}’s computer"
 msgid "{days}d ago"
 msgstr "{days}d ago"
 
+#: src/components/ToolActivityDisclosure.tsx
+msgid "{hidden, plural, one {+# earlier step} other {+# earlier steps}}"
+msgstr "{hidden, plural, one {+# earlier step} other {+# earlier steps}}"
+
 #: src/lib/relative-time.ts
 #: src/pages/ActivityList.tsx
 msgid "{hours}h ago"
@@ -136,6 +140,14 @@ msgstr "{remaining} left · bot is watching, not acting"
 #: src/components/ArtifactFileCard.tsx
 msgid "{size} B"
 msgstr "{size} B"
+
+#: src/components/ToolActivityDisclosure.tsx
+msgid "{stepCount, plural, one {Done · # tool} other {Done · # tools}}"
+msgstr "{stepCount, plural, one {Done · # tool} other {Done · # tools}}"
+
+#: src/components/ToolActivityDisclosure.tsx
+msgid "{stepCount, plural, one {Working… · # tool} other {Working… · # tools}}"
+msgstr "{stepCount, plural, one {Working… · # tool} other {Working… · # tools}}"
 
 #: src/pages/ActivityList.tsx
 msgid "{title}, {label}"
@@ -636,10 +648,6 @@ msgstr "Bot to link"
 #: src/pages/Artifacts.tsx
 msgid "Bots"
 msgstr "Bots"
-
-#: src/components/ApprovalRulesSettings.tsx
-msgid "Bots act without asking by default. Add an exception only when you want to review a type of action first."
-msgstr "Bots act without asking by default. Add an exception only when you want to review a type of action first."
 
 #: src/pages/Shell.tsx
 msgid "Bots are working"
@@ -2629,10 +2637,6 @@ msgstr "No bots match"
 msgid "No chat apps linked yet."
 msgstr "No chat apps linked yet."
 
-#: src/components/ApprovalRulesSettings.tsx
-msgid "No exceptions. Actions run automatically."
-msgstr "No exceptions. Actions run automatically."
-
 #: src/pages/MessagingSettingsOverlay.tsx
 msgid "No group chats yet."
 msgstr "No group chats yet."
@@ -2833,10 +2837,6 @@ msgstr "Opening your Space…"
 #: src/pages/VoiceSettingsOverlay.tsx
 msgid "Optional"
 msgstr "Optional"
-
-#: src/pages/AccountSettingsOverlay.tsx
-msgid "Optional controls most people never need"
-msgstr "Optional controls most people never need"
 
 #: src/pages/McpServersOverlay.tsx
 msgid "Optional header value"
@@ -3497,6 +3497,10 @@ msgstr "Show password"
 #: src/pages/Shell.tsx
 msgid "Show settings"
 msgstr "Show settings"
+
+#: src/pages/AccountSettingsOverlay.tsx
+msgid "Show tool activity"
+msgstr "Show tool activity"
 
 #: src/components/call/VoiceChatCard.tsx
 msgid "Show transcript"
